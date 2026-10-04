@@ -100,39 +100,18 @@
         { value: "center", label: "Center of stock (two placements)" },
     ];
     let probeLocation: ProbeLocation = "front-left";
-    let stockXString: any = "";
-    let stockYString: any = "";
-    // Accepts "350", "350mm", "350 mm", "350.5" or "350,5" (millimetres).
-    // Anything else, including empty, zero or negative values, is NaN/invalid.
-    function parseLength(value: any): number {
-        const match = String(value ?? "")
-            .trim()
-            .replace(",", ".")
-            .match(/^(\d+(?:\.\d+)?|\.\d+)\s*(mm)?$/i);
-        return match ? Number(match[1]) : NaN;
-    }
-
-    // The controller's on-screen keyboard writes the value and fires only
-    // "keyup" (no "input" event), so bind:value alone never sees it. Read the
-    // field on every relevant event, like virtualKeyboardChange() does for the
-    // other dialogs.
-    function readStockField(event: Event, axis: "x" | "y") {
-        const value = (event.currentTarget as HTMLInputElement).value;
-        if (axis === "x") {
-            stockXString = value;
-        } else {
-            stockYString = value;
-        }
-    }
-    $: stockX = parseLength(stockXString);
-    $: stockY = parseLength(stockYString);
-    $: stockSizeValid = isFinite(stockX) && stockX > 0 && isFinite(stockY) && stockY > 0;
+    // Center probing: for the second placement the user jogs the bit over
+    // the back-right block, so no stock size is needed or guessed.
     $: usesLocation = probeType === "xyz" && !isRotaryActive;
     $: isCenter = usesLocation && probeLocation === "center";
-    // Checked directly in the markup so the Next button always reflects
-    // the current stock size, without relying on updateButtons() timing.
-    $: locationBlocked =
-        currentStep === "ProbeLocation" && probeLocation === "center" && !stockSizeValid;
+
+    let jogStep = 10;
+    function jog(axis: "X" | "Y" | "Z", direction: 1 | -1) {
+        ControllerMethods.send(`
+            G91 G0 ${axis}${direction * jogStep}
+            G90
+        `);
+    }
     let steps: Step[] = [];
     let nextButton = {
         label: "Next",
@@ -162,12 +141,6 @@
         const savedLocation = localStorage.getItem("probeLocation");
         if (probeLocations.some((l) => l.value === savedLocation)) {
             probeLocation = savedLocation as ProbeLocation;
-        }
-        if (!stockXString) {
-            stockXString = localStorage.getItem("probeStockX") ?? "";
-        }
-        if (!stockYString) {
-            stockYString = localStorage.getItem("probeStockY") ?? "";
         }
 
         // Svelte appears not to like it when you invoke
@@ -245,8 +218,6 @@
                 if (probeLocation === "center") {
                     $centerProbeOk = null;
                     $centerProbeDz = null;
-                    localStorage.setItem("probeStockX", stockXString);
-                    localStorage.setItem("probeStockY", stockYString);
                 } else {
                     // Corner probing has no second placement
                     steps = steps.filter((s) => s !== "MoveProbeBlock" && s !== "Probe2");
@@ -359,7 +330,7 @@
                 break;
 
             case "ProbeLocation":
-                nextButton.disabled = false; // see locationBlocked
+                nextButton.disabled = false;
                 break;
 
             case "BitDimensions":
@@ -524,49 +495,36 @@ ${cornerProbeSequence({
 `;
     }
 
-    // Center probing, second placement: the block is on the back-right
-    // corner, rotated 180 degrees. The dialog is modal, so the machine moves
-    // itself: lift to a safe height, rapid to a start point 4 mm inside the
-    // block's outer faces (estimated from the first contacts and the
-    // approximate stock size), drop to 5 mm above the block, then run the
-    // shared sequence with X and Y reversed.
+    // CENTER-SECOND-PLACEMENT: the block is on the back-right corner,
+    // rotated 180 degrees, and the user has jogged the bit over its
+    // front-left corner (the mirror of where the first probe starts). From
+    // there it runs the shared sequence with X and Y reversed: Z touch, lift,
+    // plunge from probe-zdim, X, then Y.
     //
-    // Safety: if the second Z touch differs from the first by more than
-    // 0.5 mm (e.g. the bit came down on the stock instead of the block), it
-    // lifts and stops without moving in X/Y and without changing the origin.
+    // Safety: if this Z touch differs from the first by more than 0.5 mm
+    // (e.g. the bit came down on the stock instead of the block), it lifts
+    // and stops without moving sideways and without changing the origin.
     //
     // The center is the midpoint of the two X contacts and the two Y
     // contacts, so block dimensions and bit diameter cancel out of it.
     function executeCenterSecondProbe() {
         const config = $Config.probe;
-        const probeBlockWidth = config["probe-xdim"];
-        const probeBlockLength = config["probe-ydim"];
         const probeBlockHeight = config["probe-zdim"];
         const slowSeek = config["probe-slow-seek"];
         const fastSeek = config["probe-fast-seek"];
         const cutterLength = 12.7;
         const zLift = 1;
         const plunge = Math.min(cutterLength, probeBlockHeight * 0.9) + zLift;
-        const r = cutterDiameterMetric / 2.0;
-        // Start 4 mm inside the block edges: if the entered stock size is too
-        // small, the bit misses the block, touches the stock and the Z check
-        // stops it; if it is too large, this leaves ~11 mm before the sideways
-        // clear-off move could still end over the block.
-        const inset = 4;
 
-        // Right and back stock edges (machine coordinates), estimated from
-        // the first contacts plus the approximate stock size.
-        const right = `[#<_ofprobe_xa> - ${probeBlockWidth} - ${r} + ${stockX}]`;
-        const back = `[#<_ofprobe_ya> - ${probeBlockLength} - ${r} + ${stockY}]`;
-        const startX = `[${right} - ${probeBlockWidth} + ${inset}]`;
-        const startY = `[${back} - ${probeBlockLength} + ${inset}]`;
+        const rest = cornerProbeSequence({
+            sx: -1, sy: -1, plunge, zLift, fastSeek, slowSeek,
+            afterZ: "",
+            afterX: "G92 X [[#5061 - #<_ofprobe_xa>] / 2]",
+            afterY: "G92 Y [[#5062 - #<_ofprobe_ya>] / 2]",
+        }).replace(/^\s*G38\.2 Z -25 F\S+\n\s*G91 G1 Z 1\n\s*G38\.2 Z -2 F\S+\n/, "");
 
         ControllerMethods.send(`
             G21
-            G90 G53 G0 Z[#<_ofprobe_zt> + 25]
-            G90 G53 G0 X${startX} Y${startY}
-            G90 G53 G0 Z[#<_ofprobe_zt> + 5]
-
             G38.2 Z -25 F${fastSeek}
             G91 G1 Z 1
             G38.2 Z -2 F${slowSeek}
@@ -575,12 +533,7 @@ ${cornerProbeSequence({
                 G91 G0 Z 25
                 #<_ofprobe_ok> = 0
             o100 else
-${cornerProbeSequence({
-    sx: -1, sy: -1, plunge, zLift, fastSeek, slowSeek,
-    afterZ: "",
-    afterX: "G92 X [[#5061 - #<_ofprobe_xa>] / 2]",
-    afterY: "G92 Y [[#5062 - #<_ofprobe_ya>] / 2]",
-}).replace(/^\s*G38\.2 Z -25 F\S+\n\s*G91 G1 Z 1\n\s*G38\.2 Z -2 F\S+\n/, "")}
+${rest}
                 #<_ofprobe_ok> = 1
             o100 endif
             G90
@@ -672,45 +625,9 @@ ${cornerProbeSequence({
 
                 {#if probeLocation === "center"}
                     <p>
-                        Approximate stock size. Within about 2 mm is fine: it
-                        is only used to move the bit over the block for the
-                        second placement. The center itself is measured.
+                        Two placements: front-left, then back-right. No stock
+                        size is needed; the center is measured.
                     </p>
-                    <div class="stock-size">
-                        <label>
-                            Stock X (left to right, mm)
-                            <input
-                                type="text"
-                                inputmode="decimal"
-                                spellcheck="false"
-                                autocomplete="off"
-                                placeholder="e.g. 350"
-                                value={stockXString}
-                                on:input={(e) => readStockField(e, "x")}
-                                on:keyup={(e) => readStockField(e, "x")}
-                                on:change={(e) => readStockField(e, "x")}
-                                on:blur={(e) => readStockField(e, "x")}
-                            />
-                        </label>
-                        <label>
-                            Stock Y (front to back, mm)
-                            <input
-                                type="text"
-                                inputmode="decimal"
-                                spellcheck="false"
-                                autocomplete="off"
-                                placeholder="e.g. 94"
-                                value={stockYString}
-                                on:input={(e) => readStockField(e, "y")}
-                                on:keyup={(e) => readStockField(e, "y")}
-                                on:change={(e) => readStockField(e, "y")}
-                                on:blur={(e) => readStockField(e, "y")}
-                            />
-                        </label>
-                    </div>
-                    {#if !stockSizeValid}
-                        <p class="stock-size-hint">Enter both sizes in mm to continue.</p>
-                    {/if}
                 {/if}
             {:else if currentStep === "PlaceProbeBlock"}
                 <p>
@@ -760,17 +677,40 @@ ${cornerProbeSequence({
                 <LinearProgress indeterminate />
             {:else if currentStep === "MoveProbeBlock"}
                 <p>
-                    Second placement: move the probe block to the
-                    <b>back-right</b> corner of your workpiece, rotated
-                    180 degrees so its lips hang over the back and right edges.
+                    Second placement: put the probe block on the
+                    <b>back-right</b> corner, rotated 180 degrees so its lips
+                    hang over the back and right edges.
                 </p>
                 <p>
-                    Do not jog the machine or touch the bit. Keep the probe
-                    magnet on the collet.
+                    Then jog the bit over the block's <b>front-left</b>
+                    corner, a few mm above it: the mirror of where you start
+                    the first probe (about 5 to 15 mm in from both of those
+                    edges). Keep the probe magnet on the collet.
                 </p>
+                <div class="jog-panel">
+                    <div class="jog-steps">
+                        Step:
+                        <label><input type="radio" bind:group={jogStep} value={10} /> 10 mm</label>
+                        <label><input type="radio" bind:group={jogStep} value={1} /> 1 mm</label>
+                    </div>
+                    <div class="jog-grid">
+                        <span></span>
+                        <button class="jog" on:click={() => jog("Y", 1)}>Y+ (back)</button>
+                        <span></span>
+                        <button class="jog" on:click={() => jog("Z", 1)}>Z+ (up)</button>
+                        <button class="jog" on:click={() => jog("X", -1)}>X- (left)</button>
+                        <span></span>
+                        <button class="jog" on:click={() => jog("X", 1)}>X+ (right)</button>
+                        <span></span>
+                        <span></span>
+                        <button class="jog" on:click={() => jog("Y", -1)}>Y- (front)</button>
+                        <span></span>
+                        <button class="jog" on:click={() => jog("Z", -1)}>Z- (down)</button>
+                    </div>
+                </div>
                 <p>
-                    When you click 'Next', the machine will lift, move over the
-                    block on its own, and probe the right and back edges.
+                    Click 'Next' to probe: Z on the block top, then the left
+                    and front faces.
                 </p>
             {:else if currentStep === "Probe2"}
                 <p>Probing the second corner...</p>
@@ -847,7 +787,7 @@ ${cornerProbeSequence({
         <Button
             defaultAction
             data-mdc-dialog-action={nextButton.allowClose ? "close" : ""}
-            disabled={nextButton.disabled || locationBlocked}
+            disabled={nextButton.disabled}
             on:click={() => ($userAcknowledged = true)}
         >
             <Label>
@@ -885,8 +825,7 @@ ${cornerProbeSequence({
                 flex-direction: row;
             }
 
-            .probe-locations,
-            .stock-size {
+            .probe-locations {
                 display: flex;
                 flex-direction: column;
                 gap: 8px;
@@ -904,9 +843,25 @@ ${cornerProbeSequence({
                 }
             }
 
-            .stock-size-hint {
-                color: #c62828;
-                margin: 0 0 8px;
+            .jog-panel {
+                margin: 10px 0;
+
+                .jog-steps {
+                    display: flex;
+                    gap: 16px;
+                    margin-bottom: 8px;
+                }
+
+                .jog-grid {
+                    display: grid;
+                    grid-template-columns: repeat(4, 110px);
+                    gap: 6px;
+                }
+
+                .jog {
+                    height: 48px;
+                    font-size: 15px;
+                }
             }
 
             .bit-dimensions {
