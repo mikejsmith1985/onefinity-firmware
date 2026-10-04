@@ -100,11 +100,20 @@
     let probeLocation: ProbeLocation = "front-left";
     let stockXString: any = "";
     let stockYString: any = "";
-    $: stockX = parseFloat(stockXString);
-    $: stockY = parseFloat(stockYString);
+    // Lenient parsing: accepts "350", "350mm", "350.5" or "350,5"
+    function parseLength(value: any): number {
+        const text = String(value ?? "").replace(",", ".").replace(/[^0-9.]/g, "");
+        return text ? Number(text) : NaN;
+    }
+    $: stockX = parseLength(stockXString);
+    $: stockY = parseLength(stockYString);
     $: stockSizeValid = isFinite(stockX) && stockX > 0 && isFinite(stockY) && stockY > 0;
     $: usesLocation = probeType === "xyz" && !isRotaryActive;
     $: isCenter = usesLocation && probeLocation === "center";
+    // Checked directly in the markup so the Next button always reflects
+    // the current stock size, without relying on updateButtons() timing.
+    $: locationBlocked =
+        currentStep === "ProbeLocation" && probeLocation === "center" && !stockSizeValid;
     let steps: Step[] = [];
     let nextButton = {
         label: "Next",
@@ -161,9 +170,6 @@
         updateButtons();
     }
 
-    $: if (probeLocation || stockXString || stockYString) {
-        updateButtons();
-    }
 
     $: if(isRotaryActive){   
         stepLabels["PlaceProbeBlock"] = "Start Probe";
@@ -328,7 +334,7 @@
                 break;
 
             case "ProbeLocation":
-                nextButton.disabled = probeLocation === "center" && !stockSizeValid;
+                nextButton.disabled = false; // see locationBlocked
                 break;
 
             case "BitDimensions":
@@ -622,13 +628,16 @@
                     <div class="stock-size">
                         <label>
                             Stock X (left to right, mm)
-                            <input type="number" min="1" step="0.1" bind:value={stockXString} />
+                            <input type="text" inputmode="decimal" placeholder="e.g. 350" bind:value={stockXString} />
                         </label>
                         <label>
                             Stock Y (front to back, mm)
-                            <input type="number" min="1" step="0.1" bind:value={stockYString} />
+                            <input type="text" inputmode="decimal" placeholder="e.g. 94" bind:value={stockYString} />
                         </label>
                     </div>
+                    {#if !stockSizeValid}
+                        <p class="stock-size-hint">Enter both sizes in mm to continue.</p>
+                    {/if}
                 {/if}
             {:else if currentStep === "PlaceProbeBlock"}
                 <p>
@@ -756,7 +765,7 @@
         <Button
             defaultAction
             data-mdc-dialog-action={nextButton.allowClose ? "close" : ""}
-            disabled={nextButton.disabled}
+            disabled={nextButton.disabled || locationBlocked}
             on:click={() => ($userAcknowledged = true)}
         >
             <Label>
@@ -807,10 +816,15 @@
                     gap: 8px;
                 }
 
-                input[type="number"] {
+                input[type="text"] {
                     width: 120px;
                     margin-left: auto;
                 }
+            }
+
+            .stock-size-hint {
+                color: #c62828;
+                margin: 0 0 8px;
             }
 
             .bit-dimensions {
