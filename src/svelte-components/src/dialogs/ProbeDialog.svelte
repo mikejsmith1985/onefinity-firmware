@@ -100,10 +100,27 @@
     let probeLocation: ProbeLocation = "front-left";
     let stockXString: any = "";
     let stockYString: any = "";
-    // Lenient parsing: accepts "350", "350mm", "350.5" or "350,5"
+    // Accepts "350", "350mm", "350 mm", "350.5" or "350,5" (millimetres).
+    // Anything else, including empty, zero or negative values, is NaN/invalid.
     function parseLength(value: any): number {
-        const text = String(value ?? "").replace(",", ".").replace(/[^0-9.]/g, "");
-        return text ? Number(text) : NaN;
+        const match = String(value ?? "")
+            .trim()
+            .replace(",", ".")
+            .match(/^(\d+(?:\.\d+)?|\.\d+)\s*(mm)?$/i);
+        return match ? Number(match[1]) : NaN;
+    }
+
+    // The controller's on-screen keyboard writes the value and fires only
+    // "keyup" (no "input" event), so bind:value alone never sees it. Read the
+    // field on every relevant event, like virtualKeyboardChange() does for the
+    // other dialogs.
+    function readStockField(event: Event, axis: "x" | "y") {
+        const value = (event.currentTarget as HTMLInputElement).value;
+        if (axis === "x") {
+            stockXString = value;
+        } else {
+            stockYString = value;
+        }
     }
     $: stockX = parseLength(stockXString);
     $: stockY = parseLength(stockYString);
@@ -628,11 +645,33 @@
                     <div class="stock-size">
                         <label>
                             Stock X (left to right, mm)
-                            <input type="text" inputmode="decimal" placeholder="e.g. 350" bind:value={stockXString} />
+                            <input
+                                type="text"
+                                inputmode="decimal"
+                                spellcheck="false"
+                                autocomplete="off"
+                                placeholder="e.g. 350"
+                                value={stockXString}
+                                on:input={(e) => readStockField(e, "x")}
+                                on:keyup={(e) => readStockField(e, "x")}
+                                on:change={(e) => readStockField(e, "x")}
+                                on:blur={(e) => readStockField(e, "x")}
+                            />
                         </label>
                         <label>
                             Stock Y (front to back, mm)
-                            <input type="text" inputmode="decimal" placeholder="e.g. 94" bind:value={stockYString} />
+                            <input
+                                type="text"
+                                inputmode="decimal"
+                                spellcheck="false"
+                                autocomplete="off"
+                                placeholder="e.g. 94"
+                                value={stockYString}
+                                on:input={(e) => readStockField(e, "y")}
+                                on:keyup={(e) => readStockField(e, "y")}
+                                on:change={(e) => readStockField(e, "y")}
+                                on:blur={(e) => readStockField(e, "y")}
+                            />
                         </label>
                     </div>
                     {#if !stockSizeValid}
