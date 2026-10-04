@@ -49,6 +49,7 @@
         CheckProbe: "Check probe",
         BitDimensions: "Bit dimensions",
         ProbeLocation: "Probe location",
+        // (shown as "Which side?" for the Probe Center button, see markup)
         PlaceProbeBlock: "Place probe block",
         Probe: "Probe",
         MoveProbeBlock: "Move probe block",
@@ -79,7 +80,11 @@
 
     export let open;
     let initialized = false;
-    export let probeType: "xyz" | "z";
+    // "center" comes from the Probe Center button. It uses the XYZ probe
+    // block geometry, so internally it behaves like "xyz" (isXYZ).
+    export let probeType: "xyz" | "z" | "center";
+    $: isXYZ = probeType === "xyz" || probeType === "center";
+    $: isCenterButton = probeType === "center";
     export let isRotaryActive: Boolean;
     let currentStep: Step = "None";
     let cutterDiameterString: string = "";
@@ -92,18 +97,23 @@
     // "front-left" is the original Onefinity behaviour and generates the
     // exact same G-code as before.
     type ProbeLocation = "front-left" | "front-right" | "back-left" | "back-right" | "center" | "center-x";
-    const probeLocations: { value: ProbeLocation; label: string }[] = [
+    const allProbeLocations: { value: ProbeLocation; label: string }[] = [
         { value: "front-left", label: "Front-left corner (standard)" },
         { value: "front-right", label: "Front-right corner" },
         { value: "back-left", label: "Back-left corner" },
         { value: "back-right", label: "Back-right corner" },
-        { value: "center", label: "Center of stock (two placements)" },
-        { value: "center-x", label: "Center X only, keep Y (side B after a flip)" },
+        { value: "center", label: "Side A: center of stock (sets X, Y and Z)" },
+        { value: "center-x", label: "Side B, after an end-for-end flip (sets X and Z, keeps Y)" },
     ];
     let probeLocation: ProbeLocation = "front-left";
+    const isCenterLocation = (l: string) => l === "center" || l === "center-x";
+    // Probe XYZ offers only the four corners; Probe Center only Side A / B.
+    $: probeLocations = allProbeLocations.filter((l) =>
+        isCenterButton ? isCenterLocation(l.value) : !isCenterLocation(l.value));
+    $: locationStorageKey = isCenterButton ? "probeCenterSide" : "probeLocation";
     // Center probing: for the second placement the user jogs the bit over
     // the back-right block, so no stock size is needed or guessed.
-    $: usesLocation = probeType === "xyz" && !isRotaryActive;
+    $: usesLocation = isXYZ && !isRotaryActive;
     $: isCenter = usesLocation && (probeLocation === "center" || probeLocation === "center-x");
     $: isCenterX = usesLocation && probeLocation === "center-x";
 
@@ -140,9 +150,11 @@
             cutterDiameterRotaryString = localStorage.getItem("cutterDiameterRotary") ?? "";
         }
 
-        const savedLocation = localStorage.getItem("probeLocation");
+        const savedLocation = localStorage.getItem(locationStorageKey);
         if (probeLocations.some((l) => l.value === savedLocation)) {
             probeLocation = savedLocation as ProbeLocation;
+        } else {
+            probeLocation = probeLocations[0].value;
         }
 
         // Svelte appears not to like it when you invoke
@@ -178,11 +190,11 @@
 
             const enableSafety = $Config.settings["probing-prompts"];
 
-            const locationStep = probeType === "xyz" && !isRotaryActive;
+            const locationStep = isXYZ && !isRotaryActive;
 
             steps = [
                 enableSafety && !isRotaryActive ? "CheckProbe" : undefined,
-                probeType === "xyz" ? "BitDimensions" : undefined,
+                isXYZ ? "BitDimensions" : undefined,
                 locationStep ? "ProbeLocation" : undefined,
                 enableSafety ? "PlaceProbeBlock" : undefined,
                 "Probe",
@@ -197,7 +209,7 @@
                 await stepCompleted("CheckProbe", probeContacted);
             }
 
-            if (probeType === "xyz") {
+            if (isXYZ) {
                 if(isRotaryActive){
                     await stepCompleted("BitDimensions", userAcknowledged);
                     localStorage.setItem(
@@ -215,7 +227,7 @@
 
             if (locationStep) {
                 await stepCompleted("ProbeLocation", userAcknowledged);
-                localStorage.setItem("probeLocation", probeLocation);
+                localStorage.setItem(locationStorageKey, probeLocation);
 
                 if (probeLocation === "center" || probeLocation === "center-x") {
                     $centerProbeOk = null;
@@ -242,7 +254,7 @@
                 return; // origin unchanged; nothing to move to
             }
 
-            if (probeType === "xyz" ) {
+            if (isXYZ ) {
                 if(isRotaryActive){
                     ControllerMethods.gotoZero("y");
                 } else {
@@ -269,6 +281,7 @@
         switch (probeType) {
             case "xyz":
             case "z":
+            case "center":
                 break;
 
             default:
@@ -583,7 +596,7 @@ ${rest}
     aria-describedby="probe-dialog-content"
     surface$style="width: 700px; max-width: calc(100vw - 32px);"
 >
-    <Title id="probe-dialog-title">Probing {probeType?.toUpperCase()}</Title>
+    <Title id="probe-dialog-title">{isCenterButton ? "Probing Center" : `Probing ${probeType?.toUpperCase()}`}</Title>
 
     <Content id="probe-dialog-content" style="overflow: visible;">
         <div class="steps">
@@ -593,7 +606,7 @@ ${rest}
             <ul>
                 {#each steps as step}
                     <li class:active={currentStep === step}>
-                        {stepLabels[step]}
+                        {step === "ProbeLocation" && isCenterButton ? "Which side?" : stepLabels[step]}
                     </li>
                 {/each}
             </ul>
@@ -606,7 +619,7 @@ ${rest}
                 </p>
                 {#if !isRotaryActive} 
                     <Icon
-                        data={probeType === "xyz" ? CheckXYZ : CheckZ}
+                        data={isXYZ ? CheckXYZ : CheckZ}
                         size="300px"
                         class="probe-icon-svg"
                     />
@@ -640,7 +653,7 @@ ${rest}
                     <Icon data={BitDiameter} size="150px" class="probe-icon-svg" />
                 {/if}
             {:else if currentStep === "ProbeLocation"}
-                <p>Where should the XY origin be?</p>
+                <p>{isCenterButton ? "Which side are you probing?" : "Which corner should be the XY origin?"}</p>
                 <div class="probe-locations">
                     {#each probeLocations as location}
                         <label>
@@ -692,10 +705,10 @@ ${rest}
                         First placement: put the probe block face up on the
                         lower-left (front-left) corner of your workpiece, just
                         like a normal XYZ probe.
-                    {:else if probeType === "xyz" && !isRotaryActive}
+                    {:else if isXYZ && !isRotaryActive}
                         Place the probe block face up, on the lower-left corner
                         of your workpiece.
-                    {:else if probeType === "xyz" && isRotaryActive}
+                    {:else if isXYZ && isRotaryActive}
                         You are about to start the probing of rotary. <br/><br/> <strong>Note: </strong><br/>Position the bit above the probe and attach the probe magnet.
                     {:else}
                         Place the probe block face down, with the bit above the
@@ -705,7 +718,7 @@ ${rest}
 
                 {#if !isRotaryActive && (!usesLocation || probeLocation === "front-left" || probeLocation === "center" || probeLocation === "center-x")} 
                     <Icon
-                        data={probeType === "xyz" ? PlaceXYZ : PlaceZ}
+                        data={isXYZ ? PlaceXYZ : PlaceZ}
                         width="304px"
                         height="129px"
                         class="probe-icon-svg"
@@ -796,14 +809,14 @@ ${rest}
 
                     {#if !isRotaryActive} 
                         <Icon
-                            data={probeType === "xyz" ? PutAwayXYZ : PutAwayZ}
+                            data={isXYZ ? PutAwayXYZ : PutAwayZ}
                             width="329px"
                             height="256px"
                             class="probe-icon-svg"
                         />
                     {/if}
 
-                    {#if probeType === "xyz"}
+                    {#if isXYZ}
                         {#if isRotaryActive}
                             <p>
                                 The machine will now move to the Y origin.
