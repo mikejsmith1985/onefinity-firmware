@@ -523,13 +523,36 @@ ${o.probeY === false ? `
         const cutterLength = 12.7;
         const zLift = 1;
         const plunge = Math.min(cutterLength, probeBlockHeight * 0.9) + zLift;
+        const r = cutterDiameterMetric / 2.0;
+        const keepY = probeLocation === "center-x";
+
+        // Distance from each contacted block face to the stock edge it sits
+        // on. First placement: front-left block, normal orientation. Second
+        // placement: back-right rotated 180 (same axes) for full center, or
+        // front-right rotated 90 (X and Y faces swap) for center-X.
+        const leftDim = config["probe-xdim"];
+        const rightDim = keepY ? config["probe-ydim"] : config["probe-xdim"];
+        const frontDim = config["probe-ydim"];
+        const backDim = config["probe-ydim"];
+
+        // Measured stock half-length / half-depth, kept in the controller as
+        // #<_ofprobe_hx> / #<_ofprobe_hy> for programs such as EndSkim_Auto.
+        const halfX = `[[#5061 - #<_ofprobe_xa> + ${leftDim} + ${rightDim}] / 2 + ${r}]`;
+        const halfY = `[[#5062 - #<_ofprobe_ya> + ${frontDim} + ${backDim}] / 2 + ${r}]`;
 
         const rest = cornerProbeSequence({
             sx: -1, sy: -1, plunge, zLift, fastSeek, slowSeek,
             afterZ: "",
-            afterX: "G92 X [[#5061 - #<_ofprobe_xa>] / 2]",
-            afterY: "G92 Y [[#5062 - #<_ofprobe_ya>] / 2]",
-            probeY: probeLocation !== "center-x",
+            // The center is midway between the two stock edges. When the
+            // two blocks sit with different faces toward the ends (front-right
+            // rotated 90 degrees), the face-to-edge distances differ, so
+            // correct for half that difference. For full center they are
+            // equal and this is the plain midpoint of the contacts.
+            afterX: `#<_ofprobe_hx> = ${halfX}
+                G92 X [[#5061 - #<_ofprobe_xa> + ${leftDim} - ${rightDim}] / 2]`,
+            afterY: `#<_ofprobe_hy> = ${halfY}
+                G92 Y [[#5062 - #<_ofprobe_ya>] / 2]`,
+            probeY: !keepY,
         }).replace(/^\s*G38\.2 Z -25 F\S+\n\s*G91 G1 Z 1\n\s*G38\.2 Z -2 F\S+\n/, "");
 
         ControllerMethods.send(`
@@ -639,10 +662,11 @@ ${rest}
                     </p>
                 {:else if probeLocation === "center-x"}
                     <p>
-                        For the second side after an end-for-end flip, with
-                        the same long edge against the fixed jaw: finds the
-                        X center from the two ends and sets Z. The Y origin
-                        is left exactly as it was. Don't re-home in between.
+                        Front-left, then front-right. With the same long edge
+                        against the fixed jaw (e.g. the second side after an
+                        end-for-end flip): finds the X center from the two
+                        ends along the front edge and sets Z. The Y origin is
+                        left exactly as it was.
                     </p>
                 {/if}
             {:else if currentStep === "PlaceProbeBlock"}
@@ -698,15 +722,22 @@ ${rest}
                 <LinearProgress indeterminate />
             {:else if currentStep === "MoveProbeBlock"}
                 <p>
-                    Second placement: put the probe block on the
-                    <b>back-right</b> corner, rotated 180 degrees so its lips
-                    hang over the back and right edges.
+                    {#if isCenterX}
+                        Second placement: put the probe block on the
+                        <b>front-right</b> corner, rotated so its lips hang
+                        over the front and right edges. Both ends are then
+                        touched along the front edge, the edge that sits
+                        against the fixed jaw.
+                    {:else}
+                        Second placement: put the probe block on the
+                        <b>back-right</b> corner, rotated 180 degrees so its
+                        lips hang over the back and right edges.
+                    {/if}
                 </p>
                 <p>
-                    Then jog the bit over the block's <b>front-left</b>
+                    Then jog the bit over the block's <b>{isCenterX ? "left" : "front-left"}</b>
                     corner, a few mm above it: the mirror of where you start
-                    the first probe (about 5 to 15 mm in from both of those
-                    edges). Keep the probe magnet on the collet.
+                    the first probe (about 5 to 15 mm in from {isCenterX ? "its left edge" : "both of those edges"}). Keep the probe magnet on the collet.
                 </p>
                 <div class="jog-panel">
                     <div class="jog-steps">
