@@ -12,6 +12,8 @@
         probingComplete,
         probingFailed,
         probingStarted,
+        centerProbeOk,
+        centerProbeDz,
     } from "$lib/ControllerState";
     import { numberWithUnit } from "$lib/RegexHelpers";
     import TextFieldWithOptions from "$components/TextFieldWithOptions.svelte";
@@ -241,6 +243,8 @@
                 localStorage.setItem("probeLocation", probeLocation);
 
                 if (probeLocation === "center") {
+                    $centerProbeOk = null;
+                    $centerProbeDz = null;
                     localStorage.setItem("probeStockX", stockXString);
                     localStorage.setItem("probeStockY", stockYString);
                 } else {
@@ -260,6 +264,10 @@
             await stepCompleted("MoveProbeBlock", userAcknowledged);
             await stepCompleted("Probe2", probingComplete, probingFailed);
             await stepCompleted("Done", userAcknowledged);
+
+            if (isCenter && $centerProbeOk === 0) {
+                return; // origin unchanged; nothing to move to
+            }
 
             if (probeType === "xyz" ) {
                 if(isRotaryActive){
@@ -457,56 +465,78 @@
             const xOff = rotated90 ? yOffset : xOffset;
             const yOff = rotated90 ? xOffset : yOffset;
 
-            // Center mode remembers the first contacts (machine coordinates)
-            // in controller state so the second placement can find the center.
-            const remember = (name: string, param: string) =>
-                loc === "center" ? `#<_ofprobe_${name}> = ${param}` : "";
-
             ControllerMethods.send(`
                 G21
                 G92 X0 Y0 Z0
-
-                G38.2 Z -25 F${fastSeek}
-                G91 G1 Z 1
-                G38.2 Z -2 F${slowSeek}
-                ${remember("zt", "#5063")}
-                ${remember("sx", "#5061")}
-                ${remember("sy", "#5062")}
-                G92 Z ${zOffset}
-
-                G91 G0 Z ${zLift}
-                G91 G0 X ${20 * sx}
-                G91 G0 Z ${-plunge}
-                G38.2 X ${-20 * sx} F${fastSeek}
-                G91 G1 X ${1 * sx}
-                G38.2 X ${-2 * sx} F${slowSeek}
-                ${remember("xa", "#5061")}
-                G92 X ${sx * xOff}
-
-                G91 G0 X ${1 * sx}
-                G91 G0 Y ${20 * sy}
-                G91 G0 X ${-20 * sx}
-                G38.2 Y ${-20 * sy} F${fastSeek}
-                G91 G1 Y ${1 * sy}
-                G38.2 Y ${-2 * sy} F${slowSeek}
-                ${remember("ya", "#5062")}
-                G92 Y ${sy * yOff}
-
-                G91 G0 Y ${3 * sy}
-                G91 G0 Z 25
-
+${cornerProbeSequence({
+    sx, sy, plunge, zLift, fastSeek, slowSeek,
+    afterZ: `G92 Z ${zOffset}`,
+    afterX: `G92 X ${sx * xOff}`,
+    afterY: `G92 Y ${sy * yOff}`,
+    remember: loc === "center",
+})}
                 M2
             `);
         }
       }
     }
+    // One probe sequence for every corner, shared by both center placements,
+    // so the second placement is an exact mirror of the first: the same Z
+    // touch on the block top, the same lift, the same plunge (computed from
+    // probe-zdim, never hard-coded), with only the X/Y directions reversed.
+    // Front-left (sx = sy = 1) with G92 hooks is the original Onefinity probe.
+    function cornerProbeSequence(o: {
+        sx: number; sy: number; plunge: number; zLift: number;
+        fastSeek: number; slowSeek: number;
+        afterZ: string; afterX: string; afterY: string;
+        remember?: boolean;
+    }) {
+        const keep = (name: string, param: string) =>
+            o.remember ? `#<_ofprobe_${name}> = ${param}` : "";
+        return `
+                G38.2 Z -25 F${o.fastSeek}
+                G91 G1 Z 1
+                G38.2 Z -2 F${o.slowSeek}
+                ${keep("zt", "#5063")}
+                ${keep("ok", "-1")}
+                ${o.afterZ}
+
+                G91 G0 Z ${o.zLift}
+                G91 G0 X ${20 * o.sx}
+                G91 G0 Z ${-o.plunge}
+                G38.2 X ${-20 * o.sx} F${o.fastSeek}
+                G91 G1 X ${1 * o.sx}
+                G38.2 X ${-2 * o.sx} F${o.slowSeek}
+                ${keep("xa", "#5061")}
+                ${o.afterX}
+
+                G91 G0 X ${1 * o.sx}
+                G91 G0 Y ${20 * o.sy}
+                G91 G0 X ${-20 * o.sx}
+                G38.2 Y ${-20 * o.sy} F${o.fastSeek}
+                G91 G1 Y ${1 * o.sy}
+                G38.2 Y ${-2 * o.sy} F${o.slowSeek}
+                ${keep("ya", "#5062")}
+                ${o.afterY}
+
+                G91 G0 Y ${3 * o.sy}
+                G91 G0 Z 25
+`;
+    }
+
     // Center probing, second placement: the block is on the back-right
-    // corner, rotated 180 degrees. The machine drives over to it on its own,
-    // because the dialog is modal and the user cannot jog.
+    // corner, rotated 180 degrees. The dialog is modal, so the machine moves
+    // itself: lift to a safe height, rapid to a start point 4 mm inside the
+    // block's outer faces (estimated from the first contacts and the
+    // approximate stock size), drop to 5 mm above the block, then run the
+    // shared sequence with X and Y reversed.
+    //
+    // Safety: if the second Z touch differs from the first by more than
+    // 0.5 mm (e.g. the bit came down on the stock instead of the block), it
+    // lifts and stops without moving in X/Y and without changing the origin.
     //
     // The center is the midpoint of the two X contacts and the two Y
-    // contacts, so the block dimensions and bit diameter cancel out. They
-    // and the stock size are only used to steer the moves.
+    // contacts, so block dimensions and bit diameter cancel out of it.
     function executeCenterSecondProbe() {
         const config = $Config.probe;
         const probeBlockWidth = config["probe-xdim"];
@@ -518,37 +548,41 @@
         const zLift = 1;
         const plunge = Math.min(cutterLength, probeBlockHeight * 0.9) + zLift;
         const r = cutterDiameterMetric / 2.0;
+        // Start 4 mm inside the block edges: if the entered stock size is too
+        // small, the bit misses the block, touches the stock and the Z check
+        // stops it; if it is too large, this leaves ~11 mm before the sideways
+        // clear-off move could still end over the block.
+        const inset = 4;
 
-        // Left and front stock edges in machine coordinates, then mirror the
-        // first start point across the stock.
-        const xl = `[#<_ofprobe_xa> - ${probeBlockWidth} - ${r}]`;
-        const yf = `[#<_ofprobe_ya> - ${probeBlockLength} - ${r}]`;
-        const s2x = `[2 * ${xl} + ${stockX} - #<_ofprobe_sx>]`;
-        const s2y = `[2 * ${yf} + ${stockY} - #<_ofprobe_sy>]`;
+        // Right and back stock edges (machine coordinates), estimated from
+        // the first contacts plus the approximate stock size.
+        const right = `[#<_ofprobe_xa> - ${probeBlockWidth} - ${r} + ${stockX}]`;
+        const back = `[#<_ofprobe_ya> - ${probeBlockLength} - ${r} + ${stockY}]`;
+        const startX = `[${right} - ${probeBlockWidth} + ${inset}]`;
+        const startY = `[${back} - ${probeBlockLength} + ${inset}]`;
 
         ControllerMethods.send(`
             G21
             G90 G53 G0 Z[#<_ofprobe_zt> + 25]
-            G90 G53 G0 X${s2x} Y${s2y}
-            G90 G53 G0 Z[#<_ofprobe_zt> + ${zLift}]
+            G90 G53 G0 X${startX} Y${startY}
+            G90 G53 G0 Z[#<_ofprobe_zt> + 5]
 
-            G91 G0 X -20
-            G91 G0 Z ${-plunge}
-            G38.2 X 20 F${fastSeek}
-            G91 G1 X -1
-            G38.2 X 2 F${slowSeek}
-            G92 X [[#5061 - #<_ofprobe_xa>] / 2]
-
-            G91 G0 X -1
-            G91 G0 Y -20
-            G91 G0 X 20
-            G38.2 Y 20 F${fastSeek}
-            G91 G1 Y -1
-            G38.2 Y 2 F${slowSeek}
-            G92 Y [[#5062 - #<_ofprobe_ya>] / 2]
-
-            G91 G0 Y -3
-            G91 G0 Z 25
+            G38.2 Z -25 F${fastSeek}
+            G91 G1 Z 1
+            G38.2 Z -2 F${slowSeek}
+            #<_ofprobe_dz> = [#5063 - #<_ofprobe_zt>]
+            o100 if [ABS[#<_ofprobe_dz>] GT 0.5]
+                G91 G0 Z 25
+                #<_ofprobe_ok> = 0
+            o100 else
+${cornerProbeSequence({
+    sx: -1, sy: -1, plunge, zLift, fastSeek, slowSeek,
+    afterZ: "",
+    afterX: "G92 X [[#5061 - #<_ofprobe_xa>] / 2]",
+    afterY: "G92 Y [[#5062 - #<_ofprobe_ya>] / 2]",
+}).replace(/^\s*G38\.2 Z -25 F\S+\n\s*G91 G1 Z 1\n\s*G38\.2 Z -2 F\S+\n/, "")}
+                #<_ofprobe_ok> = 1
+            o100 endif
             G90
 
             M2
@@ -779,7 +813,16 @@
                             </p>
                         {:else}
                             <p>
-                                {#if isCenter}
+                                {#if isCenter && $centerProbeOk === 0}
+                                    <b>Second placement rejected.</b> The two
+                                    Z touches differed by
+                                    {Math.abs($centerProbeDz ?? 0).toFixed(2)} mm
+                                    (limit 0.5 mm), so the bit stopped before
+                                    moving sideways. The X/Y origin was NOT
+                                    moved to the center. Check the block is
+                                    on the back-right corner and the stock
+                                    size is right, then probe again.
+                                {:else if isCenter}
                                     The XY origin is now the center of the
                                     stock. The machine will now move there.
                                 {:else}
