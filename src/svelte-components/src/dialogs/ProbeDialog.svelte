@@ -28,8 +28,11 @@
         "None",
         "CheckProbe",
         "BitDimensions",
+        "ProbeLocation",
         "PlaceProbeBlock",
         "Probe",
+        "MoveProbeBlock",
+        "Probe2",
         "Done",
     ] as const;
 
@@ -43,8 +46,11 @@
         None: "",
         CheckProbe: "Check probe",
         BitDimensions: "Bit dimensions",
+        ProbeLocation: "Probe location",
         PlaceProbeBlock: "Place probe block",
         Probe: "Probe",
+        MoveProbeBlock: "Move probe block",
+        Probe2: "Probe second corner",
         Done: "Done",
     };
 
@@ -79,6 +85,26 @@
     let cutterDiameterRotaryString: string = "";
     let cutterDiameterRotaryMetric: number;
     let showCancelButton = true;
+
+    // Probe location: one of the four stock corners, or the stock center.
+    // "front-left" is the original Onefinity behaviour and generates the
+    // exact same G-code as before.
+    type ProbeLocation = "front-left" | "front-right" | "back-left" | "back-right" | "center";
+    const probeLocations: { value: ProbeLocation; label: string }[] = [
+        { value: "front-left", label: "Front-left corner (standard)" },
+        { value: "front-right", label: "Front-right corner" },
+        { value: "back-left", label: "Back-left corner" },
+        { value: "back-right", label: "Back-right corner" },
+        { value: "center", label: "Center of stock (two placements)" },
+    ];
+    let probeLocation: ProbeLocation = "front-left";
+    let stockXString: any = "";
+    let stockYString: any = "";
+    $: stockX = parseFloat(stockXString);
+    $: stockY = parseFloat(stockYString);
+    $: stockSizeValid = isFinite(stockX) && stockX > 0 && isFinite(stockY) && stockY > 0;
+    $: usesLocation = probeType === "xyz" && !isRotaryActive;
+    $: isCenter = usesLocation && probeLocation === "center";
     let steps: Step[] = [];
     let nextButton = {
         label: "Next",
@@ -105,6 +131,17 @@
             cutterDiameterRotaryString = localStorage.getItem("cutterDiameterRotary") ?? "";
         }
 
+        const savedLocation = localStorage.getItem("probeLocation");
+        if (probeLocations.some((l) => l.value === savedLocation)) {
+            probeLocation = savedLocation as ProbeLocation;
+        }
+        if (!stockXString) {
+            stockXString = localStorage.getItem("probeStockX") ?? "";
+        }
+        if (!stockYString) {
+            stockYString = localStorage.getItem("probeStockY") ?? "";
+        }
+
         // Svelte appears not to like it when you invoke
         // an async function from a reactive statement, so we
         // use requestAnimationFrame to call 'begin' at a later moment.
@@ -124,6 +161,10 @@
         updateButtons();
     }
 
+    $: if (probeLocation || stockXString || stockYString) {
+        updateButtons();
+    }
+
     $: if(isRotaryActive){   
         stepLabels["PlaceProbeBlock"] = "Start Probe";
     }
@@ -137,11 +178,18 @@
 
             const enableSafety = $Config.settings["probing-prompts"];
 
+            const locationStep = probeType === "xyz" && !isRotaryActive;
+
             steps = [
                 enableSafety && !isRotaryActive ? "CheckProbe" : undefined,
                 probeType === "xyz" ? "BitDimensions" : undefined,
+                locationStep ? "ProbeLocation" : undefined,
                 enableSafety ? "PlaceProbeBlock" : undefined,
                 "Probe",
+                // The second placement is always shown for center probing,
+                // because the user must physically move the block.
+                locationStep ? "MoveProbeBlock" : undefined,
+                locationStep ? "Probe2" : undefined,
                 "Done",
             ].filter<Step>(isStep);
 
@@ -165,8 +213,29 @@
                 }
             }
 
+            if (locationStep) {
+                await stepCompleted("ProbeLocation", userAcknowledged);
+                localStorage.setItem("probeLocation", probeLocation);
+
+                if (probeLocation === "center") {
+                    localStorage.setItem("probeStockX", stockXString);
+                    localStorage.setItem("probeStockY", stockYString);
+                } else {
+                    // Corner probing has no second placement
+                    steps = steps.filter((s) => s !== "MoveProbeBlock" && s !== "Probe2");
+                }
+            }
+
             await stepCompleted("PlaceProbeBlock", userAcknowledged);
             await stepCompleted("Probe", probingComplete, probingFailed);
+
+            if ($probingFailed) {
+                await stepCompleted("Done", userAcknowledged);
+                return;
+            }
+
+            await stepCompleted("MoveProbeBlock", userAcknowledged);
+            await stepCompleted("Probe2", probingComplete, probingFailed);
             await stepCompleted("Done", userAcknowledged);
 
             if (probeType === "xyz" ) {
@@ -220,6 +289,10 @@
             executeProbe();
         }
 
+        if (currentStep === "Probe2") {
+            executeCenterSecondProbe();
+        }
+
         await Promise.race([
             ...writables.map((writable) => waitForChange(writable)),
             waitForChange(cancelled),
@@ -250,7 +323,12 @@
         switch (currentStep) {
             case "CheckProbe":
             case "Probe":
+            case "Probe2":
                 nextButton.disabled = true;
+                break;
+
+            case "ProbeLocation":
+                nextButton.disabled = probeLocation === "center" && !stockSizeValid;
                 break;
 
             case "BitDimensions":
@@ -342,38 +420,116 @@
             // Also, add zlift to compensate for the fact that we lift after probing Z
             const plunge = Math.min(cutterLength, zOffset * 0.9) + zLift;
 
+            // Direction signs for the chosen corner. Front-left (sx = sy = 1)
+            // produces exactly the original Onefinity G-code.
+            // The center mode probes front-left first, so it also uses +1/+1.
+            const loc = probeLocation;
+            const sx = loc === "front-right" || loc === "back-right" ? -1 : 1;
+            const sy = loc === "back-left" || loc === "back-right" ? -1 : 1;
+
+            // The block is rotated 90 degrees at front-right and back-left,
+            // so its X and Y faces swap. At back-right it is rotated 180
+            // degrees, so they do not.
+            const rotated90 = loc === "front-right" || loc === "back-left";
+            const xOff = rotated90 ? yOffset : xOffset;
+            const yOff = rotated90 ? xOffset : yOffset;
+
+            // Center mode remembers the first contacts (machine coordinates)
+            // in controller state so the second placement can find the center.
+            const remember = (name: string, param: string) =>
+                loc === "center" ? `#<_ofprobe_${name}> = ${param}` : "";
+
             ControllerMethods.send(`
                 G21
                 G92 X0 Y0 Z0
-                
+
                 G38.2 Z -25 F${fastSeek}
                 G91 G1 Z 1
                 G38.2 Z -2 F${slowSeek}
+                ${remember("zt", "#5063")}
+                ${remember("sx", "#5061")}
+                ${remember("sy", "#5062")}
                 G92 Z ${zOffset}
-            
+
                 G91 G0 Z ${zLift}
-                G91 G0 X 20
+                G91 G0 X ${20 * sx}
                 G91 G0 Z ${-plunge}
-                G38.2 X -20 F${fastSeek}
-                G91 G1 X 1
-                G38.2 X -2 F${slowSeek}
-                G92 X ${xOffset}
+                G38.2 X ${-20 * sx} F${fastSeek}
+                G91 G1 X ${1 * sx}
+                G38.2 X ${-2 * sx} F${slowSeek}
+                ${remember("xa", "#5061")}
+                G92 X ${sx * xOff}
 
-                G91 G0 X 1
-                G91 G0 Y 20
-                G91 G0 X -20
-                G38.2 Y -20 F${fastSeek}
-                G91 G1 Y 1
-                G38.2 Y -2 F${slowSeek}
-                G92 Y ${yOffset}
+                G91 G0 X ${1 * sx}
+                G91 G0 Y ${20 * sy}
+                G91 G0 X ${-20 * sx}
+                G38.2 Y ${-20 * sy} F${fastSeek}
+                G91 G1 Y ${1 * sy}
+                G38.2 Y ${-2 * sy} F${slowSeek}
+                ${remember("ya", "#5062")}
+                G92 Y ${sy * yOff}
 
-                G91 G0 Y 3
+                G91 G0 Y ${3 * sy}
                 G91 G0 Z 25
 
                 M2
             `);
         }
       }
+    }
+    // Center probing, second placement: the block is on the back-right
+    // corner, rotated 180 degrees. The machine drives over to it on its own,
+    // because the dialog is modal and the user cannot jog.
+    //
+    // The center is the midpoint of the two X contacts and the two Y
+    // contacts, so the block dimensions and bit diameter cancel out. They
+    // and the stock size are only used to steer the moves.
+    function executeCenterSecondProbe() {
+        const config = $Config.probe;
+        const probeBlockWidth = config["probe-xdim"];
+        const probeBlockLength = config["probe-ydim"];
+        const probeBlockHeight = config["probe-zdim"];
+        const slowSeek = config["probe-slow-seek"];
+        const fastSeek = config["probe-fast-seek"];
+        const cutterLength = 12.7;
+        const zLift = 1;
+        const plunge = Math.min(cutterLength, probeBlockHeight * 0.9) + zLift;
+        const r = cutterDiameterMetric / 2.0;
+
+        // Left and front stock edges in machine coordinates, then mirror the
+        // first start point across the stock.
+        const xl = `[#<_ofprobe_xa> - ${probeBlockWidth} - ${r}]`;
+        const yf = `[#<_ofprobe_ya> - ${probeBlockLength} - ${r}]`;
+        const s2x = `[2 * ${xl} + ${stockX} - #<_ofprobe_sx>]`;
+        const s2y = `[2 * ${yf} + ${stockY} - #<_ofprobe_sy>]`;
+
+        ControllerMethods.send(`
+            G21
+            G90 G53 G0 Z[#<_ofprobe_zt> + 25]
+            G90 G53 G0 X${s2x} Y${s2y}
+            G90 G53 G0 Z[#<_ofprobe_zt> + ${zLift}]
+
+            G91 G0 X -20
+            G91 G0 Z ${-plunge}
+            G38.2 X 20 F${fastSeek}
+            G91 G1 X -1
+            G38.2 X 2 F${slowSeek}
+            G92 X [[#5061 - #<_ofprobe_xa>] / 2]
+
+            G91 G0 X -1
+            G91 G0 Y -20
+            G91 G0 X 20
+            G38.2 Y 20 F${fastSeek}
+            G91 G1 Y -1
+            G38.2 Y 2 F${slowSeek}
+            G92 Y [[#5062 - #<_ofprobe_ya>] / 2]
+
+            G91 G0 Y -3
+            G91 G0 Z 25
+            G90
+
+            M2
+        `);
     }
 </script>
 
@@ -441,9 +597,58 @@
 
                     <Icon data={BitDiameter} size="150px" class="probe-icon-svg" />
                 {/if}
+            {:else if currentStep === "ProbeLocation"}
+                <p>Where should the XY origin be?</p>
+                <div class="probe-locations">
+                    {#each probeLocations as location}
+                        <label>
+                            <input
+                                type="radio"
+                                name="probe-location"
+                                value={location.value}
+                                bind:group={probeLocation}
+                            />
+                            {location.label}
+                        </label>
+                    {/each}
+                </div>
+
+                {#if probeLocation === "center"}
+                    <p>
+                        Approximate stock size. Within about 2 mm is fine: it
+                        is only used to move the bit over the block for the
+                        second placement. The center itself is measured.
+                    </p>
+                    <div class="stock-size">
+                        <label>
+                            Stock X (left to right, mm)
+                            <input type="number" min="1" step="0.1" bind:value={stockXString} />
+                        </label>
+                        <label>
+                            Stock Y (front to back, mm)
+                            <input type="number" min="1" step="0.1" bind:value={stockYString} />
+                        </label>
+                    </div>
+                {/if}
             {:else if currentStep === "PlaceProbeBlock"}
                 <p>
-                    {#if probeType === "xyz" && !isRotaryActive}
+                    {#if usesLocation && probeLocation === "front-right"}
+                        Place the probe block face up on the front-right corner
+                        of your workpiece, rotated so its lips hang over the
+                        front and right edges.
+                    {:else if usesLocation && probeLocation === "back-left"}
+                        Place the probe block face up on the back-left corner
+                        of your workpiece, rotated so its lips hang over the
+                        back and left edges.
+                    {:else if usesLocation && probeLocation === "back-right"}
+                        Place the probe block face up on the back-right corner
+                        of your workpiece, rotated so its lips hang over the
+                        back and right edges.
+                    {:else if usesLocation && probeLocation === "center"}
+                        First placement: put the probe block face up on the
+                        lower-left (front-left) corner of your workpiece, just
+                        like a normal XYZ probe.
+                    {:else if probeType === "xyz" && !isRotaryActive}
                         Place the probe block face up, on the lower-left corner
                         of your workpiece.
                     {:else if probeType === "xyz" && isRotaryActive}
@@ -454,7 +659,7 @@
                     {/if}
                 </p>
 
-                {#if !isRotaryActive} 
+                {#if !isRotaryActive && (!usesLocation || probeLocation === "front-left" || probeLocation === "center")} 
                     <Icon
                         data={probeType === "xyz" ? PlaceXYZ : PlaceZ}
                         width="304px"
@@ -469,6 +674,24 @@
                 </p>
             {:else if currentStep === "Probe"}
                 <p>Probing in progress...</p>
+
+                <LinearProgress indeterminate />
+            {:else if currentStep === "MoveProbeBlock"}
+                <p>
+                    Second placement: move the probe block to the
+                    <b>back-right</b> corner of your workpiece, rotated
+                    180 degrees so its lips hang over the back and right edges.
+                </p>
+                <p>
+                    Do not jog the machine or touch the bit. Keep the probe
+                    magnet on the collet.
+                </p>
+                <p>
+                    When you click 'Next', the machine will lift, move over the
+                    block on its own, and probe the right and back edges.
+                </p>
+            {:else if currentStep === "Probe2"}
+                <p>Probing the second corner...</p>
 
                 <LinearProgress indeterminate />
             {:else if currentStep === "Done"}
@@ -508,7 +731,12 @@
                             </p>
                         {:else}
                             <p>
-                                The machine will now move to the XY origin.
+                                {#if isCenter}
+                                    The XY origin is now the center of the
+                                    stock. The machine will now move there.
+                                {:else}
+                                    The machine will now move to the XY origin.
+                                {/if}
                             </p>
                         {/if}
 
@@ -564,6 +792,25 @@
             #probe-dialog-content {
                 display: flex;
                 flex-direction: row;
+            }
+
+            .probe-locations,
+            .stock-size {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                margin: 10px 0 16px;
+
+                label {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+
+                input[type="number"] {
+                    width: 120px;
+                    margin-left: auto;
+                }
             }
 
             .bit-dimensions {
