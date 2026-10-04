@@ -91,19 +91,21 @@
     // Probe location: one of the four stock corners, or the stock center.
     // "front-left" is the original Onefinity behaviour and generates the
     // exact same G-code as before.
-    type ProbeLocation = "front-left" | "front-right" | "back-left" | "back-right" | "center";
+    type ProbeLocation = "front-left" | "front-right" | "back-left" | "back-right" | "center" | "center-x";
     const probeLocations: { value: ProbeLocation; label: string }[] = [
         { value: "front-left", label: "Front-left corner (standard)" },
         { value: "front-right", label: "Front-right corner" },
         { value: "back-left", label: "Back-left corner" },
         { value: "back-right", label: "Back-right corner" },
         { value: "center", label: "Center of stock (two placements)" },
+        { value: "center-x", label: "Center X only, keep Y (side B after a flip)" },
     ];
     let probeLocation: ProbeLocation = "front-left";
     // Center probing: for the second placement the user jogs the bit over
     // the back-right block, so no stock size is needed or guessed.
     $: usesLocation = probeType === "xyz" && !isRotaryActive;
-    $: isCenter = usesLocation && probeLocation === "center";
+    $: isCenter = usesLocation && (probeLocation === "center" || probeLocation === "center-x");
+    $: isCenterX = usesLocation && probeLocation === "center-x";
 
     let jogStep = 10;
     function jog(axis: "X" | "Y" | "Z", direction: 1 | -1) {
@@ -215,7 +217,7 @@
                 await stepCompleted("ProbeLocation", userAcknowledged);
                 localStorage.setItem("probeLocation", probeLocation);
 
-                if (probeLocation === "center") {
+                if (probeLocation === "center" || probeLocation === "center-x") {
                     $centerProbeOk = null;
                     $centerProbeDz = null;
                 } else {
@@ -436,15 +438,18 @@
             const xOff = rotated90 ? yOffset : xOffset;
             const yOff = rotated90 ? xOffset : yOffset;
 
+            const keepY = loc === "center-x";
+
             ControllerMethods.send(`
                 G21
-                G92 X0 Y0 Z0
+                ${keepY ? "G92 X0 Z0" : "G92 X0 Y0 Z0"}
 ${cornerProbeSequence({
     sx, sy, plunge, zLift, fastSeek, slowSeek,
     afterZ: `G92 Z ${zOffset}`,
     afterX: `G92 X ${sx * xOff}`,
     afterY: `G92 Y ${sy * yOff}`,
-    remember: loc === "center",
+    remember: loc === "center" || keepY,
+    probeY: !keepY,
 })}
                 M2
             `);
@@ -461,6 +466,7 @@ ${cornerProbeSequence({
         fastSeek: number; slowSeek: number;
         afterZ: string; afterX: string; afterY: string;
         remember?: boolean;
+        probeY?: boolean;
     }) {
         const keep = (name: string, param: string) =>
             o.remember ? `#<_ofprobe_${name}> = ${param}` : "";
@@ -481,7 +487,9 @@ ${cornerProbeSequence({
                 ${keep("xa", "#5061")}
                 ${o.afterX}
 
+${o.probeY === false ? `
                 G91 G0 X ${1 * o.sx}
+` : `                G91 G0 X ${1 * o.sx}
                 G91 G0 Y ${20 * o.sy}
                 G91 G0 X ${-20 * o.sx}
                 G38.2 Y ${-20 * o.sy} F${o.fastSeek}
@@ -491,7 +499,7 @@ ${cornerProbeSequence({
                 ${o.afterY}
 
                 G91 G0 Y ${3 * o.sy}
-                G91 G0 Z 25
+`}                G91 G0 Z 25
 `;
     }
 
@@ -521,6 +529,7 @@ ${cornerProbeSequence({
             afterZ: "",
             afterX: "G92 X [[#5061 - #<_ofprobe_xa>] / 2]",
             afterY: "G92 Y [[#5062 - #<_ofprobe_ya>] / 2]",
+            probeY: probeLocation !== "center-x",
         }).replace(/^\s*G38\.2 Z -25 F\S+\n\s*G91 G1 Z 1\n\s*G38\.2 Z -2 F\S+\n/, "");
 
         ControllerMethods.send(`
@@ -628,6 +637,13 @@ ${rest}
                         Two placements: front-left, then back-right. No stock
                         size is needed; the center is measured.
                     </p>
+                {:else if probeLocation === "center-x"}
+                    <p>
+                        For the second side after an end-for-end flip, with
+                        the same long edge against the fixed jaw: finds the
+                        X center from the two ends and sets Z. The Y origin
+                        is left exactly as it was. Don't re-home in between.
+                    </p>
                 {/if}
             {:else if currentStep === "PlaceProbeBlock"}
                 <p>
@@ -643,6 +659,11 @@ ${rest}
                         Place the probe block face up on the back-right corner
                         of your workpiece, rotated so its lips hang over the
                         back and right edges.
+                    {:else if usesLocation && probeLocation === "center-x"}
+                        First placement: put the probe block face up on the
+                        lower-left (front-left) corner, just like a normal XYZ
+                        probe. Only Z and the left end are probed; Y is kept
+                        from your earlier setup.
                     {:else if usesLocation && probeLocation === "center"}
                         First placement: put the probe block face up on the
                         lower-left (front-left) corner of your workpiece, just
@@ -658,7 +679,7 @@ ${rest}
                     {/if}
                 </p>
 
-                {#if !isRotaryActive && (!usesLocation || probeLocation === "front-left" || probeLocation === "center")} 
+                {#if !isRotaryActive && (!usesLocation || probeLocation === "front-left" || probeLocation === "center" || probeLocation === "center-x")} 
                     <Icon
                         data={probeType === "xyz" ? PlaceXYZ : PlaceZ}
                         width="304px"
@@ -709,8 +730,13 @@ ${rest}
                     </div>
                 </div>
                 <p>
-                    Click 'Next' to probe: Z on the block top, then the left
-                    and front faces.
+                    {#if isCenterX}
+                        Click 'Next' to probe: Z on the block top, then the
+                        left face only. Y is not changed.
+                    {:else}
+                        Click 'Next' to probe: Z on the block top, then the
+                        left and front faces.
+                    {/if}
                 </p>
             {:else if currentStep === "Probe2"}
                 <p>Probing the second corner...</p>
@@ -762,6 +788,10 @@ ${rest}
                                     moved to the center. Check the block is
                                     on the back-right corner and the stock
                                     size is right, then probe again.
+                                {:else if isCenterX}
+                                    X0 is now the center between the two
+                                    ends; Y0 is unchanged from your earlier
+                                    setup. The machine will now move there.
                                 {:else if isCenter}
                                     The XY origin is now the center of the
                                     stock. The machine will now move there.
