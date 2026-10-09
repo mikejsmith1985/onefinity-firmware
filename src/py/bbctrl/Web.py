@@ -941,6 +941,11 @@ class Web(tornado.web.Application):
             (r'/api/time', TimeHandler),
             (r'/api/rotary', RotaryHandler),
             (r'/api/remote-diagnostics', RemoteDiagnosticsHandler),
+            # New React interface; the original UI at / is untouched.
+            (r'/next', tornado.web.RedirectHandler, {'url': '/next/'}),
+            (r'/next/(.*)', StaticFileHandler,
+             {'path': bbctrl.get_resource('http/next/'),
+              'default_filename': 'index.html'}),
             (r'/(.*)', StaticFileHandler,
              {'path': bbctrl.get_resource('http/'),
               'default_filename': 'index.html'}),
