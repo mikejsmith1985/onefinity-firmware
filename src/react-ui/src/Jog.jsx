@@ -1,33 +1,45 @@
 import React, { useState } from "react";
 import { api } from "./controller.js";
+import { Confirm } from "./ui.jsx";
 
 const STEPS = {
   metric: [["Fine", 0.1], ["Small", 1], ["Medium", 10], ["Large", 100]],
   imperial: [["Fine", 0.005], ["Small", 0.05], ["Medium", 0.5], ["Large", 5]],
 };
+const read = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 
-export default function Jog({ state, config, send, metric, locked }) {
-  const [idx, setIdx] = useState(1);
+export default function Jog({ state, config, send, metric, locked, idle, onProbe, ready }) {
+  const [idx, setIdx] = useState(Number(read("next-jog-idx", 1)));
   const [armed, setArmed] = useState(null);
+  const [ask, setAsk] = useState(null);
   const steps = STEPS[metric ? "metric" : "imperial"];
   const amt = steps[idx][1];
   const unit = metric ? "mm" : "in";
+  const rotaryOn = state["2an"] === 3;
+  const rotaryAvail = state["2an"] === 1 || state["2an"] === 3;
 
-  const step = (axis, dir) => send(`M70\nG91\n${metric ? "G21" : "G20"}\nG0 ${axis}${dir * amt}\nM72`);
-  const goZero = () => send(`G90\nG0 X0 Y0`);
+  const pick = (i) => { setIdx(i); try { localStorage.setItem("next-jog-idx", i); } catch {} };
+  const jog = (x, y, z, a = 0) => {
+    const part = (l, d) => (d ? `${l}${+(d * amt).toFixed(4)}` : "");
+    send(`M70\nG91\n${metric ? "G21" : "G20"}\nG0 ${part("X", x)}${part("Y", y)}${part("Z", z)}${part("A", a)}\nM72`);
+  };
 
-  const macros = (config?.macros || []).filter((m) => m && m.file_name && m.file_name !== "default");
+  const macros = (state.macros || config?.macros || []).filter((m) => m && m.file_name && m.file_name !== "default");
   const runMacro = async (m, i) => {
-    if (armed !== i) { setArmed(i); setTimeout(() => setArmed((a) => (a === i ? null : a)), 3000); return; }
+    if (m.alert !== false && armed !== i) { setArmed(i); setTimeout(() => setArmed((a) => (a === i ? null : a)), 3000); return; }
     setArmed(null);
     try { await api.get(`file/${encodeURIComponent(m.file_name)}`); await api.put("start"); } catch (e) { console.error(e); }
   };
+
+  const K = ({ x = 0, y = 0, z = 0, a = 0, cls, children, label }) => (
+    <button className={`k ${cls}`} disabled={locked} aria-label={label} onClick={() => jog(x, y, z, a)}>{children}</button>
+  );
 
   return (
     <div className="jog">
       <div className="steps" role="radiogroup" aria-label="Step size">
         {steps.map(([name, v], i) => (
-          <button key={name} role="radio" aria-checked={i === idx} className={i === idx ? "on" : ""} onClick={() => setIdx(i)}>
+          <button key={name} role="radio" aria-checked={i === idx} className={i === idx ? "on" : ""} onClick={() => pick(i)}>
             <b>{v}</b><small>{name}</small>
           </button>
         ))}
@@ -35,27 +47,54 @@ export default function Jog({ state, config, send, metric, locked }) {
 
       <div className="pads">
         <div className="xy">
-          <button className="k up" disabled={locked} onClick={() => step("Y", 1)} aria-label="Y plus">Y+</button>
-          <button className="k left" disabled={locked} onClick={() => step("X", -1)} aria-label="X minus">X−</button>
-          <button className="k mid" disabled={locked} onClick={goZero} title="Move to X0 Y0">X0 Y0</button>
-          <button className="k right" disabled={locked} onClick={() => step("X", 1)} aria-label="X plus">X+</button>
-          <button className="k down" disabled={locked} onClick={() => step("Y", -1)} aria-label="Y minus">Y−</button>
+          <K x={-1} y={1} cls="d nw" label="X minus, Y plus">↖</K>
+          <K y={1} cls="up" label="Y plus">Y+</K>
+          <K x={1} y={1} cls="d ne" label="X plus, Y plus">↗</K>
+          <K x={-1} cls="left" label="X minus">X−</K>
+          <button className="k mid" disabled={locked} onClick={() => setAsk("xy")} title="Move to X0 Y0">X0 Y0</button>
+          <K x={1} cls="right" label="X plus">X+</K>
+          <K x={-1} y={-1} cls="d sw" label="X minus, Y minus">↙</K>
+          <K y={-1} cls="down" label="Y minus">Y−</K>
+          <K x={1} y={-1} cls="d se" label="X plus, Y minus">↘</K>
         </div>
         <div className="z">
-          <button className="k" disabled={locked} onClick={() => step("Z", 1)} aria-label="Z up">Z+</button>
+          <K z={1} cls="" label="Z up">Z+</K>
           <div className="zl">{amt} {unit}</div>
-          <button className="k" disabled={locked} onClick={() => step("Z", -1)} aria-label="Z down">Z−</button>
+          <K z={-1} cls="" label="Z down">Z−</K>
+          {rotaryOn && <div className="arow"><K a={-1} cls="" label="A minus">A−</K><K a={1} cls="" label="A plus">A+</K></div>}
         </div>
       </div>
 
+      <div className="probes">
+        <button disabled={!ready} className={state.pw ? "" : "contact"} onClick={() => onProbe("xyz")}>Probe XYZ</button>
+        <button disabled={!ready} className={state.pw ? "" : "contact"} onClick={() => onProbe("z")}>Probe Z</button>
+        {!rotaryOn && <button disabled={!ready} onClick={() => onProbe("center")}>Probe center</button>}
+        <button disabled={locked} onClick={() => setAsk("z")} title="Move to Z0">Z0</button>
+        {rotaryOn && <button disabled={locked} onClick={() => setAsk("a")} title="Move A to zero">A0</button>}
+        {rotaryAvail && <button disabled={!idle} className={rotaryOn ? "on" : ""} onClick={() => setAsk("rotary")}>Rotary {rotaryOn ? "on" : "off"}</button>}
+      </div>
+
       {macros.length > 0 && (
-        <div className="macros">
+        <div className="macros" aria-label="Macros">
           {macros.map((m, i) => (
-            <button key={i} disabled={locked} className={armed === i ? "armed" : ""} style={{ "--m": m.color || "var(--blue)" }} onClick={() => runMacro(m, i)}>
+            <button key={i} disabled={!ready} className={armed === i ? "armed" : ""} style={{ "--m": m.color || "var(--blue)" }} onClick={() => runMacro(m, i)}>
               {armed === i ? "Tap again to run" : m.name}
             </button>
           ))}
         </div>
+      )}
+
+      {ask && ask !== "rotary" && (
+        <Confirm title={`Move to ${ask === "xy" ? "X0 Y0" : ask === "z" ? "Z0" : "A0"}?`} confirmLabel="Move"
+          onCancel={() => setAsk(null)} onConfirm={() => { send(`G90\nG0 ${ask === "xy" ? "X0Y0" : ask === "z" ? "Z0" : "A0"}`); setAsk(null); }}>
+          <p>The machine will move straight there. Check that the tool is clear of clamps and stock.</p>
+        </Confirm>
+      )}
+      {ask === "rotary" && (
+        <Confirm title="Switch rotary mode" confirmLabel="Yes"
+          onCancel={() => setAsk(null)} onConfirm={async () => { setAsk(null); try { await api.put("rotary", { status: !rotaryOn }); } catch (e) { alert("Could not switch rotary mode"); } }}>
+          <p>{rotaryOn ? "Turn off the rotary box?" : "Turn on the rotary box?"}</p>
+        </Confirm>
       )}
     </div>
   );

@@ -15,13 +15,17 @@ const state = {
   xx: "READY", cycle: "idle", pr: "", er: "", line: 0,
   selected: "fuel_filter_outline.nc", selected_time: 1,
   files: ["fuel_filter_outline.nc", "alternator_arm.nc", "tap_holes.nc"],
-  messages: [{ text: "Machine ready" }],
+  messages: [],
   xp: 120.5, yp: 88.06, zp: -3.35, ap: 0, bp: 0, cp: 0,
   offset_x: 0, offset_y: 0, offset_z: 0,
   "0homed": true, "1homed": true, "2homed": true, "3homed": true,
-  "0tn": 0, "0tm": 816, "1tn": 0, "1tm": 816, "2tn": -133, "2tm": 0,
+  "0tn": 0, "0tm": 816, "1tn": 0, "1tm": 816, "2tn": 0, "2tm": 816, "3tn": -133, "3tm": 0,
+  "0an": 0, "1an": 1, "2an": 1, "3an": 2,
+  macros_list: [], non_macros_list: [], gcode_list: { folders: [], files: [] },
+  vin: 24.1, vout: 5.0, temp: 41, rpi_temp: 52, mx: 17000, ss: 17000, pd: 0,
+  log: [], 1: 0,
   feed: 0, speed: 0, s: 17000, v: 0, tool: 5, plan_time: 0, metric: true,
-  imperial: false, "2an": 0, power_shutdown: false,
+  imperial: false, power_shutdown: false,
   path_min_x: 0, path_max_x: 150, path_min_y: 0, path_max_y: 90, path_min_z: -15, path_max_z: 15,
 };
 const macros = [
@@ -30,14 +34,17 @@ const macros = [
   { name: "Set Laser Zero", color: "#46c37b", file_name: "laser.nc" },
   { name: "Tool Change", color: "#f5c518", file_name: "Tool_Change_FrontCenter.nc" },
 ];
-const config = {
-  settings: { units: "METRIC" },
-  macros,
-  motors: [
-    { axis: "X", "homing-mode": "switch-min" }, { axis: "Y", "homing-mode": "switch-min" },
-    { axis: "Z", "homing-mode": "switch-max" }, { axis: "Y", "homing-mode": "switch-min" },
-  ],
-};
+const R = path_.resolve(NEXT, "..");
+const rj = (f) => JSON.parse(fs.readFileSync(path_.join(R, f), "utf8"));
+const deepMerge = (a, b) => { for (const k of Object.keys(b)) { if (b[k] && typeof b[k] === "object" && !Array.isArray(b[k]) && a[k] && typeof a[k] === "object") deepMerge(a[k], b[k]); else a[k] = b[k]; } return a; };
+const config = rj("onefinity_defaults.json"); const variant = rj("onefinity_machinist_x35_defaults.json");
+config.motors = config.motors.map((m, i) => ({ ...m, ...(variant.motors[i] || {}), axis: ["X", "Y", "Y", "Z"][i] }));
+config.motors[3]["max-soft-limit"] = 133; config.motors[3]["homing-mode"] = "stall-max";
+config.full_version = "1.9.0"; config.macros = macros; config.settings = config.settings || {}; config.settings.units = "METRIC";
+state.macros = macros; state.macros_list = macros.map((m) => m.file_name); state.non_macros_list = state.files;
+state.gcode_list = { folders: [{ name: "Jobs", files: ["alternator_arm.nc"] }], files: ["fuel_filter_outline.nc", "tap_holes.nc"] };
+state.messages = [];
+state.log = [];
 
 // A small toolpath: outline rectangle with a few plunges.
 const pts = [];
@@ -104,7 +111,14 @@ const server = http.createServer((req, res) => {
     if (f.startsWith(NEXT) && fs.existsSync(f)) { res.writeHead(200, { "Content-Type": MIME[path_.extname(f)] || "application/octet-stream" }); return res.end(fs.readFileSync(f)); }
     res.writeHead(404); return res.end();
   }
+  if (p === "/config-template.json" || /^\/onefinity.*\.json$/.test(p)) { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(fs.readFileSync(path_.join(R, p.slice(1)))); }
   if (p === "/api/config/load") return json(res, config);
+  if (p === "/api/config/save") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { Object.assign(config, JSON.parse(b)); } catch {} json(res, "ok"); }); return; }
+  if (p === "/api/hostname") return json(res, "onefinity");
+  if (p === "/api/network") return json(res, { ipAddresses: ["192.168.1.42"], hostname: "onefinity", wifi: { enabled: true, ssid: "Shop-WiFi", networks: [{ Name: "Shop-WiFi", Quality: 78 }, { Name: "Neighbor", Quality: 34 }, { Name: "Guest", Quality: 55 }] } });
+  if (p === "/api/time") return json(res, { timeinfo: "Local time: Fri 2026-10-09 10:15:00\nTime zone: America/New_York (EDT)", timezones: "America/New_York\nAmerica/Chicago\nUTC" });
+  if (p === "/api/screen-rotation") return json(res, { rotated: false });
+  if (p === "/api/video") { res.writeHead(404); return res.end(); }
   if (p === "/api/path/" + state.selected + "/positions" || /\/positions$/.test(p)) {
     res.writeHead(200, { "Content-Type": "application/octet-stream" }); return res.end(positions);
   }
