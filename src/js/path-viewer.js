@@ -8,6 +8,10 @@ module.exports = {
     template: "#path-viewer-template",
     props: [ "toolpath" ],
 
+    components: {
+        "cut-preview": require("./cut-preview")
+    },
+
     data: function() {
         return {
             enabled: false,
@@ -20,7 +24,9 @@ module.exports = {
             showTool: cookie.get_bool("show-tool", true),
             showBBox: cookie.get_bool("show-bbox", true),
             showAxes: cookie.get_bool("show-axes", true),
-            showIntensity: cookie.get_bool("show-intensity", false)
+            showIntensity: cookie.get_bool("show-intensity", false),
+            showDepth: false,
+            depthPath: null
         };
     },
 
@@ -65,6 +71,10 @@ module.exports = {
         showTool: function(enable) {
             cookie.set_bool("show-tool", enable);
             this.set_visible(this.toolView, enable);
+        },
+
+        showDepth: function(enable) {
+            if (enable) this.small = false;
         },
 
         showAxes: function(enable) {
@@ -135,6 +145,11 @@ module.exports = {
 
             this.positions = positions;
             this.speeds = speeds;
+            this.depthPath = {
+                positions: positions,
+                speeds: speeds,
+                bounds: this.toolpath.bounds
+            };
             this.loading = false;
 
             // Update scene
