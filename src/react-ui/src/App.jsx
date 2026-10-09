@@ -92,6 +92,7 @@ export default function App() {
           <a key={id} href={`#${id === "admin" ? "admin-general" : id === "motors" ? "motor:0" : id}`} className={page === id ? "on" : ""} aria-current={page === id ? "page" : undefined}>{tabLabel(id, label)}</a>
         ))}
         <span className="grow" />
+        <a className="classic" href="/">Classic UI</a>
         <span className="ver">{cfg.config ? `v${cfg.config.full_version}` : ""}{cfg.net.ip ? ` · ${cfg.net.ip}` : ""}</span>
         <button className="quiet" onClick={() => setPower(true)}>Power</button>
       </nav>

@@ -283,3 +283,6 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
   .stats { grid-template-columns: 1fr; } .savebar button { min-height: 40px; padding: 0 10px; }
   .strip { gap: 8px; } .strip .link { display: none; }
 }
+
+.nav a.classic { min-height: 36px; align-self: center; margin-left: auto; padding: 0 12px; border: 1px solid var(--rule); border-radius: 6px; border-bottom-width: 1px; font-size: 14px; }
+.nav a.classic:hover { border-color: #3b4756; }
