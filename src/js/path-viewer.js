@@ -4,6 +4,14 @@ const orbit = require("./orbit");
 const cookie = require("./cookie")("bbctrl-");
 const font = require("./helvetiker_regular.typeface.json");
 
+async function get_floats(url) {
+    const response = await fetch(`${url}`, { cache: "no-cache" });
+    const arrayBuffer = await response.arrayBuffer();
+
+    return new Float32Array(arrayBuffer);
+}
+
+
 module.exports = {
     template: "#path-viewer-template",
     props: [ "toolpath" ],
@@ -26,7 +34,8 @@ module.exports = {
             showAxes: cookie.get_bool("show-axes", true),
             showIntensity: cookie.get_bool("show-intensity", false),
             showDepth: false,
-            depthPath: null
+            depthPath: null,
+            noGL: false
         };
     },
 
@@ -112,7 +121,41 @@ module.exports = {
     },
 
     methods: {
+        // Without WebGL there is no 3D view, but the Depth view only needs the
+        // planned path, so load it for that alone.
+        update_depth: async function() {
+            if (!this.state.selected || !this.toolpath.filename) {
+                this.depthPath = null;
+                return;
+            }
+
+            const filename = this.toolpath.filename;
+
+            try {
+                const [ positions, speeds ] = await Promise.all([
+                    get_floats(`/api/path/${filename}/positions`),
+                    get_floats(`/api/path/${filename}/speeds`)
+                ]);
+
+                if (filename != this.toolpath.filename) return; // Superseded
+
+                this.depthPath = {
+                    positions: positions,
+                    speeds: speeds,
+                    bounds: this.toolpath.bounds
+                };
+
+            } catch (e) {
+                console.log("Depth view could not load the path: ", e);
+            }
+        },
+
+
         update: async function() {
+            if (this.noGL) {
+                return this.update_depth();
+            }
+
             if (!this.webglAvailable) {
                 return;
             }
@@ -131,16 +174,9 @@ module.exports = {
                 return;
             }
 
-            async function get(url) {
-                const response = await fetch(`${url}`, { cache: "no-cache" });
-                const arrayBuffer = await response.arrayBuffer();
-
-                return new Float32Array(arrayBuffer);
-            }
-
             const [ positions, speeds ] = await Promise.all([
-                get(`/api/path/${this.toolpath.filename}/positions`),
-                get(`/api/path/${this.toolpath.filename}/speeds`)
+                get_floats(`/api/path/${this.toolpath.filename}/positions`),
+                get_floats(`/api/path/${this.toolpath.filename}/speeds`)
             ]);
 
             this.positions = positions;
@@ -285,6 +321,7 @@ module.exports = {
 
         graphics: function() {
             if (!this.webglAvailable) {
+                this.noGL = true;
                 return;
             }
 
@@ -297,6 +334,7 @@ module.exports = {
 
             } catch (e) {
                 console.log("WebGL not supported: ", e);
+                this.noGL = true;
                 return;
             }
 
