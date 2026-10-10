@@ -169,7 +169,7 @@ function semverLt(a, b) {
 export function useLatestVersion(cfg) {
   const [latest, setLatest] = useState("");
   const check = async () => {
-    try { const r = await fetch("https://raw.githubusercontent.com/OneFinityCNC/onefinity-release/master/latest.txt", { cache: "no-cache" }); setLatest((await r.text()).trim()); } catch { setLatest(""); }
+    try { const r = await fetch("https://api.github.com/repos/mikejsmith1985/onefinity-firmware/releases/latest", { cache: "no-cache" }); const rel = await r.json(); const ok = (rel.assets || []).some((x) => /^onefinity-[0-9.]+\.tar\.bz2$/.test(x.name)); setLatest(ok ? String(rel.tag_name).replace(/^v/, "") : ""); } catch { setLatest(""); }
   };
   const auto = cfg.config?.admin?.["auto-check-upgrade"];
   const loaded = !!cfg.config;
