@@ -3,6 +3,7 @@ import { api } from "./controller.js";
 import { Field, Page, Group, SubTabs, Modal } from "./ui.jsx";
 import { Io } from "./io.jsx";
 import { status_to_string } from "./modbus.js";
+import { VfdNotes, VfdProgram } from "./VfdRegs.jsx";
 
 const get = (o, p) => p.reduce((a, k) => (a == null ? a : a[k]), o);
 const set = (o, p, v) => { let t = o; for (const k of p.slice(0, -1)) t = t[k]; t[p[p.length - 1]] = v; };
@@ -84,14 +85,15 @@ const UNSUPPORTED = [
 ];
 const merge = (a, b) => { const o = { ...a }; for (const [k, v] of Object.entries(b || {})) o[k] = v && typeof v === "object" && !Array.isArray(v) ? merge(a?.[k] || {}, v) : v; return o; };
 
-export function Tool({ cfg, state, metric }) {
+export function Tool({ cfg, state, metric, send }) {
   const t = cfg.template;
   if (!cfg.config || !t) return <Loading title="Tool" />;
   const c = cfg.config, sel = c.tool["selected-tool"];
   const all = [...TOOLS, ...UNSUPPORTED];
   const isPwm = sel === "pwm";
   const isModbus = !["disabled", "laser", "router", "pwm"].includes(sel);
-  const isCustom = (c.tool["tool-type"] || "").toUpperCase() === "CUSTOM MODBUS VFD";
+  const toolType = (c.tool["tool-type"] || "").toUpperCase();
+  const isCustom = toolType === "CUSTOM MODBUS VFD";
   const show = (k) => {
     if (k === "tool-type" || k === "selected-tool" || sel === "disabled") return false;
     if (sel === "laser" || sel === "router") return k === "tool-enable-mode";
@@ -128,9 +130,10 @@ export function Tool({ cfg, state, metric }) {
               {Object.keys(t["modbus-spindle"]).filter((k) => k !== "regs" && (k !== "multi-write" || isCustom)).map((k) => <Bound key={k} cfg={cfg} path={["modbus-spindle", k]} tpl={t["modbus-spindle"][k]} metric={metric} />)}
               <h3>VFD status</h3>
               <dl className="stats one"><div className="stat"><dt>Connection</dt><dd>{status_to_string(state.mx)}</dd></div><div className="stat"><dt>Status</dt><dd>{state.ss || 0}</dd></div><div className="stat"><dt>Speed</dt><dd>{Math.round(state.s || 0)} rpm</dd></div></dl>
-              {UNSUPPORTED.some((u) => u.id === sel) && <p className="note">This tool type is unsupported. Its register program and setup notes are only in the original interface at the controller's main address.</p>}
             </Group>
           )}
+          {isModbus && !["HUANYANG VFD", "REDLINE VFD", "EM60"].includes(toolType) && <VfdProgram cfg={cfg} state={state} send={send} template={t} toolType={toolType} />}
+          {isModbus && <VfdNotes toolType={toolType} />}
           {!isModbus && !isPwm && sel !== "disabled" && <Group title="Tool"><p className="dim">A {sel === "laser" ? "laser" : "router"} is switched on and off through the tool enable output. Set its speed in your G-code with S words.</p></Group>}
         </div>
       </div>

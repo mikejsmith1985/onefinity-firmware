@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { api } from "./controller.js";
 import { fmtTime } from "./axis.js";
+import Checklist, { buildChecks, skipChecklist } from "./Checklist.jsx";
 
 function Override({ label, kind, hint }) {
   const [v, setV] = useState(100);
@@ -17,7 +18,10 @@ function Override({ label, kind, hint }) {
 
 const Stat = ({ k, v, title }) => <div className="stat" title={title}><dt>{k}</dt><dd>{v}</dd></div>;
 
-export default function Job({ state, mach, path, metric }) {
+export default function Job({ state, mach, path, metric, config }) {
+  const [check, setCheck] = useState(null);
+  const start = () => api.put("start");
+  const tryStart = () => { if (skipChecklist()) start(); else setCheck(buildChecks(state, config, metric, state.selected)); };
   const file = state.selected || "";
   const running = mach === "RUNNING" || mach === "HOMING";
   const holding = mach === "HOLDING" || mach === "STOPPING";
@@ -38,7 +42,7 @@ export default function Job({ state, mach, path, metric }) {
       </div>
       <div className="bar" role="progressbar" aria-valuenow={active ? pct : 0} aria-valuemin="0" aria-valuemax="100"><i style={{ width: `${active ? (pct || 2) : 0}%` }} /></div>
       <div className="runrow">
-        {!active && <button className="go" disabled={!canStart} onClick={() => api.put("start")}>Run</button>}
+        {!active && <button className="go" disabled={!canStart} onClick={tryStart}>Run</button>}
         {running && <button className="hold" onClick={() => api.put("pause")}>Pause</button>}
         {holding && <button className="go" onClick={() => api.put("unpause")}>Resume</button>}
         <button className="halt" disabled={!active} onClick={() => api.put("stop")}>Stop</button>
@@ -56,6 +60,7 @@ export default function Job({ state, mach, path, metric }) {
       </dl>
       <Override label="Feed" kind="feed" hint="Feed rate override" />
       <Override label="Speed" kind="speed" hint="Spindle speed override" />
+      {check && <Checklist checks={check} onCancel={() => setCheck(null)} onRun={() => { setCheck(null); start(); }} />}
     </div>
   );
 }

@@ -101,7 +101,7 @@ export default function App() {
       {page === "macros" && <Macros cfg={cfg} state={state} />}
       {page === "settings" && <Settings cfg={cfg} metric={metric} />}
       {page === "motors" && <Motors cfg={cfg} state={state} metric={metric} index={route.index || 0} go={go} />}
-      {page === "tool" && <Tool cfg={cfg} state={state} metric={metric} />}
+      {page === "tool" && <Tool cfg={cfg} state={state} metric={metric} send={ctl.send} />}
       {page === "io" && <IO cfg={cfg} state={state} metric={metric} />}
       {page === "admin" && <Admin cfg={cfg} state={state} metric={metric} sub={route.sub || "general"} go={go} ver={ver} />}
       {page === "cheat-sheet" && <CheatSheet />}

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api } from "./controller.js";
 import { Confirm } from "./ui.jsx";
 
@@ -6,10 +6,14 @@ const STEPS = {
   metric: [["Fine", 0.1], ["Small", 1], ["Medium", 10], ["Large", 100]],
   imperial: [["Fine", 0.005], ["Small", 0.05], ["Medium", 0.5], ["Large", 5]],
 };
+const SPEEDS = [1, 5, 10, 25, 50, 100];
 const read = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 
 export default function Jog({ state, config, send, metric, locked, idle, onProbe, ready }) {
   const [idx, setIdx] = useState(Number(read("next-jog-idx", 1)));
+  const [mode, setMode] = useState(read("next-jog-mode", "step") === "hold" ? "hold" : "step");
+  const [spd, setSpd] = useState(Math.min(Number(read("next-jog-spd", 2)) || 0, SPEEDS.length - 1));
+  const held = useRef(null), lastTs = useRef(0);
   const [armed, setArmed] = useState(null);
   const [ask, setAsk] = useState(null);
   const steps = STEPS[metric ? "metric" : "imperial"];
@@ -24,6 +28,36 @@ export default function Jog({ state, config, send, metric, locked, idle, onProbe
     send(`M70\nG91\n${metric ? "G21" : "G20"}\nG0 ${part("X", x)}${part("Y", y)}${part("Z", z)}${part("A", a)}\nM72`);
   };
 
+  // Hold mode: velocity jog. The controller moves while we keep re-sending the command; if the
+  // updates stop for 0.6 s (browser closed, network lost) its watchdog zeroes the jog.
+  const sendJog = (vel) => {
+    const ts = Math.max(Date.now(), lastTs.current + 1); lastTs.current = ts;
+    api.put("jog", { ts, keepalive: true, ...vel }).catch(() => {});
+  };
+  const stopHold = () => {
+    const h = held.current; if (!h) return;
+    clearInterval(h.timer); held.current = null;
+    const zero = {}; for (const k of Object.keys(h.vel)) zero[k] = 0;
+    sendJog(zero); setTimeout(() => sendJog(zero), 120);
+  };
+  const startHold = (x, y, z, a) => {
+    stopHold();
+    const p = SPEEDS[spd] / 100, vel = {};
+    if (x) vel.x = x * p; if (y) vel.y = y * p; if (z) vel.z = z * p; if (a) vel.a = a * p;
+    held.current = { vel, timer: setInterval(() => sendJog(vel), 200) };
+    sendJog(vel);
+  };
+  const stopRef = useRef(stopHold); stopRef.current = stopHold;
+  useEffect(() => {
+    const stop = () => stopRef.current();
+    const hidden = () => { if (document.hidden) stop(); };
+    window.addEventListener("blur", stop); window.addEventListener("pagehide", stop); document.addEventListener("visibilitychange", hidden);
+    return () => { stop(); window.removeEventListener("blur", stop); window.removeEventListener("pagehide", stop); document.removeEventListener("visibilitychange", hidden); };
+  }, []);
+  useEffect(() => { if (locked) stopRef.current(); }, [locked]);
+  const pickMode = (m) => { stopHold(); setMode(m); try { localStorage.setItem("next-jog-mode", m); } catch {} };
+  const pickSpd = (i) => { stopHold(); setSpd(i); try { localStorage.setItem("next-jog-spd", i); } catch {} };
+
   const macros = (state.macros || config?.macros || []).filter((m) => m && m.file_name && m.file_name !== "default");
   const runMacro = async (m, i) => {
     if (m.alert !== false && armed !== i) { setArmed(i); setTimeout(() => setArmed((a) => (a === i ? null : a)), 3000); return; }
@@ -31,19 +65,38 @@ export default function Jog({ state, config, send, metric, locked, idle, onProbe
     try { await api.get(`file/${encodeURIComponent(m.file_name)}`); await api.put("start"); } catch (e) { console.error(e); }
   };
 
-  const K = ({ x = 0, y = 0, z = 0, a = 0, cls, children, label }) => (
+  const K = ({ x = 0, y = 0, z = 0, a = 0, cls, children, label }) => mode === "hold" ? (
+    <button className={`k hk ${cls}`} disabled={locked} aria-label={`${label} (hold)`}
+      onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); startHold(x, y, z, a); }}
+      onPointerUp={stopHold} onPointerCancel={stopHold} onLostPointerCapture={stopHold}
+      onContextMenu={(e) => e.preventDefault()}>{children}</button>
+  ) : (
     <button className={`k ${cls}`} disabled={locked} aria-label={label} onClick={() => jog(x, y, z, a)}>{children}</button>
   );
 
   return (
     <div className="jog">
-      <div className="steps" role="radiogroup" aria-label="Step size">
-        {steps.map(([name, v], i) => (
-          <button key={name} role="radio" aria-checked={i === idx} className={i === idx ? "on" : ""} onClick={() => pick(i)}>
-            <b>{v}</b><small>{name}</small>
-          </button>
-        ))}
+      <div className="modes" role="radiogroup" aria-label="Jog mode">
+        <button role="radio" aria-checked={mode === "step"} className={mode === "step" ? "on" : ""} onClick={() => pickMode("step")}>Step</button>
+        <button role="radio" aria-checked={mode === "hold"} className={mode === "hold" ? "on" : ""} onClick={() => pickMode("hold")}>Hold</button>
       </div>
+      {mode === "step" ? (
+        <div className="steps" role="radiogroup" aria-label="Step size">
+          {steps.map(([name, v], i) => (
+            <button key={name} role="radio" aria-checked={i === idx} className={i === idx ? "on" : ""} onClick={() => pick(i)}>
+              <b>{v}</b><small>{name}</small>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="steps six" role="radiogroup" aria-label="Hold jog speed">
+          {SPEEDS.map((v, i) => (
+            <button key={v} role="radio" aria-checked={i === spd} className={i === spd ? "on" : ""} onClick={() => pickSpd(i)}>
+              <b>{v}%</b><small>of max</small>
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="pads">
         <div className="xy">
@@ -59,7 +112,7 @@ export default function Jog({ state, config, send, metric, locked, idle, onProbe
         </div>
         <div className="z">
           <K z={1} cls="" label="Z up">Z+</K>
-          <div className="zl">{amt} {unit}</div>
+          <div className="zl">{mode === "hold" ? `${SPEEDS[spd]}%` : `${amt} ${unit}`}</div>
           <K z={-1} cls="" label="Z down">Z−</K>
           {rotaryOn && <div className="arow"><K a={-1} cls="" label="A minus">A−</K><K a={1} cls="" label="A plus">A+</K></div>}
         </div>
