@@ -517,7 +517,7 @@ class NextStoreHandler(bbctrl.APIHandler):
     # Small JSON documents for the new UI (run history, file notes), kept on
     # the controller so every browser sees the same data.  Only whitelisted
     # names are accepted and each document is capped in size.
-    NAMES = ('runs', 'notes', 'prefs', 'checkpoint')
+    NAMES = ('runs', 'notes', 'prefs', 'checkpoint', 'probe')
     MAX_BYTES = 1000000
 
     def _path(self, name):
@@ -998,7 +998,7 @@ class Web(tornado.web.Application):
 
         handlers = [
             (r'/websocket', WSConnection),
-            (r'/api/next-store/(runs|notes|prefs|checkpoint)', NextStoreHandler),
+            (r'/api/next-store/(runs|notes|prefs|checkpoint|probe)', NextStoreHandler),
             (r'/api/next-resume', ResumeHandler),
             (r'/api/log', LogHandler),
             (r'/api/message/(\d+)/ack', MessageAckHandler),

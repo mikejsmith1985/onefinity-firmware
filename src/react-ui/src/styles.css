@@ -332,3 +332,13 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
 .dry-opt input[type=number]{width:4.5rem}
 .dry-err{background:#8b1a1a;color:#fff;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0}
 button.go.dry{background:#b07400}
+
+.sheet{margin:0 0 1rem;padding:.75rem 1rem;border:1px solid var(--line,#3a4150);border-radius:8px}
+.sheet h3{margin:0 0 .5rem;font-size:1rem}
+.sheet dl{margin:0;display:grid;gap:.4rem}
+.sheet dl>div{display:grid;grid-template-columns:9rem 1fr;gap:.75rem}
+.sheet dt{opacity:.7}
+.sheet dd{margin:0}
+.sheet-note{opacity:.7;font-size:.9rem}
+button.linkish{background:none;border:0;padding:0;margin-left:.75rem;text-decoration:underline;cursor:pointer;color:inherit;opacity:.85}
+@media (max-width:600px){.sheet dl>div{grid-template-columns:1fr}}

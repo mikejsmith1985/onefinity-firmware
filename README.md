@@ -25,6 +25,7 @@ A fork of the [Onefinity CNC controller firmware](https://github.com/OneFinityCN
 | Compatibility build for old screens | 1.17.2 | The new UI now ships with a compatibility version for very old browsers (Chromium 49 and later) that is used automatically when the browser can't run the normal one. |
 | Macro buttons report problems | 1.17.3 | A macro button waits until the controller has loaded the macro file before starting it, stays armed for 5 seconds after the first tap, and shows an error under the buttons if the macro could not start. |
 | Dry run | 1.18.0 | Tick Dry run next to Run to rehearse the selected program in the air. The controller plans the program unchanged and sends every move higher (30 mm by default, 5 to 100 mm allowed) with the router, mist and probing blocked. Nothing is stored: no Z offset is changed, the lift lasts for that one run only, and a banner shows while it is active. Needs Z homed. |
+| Setup sheet | 1.19.0 | Programs can carry `(SETUP key: text)` comment lines near the top (stock size, where zero goes, tool, speeds, probe corner). The Run checklist shows them, the Job panel has a Setup sheet button, the program is checked against the declared plate, and the corner last probed is compared with the corner the sheet needs. Controllers treat the lines as comments. |
 | UI toggle | 1.10.0 | "Try the new UI" button in the classic menu and "Classic UI" in the new tab bar. |
 
 The classic UI at `/` is unchanged and always available as a fallback. The new UI is at `http://<controller-address>/next/`.

@@ -1,3 +1,4 @@
+import { remotePut } from "./store.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./controller.js";
 import { Modal } from "./ui.jsx";
@@ -104,7 +105,7 @@ export default function ProbeDialog({ type, config, state, send, subscribe, rota
   // Everything the async flow needs lives in one ref so it can read the latest values.
   const R = useRef({});
   R.current.dia = parseDia(rotary ? diaRot : dia);
-  R.current.loc = loc; R.current.config = config; R.current.rotary = rotary; R.current.type = type; R.current.send = send;
+  R.current.loc = loc; R.current.config = config; R.current.rotary = rotary; R.current.type = type; R.current.send = send; R.current.state = state;
   R.current.state = state; R.current.centerOk = centerOk;
 
   const f = useRef({ active: false, contacted: false, started: false, failed: false, complete: false, ack: false, cancelled: false }).current;
@@ -281,6 +282,11 @@ ${rest}
         await stepDone("Probe2", list, complete, fail);
         await stepDone("Done", list, ack);
         if (usesLocation && isCenterLoc(R.current.loc) && R.current.centerOk === 0) return;
+        // Remember where zero was set so the Run check can compare it with the program's setup sheet
+        if (usesLocation) {
+          const st = R.current.state || {};
+          remotePut("probe", { loc: R.current.loc, time: Date.now(), off: { x: st.offset_x ?? null, y: st.offset_y ?? null, z: st.offset_z ?? null } });
+        }
         if (isXYZ) R.current.send(rotary ? "G90\nG0 Y0" : "G90\nG0 X0Y0");
       } catch (e) {
         if (e.message !== "cancelled") console.error("Error during probing:", e);

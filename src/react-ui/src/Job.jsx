@@ -4,7 +4,10 @@ import { fmtTime } from "./axis.js";
 import { useNote } from "./notes.js";
 import { markStopped } from "./history.js";
 import ParkDialog from "./ParkDialog.jsx";
-import Checklist, { buildChecks, skipChecklist } from "./Checklist.jsx";
+import Checklist, { buildChecks, skipChecklist, SheetView } from "./Checklist.jsx";
+import { readSetup, stockChecks, probeChecks } from "./setup.js";
+import { remoteGet } from "./store.js";
+import { Modal } from "./ui.jsx";
 
 function Override({ label, kind, hint }) {
   const [v, setV] = useState(100);
@@ -37,7 +40,28 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       .then(() => setDry(false))
       .catch((e) => setErr(String(e.message || e).replace(/^\{"message":"|","code":\d+\}$/g, "")));
   };
-  const tryStart = () => { if (dry || skipChecklist()) start(); else setCheck(buildChecks(state, config, metric, state.selected)); };
+  const [sheet, setSheet] = useState(null);
+  const [sheetBusy, setSheetBusy] = useState(false);
+  const tryStart = async () => {
+    if (dry) return start();
+    setErr("");
+    let setup = null;
+    try { setup = await readSetup(state.selected); } catch { /* run without a sheet */ }
+    const rec = setup?.corner ? await remoteGet("probe") : null;
+    const checks = buildChecks(state, config, metric, state.selected, setup, rec);
+    // A program with a setup sheet always shows it. A move outside the plate is never skipped.
+    const mustShow = !!setup || checks.some((c) => c.level === "stop");
+    if (skipChecklist() && !mustShow) start(); else setCheck({ checks, setup });
+  };
+  const openSheet = async () => {
+    setSheetBusy(true); setErr("");
+    try {
+      const setup = await readSetup(state.selected);
+      const rec = setup?.corner ? await remoteGet("probe") : null;
+      setSheet(setup ? { setup, checks: [...probeChecks(setup, rec, state), ...stockChecks(setup, metric)] } : { setup: null, checks: [] });
+    } catch (e) { setErr(String(e.message || e)); }
+    setSheetBusy(false);
+  };
   const file = state.selected || "";
   const running = mach === "RUNNING" || mach === "HOMING";
   const holding = mach === "HOLDING" || mach === "STOPPING";
@@ -56,6 +80,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       <div className="job-file">
         <small>Program</small>
         <strong title={file}>{file || "No program selected"}</strong>
+        {file && !active && <button className="linkish" disabled={sheetBusy} onClick={openSheet} title="Where to zero, which corner to probe, tool and feeds for this program">{sheetBusy ? "Reading…" : "Setup sheet"}</button>}
         {note && <em className="file-note" title={note}>{note}</em>}
       </div>
       <div className="bar" role="progressbar" aria-valuenow={active ? pct : 0} aria-valuemin="0" aria-valuemax="100"><i style={{ width: `${active ? (pct || 2) : 0}%` }} /></div>
@@ -89,7 +114,16 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       <Override label="Feed" kind="feed" hint="Feed rate override" />
       <Override label="Speed" kind="speed" hint="Spindle speed override" />
       {(parkAsk || state.park) && <ParkDialog state={state} active={active} onClose={() => setParkAsk(false)} />}
-      {check && <Checklist checks={check} onCancel={() => setCheck(null)} onRun={() => { setCheck(null); start(); }} />}
+      {check && <Checklist checks={check.checks} setup={check.setup} onCancel={() => setCheck(null)} onRun={() => { setCheck(null); start(); }} />}
+      {sheet && (
+        <Modal title="Setup sheet" onClose={() => setSheet(null)} actions={<button data-autofocus onClick={() => setSheet(null)}>Close</button>}>
+          {sheet.setup ? <SheetView setup={sheet.setup} /> : <p>This program has no setup sheet.</p>}
+          {sheet.checks.length > 0 && (
+            <ul className="checks">{sheet.checks.map((c, i) => <li key={i} className={c.level}><span className="mark" aria-label={c.level}>{c.level === "ok" ? "✓" : c.level === "warn" ? "!" : "✕"}</span><b>{c.name}</b><span>{c.text}</span></li>)}</ul>
+          )}
+          {sheet.checks.length > 0 && <p className="sheet-note">These checks run again when you press Run.</p>}
+        </Modal>
+      )}
     </div>
   );
 }
