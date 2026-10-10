@@ -115,10 +115,10 @@ const json = (res, obj, code = 200) => {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://x");
   const p = url.pathname;
-  if (p === "/next" || p === "/next/") { res.writeHead(200, { "Content-Type": "text/html" }); return res.end(fs.readFileSync(path_.join(NEXT, "index.html"))); }
-  if (p.startsWith("/next/")) {
-    const f = path_.join(NEXT, p.slice(6));
-    if (f.startsWith(NEXT) && fs.existsSync(f)) { res.writeHead(200, { "Content-Type": MIME[path_.extname(f)] || "application/octet-stream" }); return res.end(fs.readFileSync(f)); }
+  if (p === "/next" || p.startsWith("/next/")) { res.writeHead(302, { Location: "/" }); return res.end(); }
+  if (!p.startsWith("/api/") && !p.startsWith("/websocket") && !/^\/(config-template|onefinity.*)\.json$/.test(p)) {
+    const f = path_.join(NEXT, p === "/" ? "index.html" : p.slice(1));
+    if (f.startsWith(NEXT) && fs.existsSync(f) && fs.statSync(f).isFile()) { res.writeHead(200, { "Content-Type": MIME[path_.extname(f)] || "application/octet-stream" }); return res.end(fs.readFileSync(f)); }
     res.writeHead(404); return res.end();
   }
   if (p === "/config-template.json" || /^\/onefinity.*\.json$/.test(p)) { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(fs.readFileSync(path_.join(R, p.slice(1)))); }

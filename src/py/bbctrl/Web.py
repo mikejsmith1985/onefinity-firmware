@@ -1039,13 +1039,14 @@ class Web(tornado.web.Application):
             (r'/api/time', TimeHandler),
             (r'/api/rotary', RotaryHandler),
             (r'/api/remote-diagnostics', RemoteDiagnosticsHandler),
-            # New React interface; the original UI at / is untouched.
-            (r'/next', tornado.web.RedirectHandler, {'url': '/next/'}),
-            (r'/next/(.*)', StaticFileHandler,
-             {'path': bbctrl.get_resource('http/next/'),
-              'default_filename': 'index.html'}),
+            # The React interface is the interface. Old /next/ bookmarks go to /.
+            (r'/next', tornado.web.RedirectHandler, {'url': '/'}),
+            (r'/next/(.*)', tornado.web.RedirectHandler, {'url': '/'}),
+            # Data files the interface reads from the controller's root address.
+            (r'/(config-template\.json|buildbotics\.nc|favicon\.ico|onefinity_[a-z0-9_]+\.json|images/.*|fonts/.*)',
+             StaticFileHandler, {'path': bbctrl.get_resource('http/')}),
             (r'/(.*)', StaticFileHandler,
-             {'path': bbctrl.get_resource('http/'),
+             {'path': bbctrl.get_resource('http/next/'),
               'default_filename': 'index.html'}),
             ]
 

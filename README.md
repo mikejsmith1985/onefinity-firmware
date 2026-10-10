@@ -9,7 +9,7 @@ A fork of the [Onefinity CNC controller firmware](https://github.com/OneFinityCN
 | Corner, center and center-X probing | 1.6.7 | The probe dialog finds a stock corner, the center of a piece, or the center in X only. It remembers the measured stock size. |
 | Depth view | 1.7.0 | Simulates cut depth under the tool path, with a play slider. It also works on controllers without WebGL. |
 | Mist off on pause | 1.7.0 | Mist turns off while a job is paused and comes back on resume. |
-| New UI at `/next` | 1.8.0 | A React interface where every page is a tab across the top: Control, Macros, Settings, Motors, Tool, I/O, Admin, Cheat sheet, Help. |
+| New UI | 1.8.0 (at `/next`), main interface from 1.20.0 | A React interface where every page is a tab across the top: Control, Macros, Settings, Motors, Tool, I/O, Admin, Cheat sheet, Help. |
 | VFD register editor | 1.11.0 | The Tool tab shows the active Modbus program, lets you customize or clear it for a custom VFD, and shows the front-panel setup notes for each supported VFD. |
 | Hold-to-jog | 1.11.0 | Choose Step or Hold in the jog pad. In Hold mode the machine moves while you hold a key, at 1 to 100% of max speed. The controller stops the jog by itself if the page stops sending updates. |
 | Run checklist | 1.11.0 | Pressing Run shows homing, fit, work zero and spindle drive status first. Can be turned off per device. |
@@ -21,14 +21,14 @@ A fork of the [Onefinity CNC controller firmware](https://github.com/OneFinityCN
 | Power-loss recovery, stage 1 | 1.16.0 | While a job runs the controller saves the program and line number (about every 10 seconds, only when the line changes, off the motion path). After a power loss or E-stop the Control tab shows the interrupted job and the line. Can be turned off in Admin. Resuming the job comes in a later version. |
 | Updates from this repo | 1.16.1 | Admin > Check for upgrade and Upgrade via web now look at the latest release of this repository (not the stock Onefinity one), download the package, test it is not corrupt, then install it. |
 | Resume and park, stages 2 and 3 | 1.17.0 | **Resume**: after a power loss, E-stop or stop, home the machine and press Resume on the Control tab. It writes a program that lifts Z, moves over the point where the job stopped, waits for you to check it, starts the spindle, waits for it to reach speed, lowers slowly and carries on from the saved line. **Park**: while a job runs, Park stops it, turns the spindle off and lifts Z to the top so you can switch the machine off and finish the cut later, even after a firmware update. Spin-up wait and plunge speed are settings in Admin. |
-| Works on the controller's own screen | 1.17.1 | The new UI is now built for the older Chromium on the controller's built-in display (it showed a blank page before). Spacing fallbacks added for old browsers, and if the UI can't start it now says why and links to the classic UI. |
+| Works on the controller's own screen | 1.17.1 | The new UI is now built for the older Chromium on the controller's built-in display (it showed a blank page before). Spacing fallbacks added for old browsers, and if the UI can't start it now says why and says why. |
 | Compatibility build for old screens | 1.17.2 | The new UI now ships with a compatibility version for very old browsers (Chromium 49 and later) that is used automatically when the browser can't run the normal one. |
 | Macro buttons report problems | 1.17.3 | A macro button waits until the controller has loaded the macro file before starting it, stays armed for 5 seconds after the first tap, and shows an error under the buttons if the macro could not start. |
 | Dry run | 1.18.0 | Tick Dry run next to Run to rehearse the selected program in the air. The controller plans the program unchanged and sends every move higher (30 mm by default, 5 to 100 mm allowed) with the router, mist and probing blocked. Nothing is stored: no Z offset is changed, the lift lasts for that one run only, and a banner shows while it is active. Needs Z homed. |
 | Setup sheet | 1.19.0 | Programs can carry `(SETUP key: text)` comment lines near the top (stock size, where zero goes, tool, speeds, probe corner). The Run checklist shows them, the Job panel has a Setup sheet button, the program is checked against the declared plate, and the corner last probed is compared with the corner the sheet needs. Controllers treat the lines as comments. |
-| UI toggle | 1.10.0 | "Try the new UI" button in the classic menu and "Classic UI" in the new tab bar. |
+| New UI is the only UI | 1.20.0 | The React interface is now served at the controller's main address. The original interface is no longer shipped, and the "Classic UI" and "Try the new UI" buttons are gone. Old `/next/` bookmarks redirect to `/`. |
 
-The classic UI at `/` is unchanged and always available as a fallback. The new UI is at `http://<controller-address>/next/`.
+The interface is at `http://<controller-address>/`. The original Onefinity interface is not included from 1.20.0. To go back to it, install an earlier release (1.19.0 or older).
 
 ## Download the latest firmware to your PC
 
@@ -53,7 +53,7 @@ Optional check that the download is intact (a damaged file prints an error):
 
 1. Connect your PC to the same network as the controller and open its address in a browser (the IP address is shown on the controller's screen and in the Admin tab).
 2. Make sure the machine is idle and nothing is running.
-3. Go to **Admin → General → Firmware** (classic UI: **Admin → General**) and choose **Upgrade from file**.
+3. Go to **Admin → General → Firmware** and choose **Upgrade from file**.
 4. Select the `onefinity-X.Y.Z.tar.bz2` you downloaded and confirm.
 5. Wait for the upgrade to finish. It should take under 5 minutes. If it takes longer, restart the controller and try again, or install from a USB stick.
 6. Reload the page. The version shown in the tab bar should match the file you installed.
@@ -78,8 +78,8 @@ The new UI lives in `src/react-ui/`:
 
     cd src/react-ui
     npm install
-    npm run build     # writes to src/resources/next/
-    npm run mock      # fake controller on :8080 that also serves /next/
+    npm run build     # writes to src/resources/next/ (served at /)
+    npm run mock      # fake controller on :8080 that also serves the UI at /
 
 Version numbers are set in `package.json` and `src/py/bbctrl/Config.py`. A new feature is a version bump (1.9.0 to 1.10.0). A fix is a `-pN` suffix.
 
