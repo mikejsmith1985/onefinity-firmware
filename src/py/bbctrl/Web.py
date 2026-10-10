@@ -511,6 +511,39 @@ class ModbusWriteHandler(bbctrl.APIHandler):
                                     int(self.json['value']))
 
 
+class NextStoreHandler(bbctrl.APIHandler):
+    # Small JSON documents for the new UI (run history, file notes), kept on
+    # the controller so every browser sees the same data.  Only whitelisted
+    # names are accepted and each document is capped in size.
+    NAMES = ('runs', 'notes')
+    MAX_BYTES = 1000000
+
+    def _path(self, name):
+        if name not in self.NAMES: raise HTTPError(404)
+        d = self.get_path('next-data')
+        if not os.path.exists(d): os.makedirs(d)
+        return os.path.join(d, name + '.json')
+
+
+    def get(self, name):
+        path = self._path(name)
+        data = None
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding = 'utf-8') as f: data = json.load(f)
+            except (ValueError, OSError): data = None
+        self.write_json(data)
+
+
+    def put_ok(self, name):
+        path = self._path(name)
+        if len(self.request.body) > self.MAX_BYTES:
+            raise HTTPError(413, 'Document too large')
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding = 'utf-8') as f: json.dump(self.json, f)
+        os.replace(tmp, path)
+
+
 class JogHandler(bbctrl.APIHandler):
     def put_ok(self):
         # Handle possible out of order jog command processing
@@ -922,6 +955,7 @@ class Web(tornado.web.Application):
 
         handlers = [
             (r'/websocket', WSConnection),
+            (r'/api/next-store/(runs|notes)', NextStoreHandler),
             (r'/api/log', LogHandler),
             (r'/api/message/(\d+)/ack', MessageAckHandler),
             (r'/api/bugreport', BugReportHandler),
