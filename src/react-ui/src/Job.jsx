@@ -57,7 +57,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         <Stat k="Velocity" v={vel} title="Current velocity" />
         <Stat k="Spindle" v={`${Math.round(state.speed || 0)}${!isNaN(state.s) && state.s !== undefined ? ` (${Math.round(state.s)})` : ""} rpm`} title="Programmed and actual speed" />
         <Stat k="Tool" v={state.tool || 0} />
-        {changes.length > 0 && <Stat k="Next change" v={nextChange ? `T${nextChange.tool} · line ${nextChange.line.toLocaleString()} (${changes.indexOf(nextChange) + 1} of ${changes.length})` : `none left (${changes.length} total)`} title="Tool changes (M6) in this program" />}
+        {changes.length > 0 && <Stat k="Next change" v={nextChange ? `T${nextChange.tool} · L${nextChange.line} · ${changes.indexOf(nextChange) + 1}/${changes.length}` : `none left (${changes.length} total)`} title="Tool changes (M6) in this program" />}
         <Stat k="Loads" v={`1:${state["1oa"] ? "On" : "Off"}  2:${state["2oa"] ? "On" : "Off"}`} title="Load switch states" />
       </dl>
       <Override label="Feed" kind="feed" hint="Feed rate override" />
