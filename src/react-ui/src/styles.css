@@ -325,3 +325,4 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
 .no-fgap .radios.inline > * + * { margin-top: 0; }
 .no-fgap .radios.inline > * { margin-right: 16px; margin-bottom: 0; }
 .no-fgap .interrupted .irow > * + * { margin-top: 0; margin-left: 8px; }
+.macro-err { flex-basis: 100%; margin: 4px 0 0; color: #ff8a82; font-size: 14px; line-height: 1.4; }

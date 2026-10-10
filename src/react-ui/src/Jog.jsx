@@ -15,6 +15,8 @@ export default function Jog({ state, config, send, metric, locked, idle, onProbe
   const [spd, setSpd] = useState(Math.min(Number(read("next-jog-spd", 2)) || 0, SPEEDS.length - 1));
   const held = useRef(null), lastTs = useRef(0);
   const [armed, setArmed] = useState(null);
+  const [macroErr, setMacroErr] = useState("");
+  const stRef = useRef(state); stRef.current = state;
   const [ask, setAsk] = useState(null);
   const steps = STEPS[metric ? "metric" : "imperial"];
   const amt = steps[idx][1];
@@ -60,9 +62,20 @@ export default function Jog({ state, config, send, metric, locked, idle, onProbe
 
   const macros = (state.macros || config?.macros || []).filter((m) => m && m.file_name && m.file_name !== "default");
   const runMacro = async (m, i) => {
-    if (m.alert !== false && armed !== i) { setArmed(i); setTimeout(() => setArmed((a) => (a === i ? null : a)), 3000); return; }
-    setArmed(null);
-    try { await api.get(`file/${encodeURIComponent(m.file_name)}`); await api.put("start"); } catch (e) { console.error(e); }
+    if (m.alert !== false && armed !== i) { setArmed(i); setTimeout(() => setArmed((a) => (a === i ? null : a)), 5000); return; }
+    setArmed(null); setMacroErr("");
+    try {
+      // Opening the file selects it on the controller; wait until the controller reports it before starting.
+      const r = await fetch(`/api/file/${encodeURIComponent(m.file_name)}`);
+      if (!r.ok) throw new Error(`The macro file ${m.file_name} could not be opened.`);
+      for (let n = 0; n < 40 && stRef.current.selected !== m.file_name; n++) await new Promise((ok) => setTimeout(ok, 50));
+      await api.put("start");
+    } catch (e) {
+      let msg = e.message || String(e);
+      try { msg = JSON.parse(msg).message || msg; } catch {}
+      setMacroErr(`${m.name} did not start: ${msg}`);
+      setTimeout(() => setMacroErr(""), 10000);
+    }
   };
 
   const K = ({ x = 0, y = 0, z = 0, a = 0, cls, children, label }) => mode === "hold" ? (
@@ -134,6 +147,7 @@ export default function Jog({ state, config, send, metric, locked, idle, onProbe
               {armed === i ? "Tap again to run" : m.name}
             </button>
           ))}
+          {macroErr && <p className="macro-err" role="alert">{macroErr}</p>}
         </div>
       )}
 
