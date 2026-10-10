@@ -311,3 +311,6 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
 .notes-pane label { display: block; margin-bottom: 8px; } .notes-pane textarea { font: 500 15px/1.5 var(--ui); }
 .tabs .note-dot { background: var(--yellow); }
 .history td, .history th { white-space: nowrap; } .history td:nth-child(2) { white-space: normal; word-break: break-all; }
+
+.interrupted { display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 12px 16px; margin: 0; border: 0; border-bottom: 1px solid var(--yellow); border-left: 4px solid var(--yellow); background: rgba(245,197,24,.08); }
+.interrupted div { display: flex; flex-direction: column; gap: 4px; line-height: 1.45; } .interrupted b { font-weight: 600; } .interrupted small { color: var(--dim); font-size: 14px; }

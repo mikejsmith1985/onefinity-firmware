@@ -3,6 +3,8 @@ import { loadPath } from "./controller.js";
 import Dro from "./Dro.jsx";
 import Jog from "./Jog.jsx";
 import Job from "./Job.jsx";
+import Interrupted from "./Interrupted.jsx";
+import { useCheckpoint } from "./checkpoint.js";
 import { useProgram, parseToolChanges } from "./toolplan.js";
 import Workspace from "./Workspace.jsx";
 import ProbeDialog from "./ProbeDialog.jsx";
@@ -24,6 +26,7 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
   }, [state.selected, state.selected_time]);
 
   const lines = useProgram(state);
+  const ckpt = useCheckpoint(state);
   const changes = React.useMemo(() => parseToolChanges(lines), [lines]);
   const busy = mach === "RUNNING" || mach === "HOLDING" || mach === "STOPPING" || mach === "HOMING";
   const estopped = mach === "ESTOPPED";
@@ -32,6 +35,8 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
   const rotary = state["2an"] === 3;
 
   return (
+    <>
+    <Interrupted cp={ckpt.cp} busy={mach === "RUNNING" || mach === "HOLDING" || mach === "STOPPING" || mach === "HOMING"} onDismiss={ckpt.dismiss} />
     <main className="grid">
       <section className="band dro-band"><Dro state={state} config={cfg.config} metric={metric} idle={idle && !estopped} /></section>
       <section className="band jog-band">
@@ -45,5 +50,6 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
         <ProbeDialog type={probe} config={cfg.config} state={state} send={send} subscribe={subscribe} rotary={rotary} metric={metric} onClose={() => setProbe(null)} />
       )}
     </main>
+    </>
   );
 }

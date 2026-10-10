@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useDrops, clearDrops } from "./drops.js";
+import { getPrefs, setPrefs, useCheckpoint, isInterrupted } from "./checkpoint.js";
 import { api, MACRO_PREFIX, DELETE_LIST_PREFIX } from "./controller.js";
 import { Page, Group, Modal, Confirm, SubTabs } from "./ui.jsx";
 
@@ -261,6 +262,9 @@ function General({ cfg, ver, state }) {
           </div>
           <p className="dim">Back up saves your settings and macros as a zip file. Reset replaces all non-network settings with the defaults for your machine.</p>
         </Group>
+        <Group title="Power-loss recovery">
+          <Recovery state={state} />
+        </Group>
         <Group title="Connection">
           <Drops />
         </Group>
@@ -396,6 +400,20 @@ function Drops() {
           <div className="btnrow"><button onClick={clearDrops}>Clear log</button></div>
         </>
       )}
+    </>
+  );
+}
+
+function Recovery({ state }) {
+  const [on, setOn] = useState(null);
+  const { cp } = useCheckpoint(state);
+  useEffect(() => { getPrefs().then((p) => setOn(!!p.progress)); }, []);
+  const flip = (v) => { setOn(v); setPrefs({ progress: v }); };
+  return (
+    <>
+      <label className="check"><input type="checkbox" className="switch" checked={!!on} disabled={on === null} onChange={(e) => flip(e.target.checked)} /> Save job progress</label>
+      <p className="note">While a job runs, the controller saves the program name and line number to its memory card about every 10 seconds, only when the line has changed. If power is lost or the job is interrupted, you can see where it stopped. This is a few kilobytes of writes per save and runs off the motion path, so it does not affect cutting. Turn it off if you prefer no extra writes.</p>
+      {cp && cp.file && <p className="note">Last saved: <b>{cp.file}</b>, line {Number(cp.line).toLocaleString()}, {new Date(cp.t * 1000).toLocaleString()} ({cp.status}){isInterrupted(cp) ? " - interrupted" : ""}.</p>}
     </>
   );
 }
