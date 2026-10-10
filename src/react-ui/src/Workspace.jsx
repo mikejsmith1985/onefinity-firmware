@@ -10,7 +10,7 @@ import Camera from "./Camera.jsx";
 
 const TABS = [["depth", "Depth view"], ["path", "Tool path"], ["gcode", "G-code"], ["files", "Files"], ["mdi", "MDI"], ["messages", "Messages"], ["indicators", "Indicators"], ["camera", "Camera"]];
 
-export default function Workspace({ state, path, pathBusy, send, mach, cfg, idle, logs, clearLogs }) {
+export default function Workspace({ lines, state, path, pathBusy, send, mach, cfg, idle, logs, clearLogs }) {
   const [tab, setTab] = useState(() => { try { return localStorage.getItem("next-work") || "depth"; } catch { return "depth"; } });
   const pick = (t) => { setTab(t); try { localStorage.setItem("next-work", t); } catch {} };
   return (
@@ -23,7 +23,7 @@ export default function Workspace({ state, path, pathBusy, send, mach, cfg, idle
       <div className="pane">
         {tab === "depth" && <DepthView path={path} busy={pathBusy} file={state.selected} />}
         {tab === "path" && <PathView path={path} busy={pathBusy} state={state} />}
-        {tab === "gcode" && <GCode state={state} />}
+        {tab === "gcode" && <GCode state={state} lines={lines} />}
         {tab === "files" && <Files state={state} cfg={cfg} idle={idle} />}
         {tab === "mdi" && <Mdi state={state} send={send} mach={mach} />}
         {tab === "messages" && <Messages logs={logs} clear={clearLogs} />}
