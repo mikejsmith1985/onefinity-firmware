@@ -1,3 +1,4 @@
+import { explain } from "./explain.js";
 import React, { useEffect, useState, useCallback } from "react";
 import { useController, useConfig, metricOf, api } from "./controller.js";
 import { Modal, Confirm } from "./ui.jsx";
@@ -96,6 +97,9 @@ export default function App() {
         <span className="ver">{cfg.config ? `v${cfg.config.full_version}` : ""}{cfg.net.ip ? ` · ${cfg.net.ip}` : ""}</span>
         <button className="quiet" onClick={() => setPower(true)}>Power</button>
       </nav>
+      {mach === "ESTOPPED" && explain(state.er || "User triggered EStop") && (
+        <div className="banner" role="alert"><b>{explain(state.er || "User triggered EStop").what}</b> {explain(state.er || "User triggered EStop").advice}</div>
+      )}
 
       {page === "control" && <ControlPage ctl={ctl} cfg={cfg} mach={mach} metric={metric} />}
       {page === "macros" && <Macros cfg={cfg} state={state} />}
@@ -117,7 +121,9 @@ export default function App() {
       )}
       {ctl.lastError && ctl.lastError.at !== errSeen && (
         <Modal title="Error" onClose={() => setErrSeen(ctl.lastError.at)} actions={<button data-autofocus className="primary" onClick={() => setErrSeen(ctl.lastError.at)}>OK</button>}>
-          <p className="big">{ctl.lastError.msg}</p><p className="dim">Earlier messages are in the Messages tab on Control.</p>
+          <p className="big">{ctl.lastError.msg}</p>
+          {explain(ctl.lastError.msg) && <div className="why"><b>{explain(ctl.lastError.msg).what}</b><p>{explain(ctl.lastError.msg).advice}</p></div>}
+          <p className="dim">Earlier messages are in the Messages tab on Control.</p>
         </Modal>
       )}
       {askHome && (

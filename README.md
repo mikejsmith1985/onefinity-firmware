@@ -14,6 +14,8 @@ A fork of the [Onefinity CNC controller firmware](https://github.com/OneFinityCN
 | Hold-to-jog | 1.11.0 | Choose Step or Hold in the jog pad. In Hold mode the machine moves while you hold a key, at 1 to 100% of max speed. The controller stops the jog by itself if the page stops sending updates. |
 | Run checklist | 1.11.0 | Pressing Run shows homing, fit, work zero and spindle drive status first. Can be turned off per device. |
 | Connection drop log | 1.11.0 | Admin shows each time the page lost its link to the controller, with how long and why. |
+| Plain-language errors | 1.12.0 | E-stop and error messages come with what happened and what to do next. Messages the controller sends that aren't recognized are shown unchanged. |
+| Remembered Depth view settings | 1.12.0 | Tool diameter, shape and stock top are remembered per program file. |
 | UI toggle | 1.10.0 | "Try the new UI" button in the classic menu and "Classic UI" in the new tab bar. |
 
 The classic UI at `/` is unchanged and always available as a fallback. The new UI is at `http://<controller-address>/next/`.

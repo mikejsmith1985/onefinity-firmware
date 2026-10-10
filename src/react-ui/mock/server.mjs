@@ -145,7 +145,7 @@ const server = http.createServer((req, res) => {
   if (p === "/api/pause") { broadcast({ xx: "HOLDING", pr: "User pause" }); return json(res, "ok"); }
   if (p === "/api/unpause") { broadcast({ xx: "RUNNING", pr: "" }); return json(res, "ok"); }
   if (p === "/api/stop") { clearInterval(timer); broadcast({ xx: "READY", cycle: "idle", feed: 0, speed: 0, pr: "" }); return json(res, "ok"); }
-  if (p === "/api/estop") { clearInterval(timer); broadcast({ xx: "ESTOPPED", er: "User E-stop", feed: 0, speed: 0 }); return json(res, "ok"); }
+  if (p === "/api/estop") { clearInterval(timer); broadcast({ xx: "ESTOPPED", er: "User triggered EStop", feed: 0, speed: 0 }); return json(res, "ok"); }
   if (p === "/api/clear") { broadcast({ xx: "READY", er: "" }); return json(res, "ok"); }
   if (p.startsWith("/api/home")) { broadcast({ "0homed": true, "1homed": true, "2homed": true }); return json(res, "ok"); }
   if (p.startsWith("/api/position/")) {

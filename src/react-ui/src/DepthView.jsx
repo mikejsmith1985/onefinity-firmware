@@ -15,11 +15,21 @@ const LUT = (() => {
 const load = (k, d) => { try { return localStorage.getItem("next-" + k) ?? d; } catch { return d; } };
 const save = (k, v) => { try { localStorage.setItem("next-" + k, v); } catch {} };
 
-export default function DepthView({ path, busy: pathBusy }) {
+export default function DepthView({ path, busy: pathBusy, file }) {
   const [dia, setDia] = useState(parseFloat(load("dia", "3.175")) || 3.175);
   const [type, setType] = useState(load("type", "flat"));
   const [vAngle, setVAngle] = useState(parseFloat(load("vangle", "60")) || 60);
   const [stockTop, setStockTop] = useState(0);
+  // Tool and stock settings are remembered per program file.
+  const [ready, setReady] = useState(null);
+  useEffect(() => {
+    let v = null; try { v = JSON.parse(localStorage.getItem("next-depth:" + file) || "null"); } catch {}
+    if (v) { setDia(v.dia); setType(v.type); setVAngle(v.vAngle); setStockTop(v.stockTop); }
+    setReady(file);
+  }, [file]);
+  useEffect(() => {
+    if (file && ready === file) { try { localStorage.setItem("next-depth:" + file, JSON.stringify({ dia, type, vAngle, stockTop })); } catch {} }
+  }, [ready, file, dia, type, vAngle, stockTop]);
   const [pos, setPos] = useState(0);
   const [last, setLast] = useState(0);
   const [percent, setPercent] = useState(0);
