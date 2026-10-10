@@ -116,12 +116,13 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://x");
   const p = url.pathname;
   if (p === "/next" || p.startsWith("/next/")) { res.writeHead(302, { Location: "/" }); return res.end(); }
-  if (!p.startsWith("/api/") && !p.startsWith("/websocket") && !/^\/(config-template|onefinity.*)\.json$/.test(p)) {
+  if (!p.startsWith("/api/") && !p.startsWith("/mock/") && !p.startsWith("/websocket") && !/^\/(config-template|onefinity.*)\.json$/.test(p)) {
     const f = path_.join(NEXT, p === "/" ? "index.html" : p.slice(1));
     if (f.startsWith(NEXT) && fs.existsSync(f) && fs.statSync(f).isFile()) { res.writeHead(200, { "Content-Type": MIME[path_.extname(f)] || "application/octet-stream" }); return res.end(fs.readFileSync(f)); }
     res.writeHead(404); return res.end();
   }
   if (p === "/config-template.json" || /^\/onefinity.*\.json$/.test(p)) { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(fs.readFileSync(path_.join(R, p.slice(1)))); }
+  if (p === "/mock/set") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { const d = JSON.parse(b); Object.assign(state, d); broadcast(d); } catch {} json(res, "ok"); }); return; }
   if (p === "/api/config/load") return json(res, config);
   if (p === "/api/config/save") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { Object.assign(config, JSON.parse(b)); } catch {} json(res, "ok"); }); return; }
   if (p === "/api/hostname") return json(res, "onefinity");
