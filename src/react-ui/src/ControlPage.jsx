@@ -36,7 +36,7 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
 
   return (
     <>
-    <Interrupted cp={ckpt.cp} busy={mach === "RUNNING" || mach === "HOLDING" || mach === "STOPPING" || mach === "HOMING"} onDismiss={ckpt.dismiss} />
+    <Interrupted cp={ckpt.cp} busy={mach === "RUNNING" || mach === "HOLDING" || mach === "STOPPING" || mach === "HOMING"} onDismiss={ckpt.dismiss} state={state} config={cfg.config} metric={metric} />
     <main className="grid">
       <section className="band dro-band"><Dro state={state} config={cfg.config} metric={metric} idle={idle && !estopped} /></section>
       <section className="band jog-band">

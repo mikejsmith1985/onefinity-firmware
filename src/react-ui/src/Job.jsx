@@ -3,6 +3,7 @@ import { api } from "./controller.js";
 import { fmtTime } from "./axis.js";
 import { useNote } from "./notes.js";
 import { markStopped } from "./history.js";
+import ParkDialog from "./ParkDialog.jsx";
 import Checklist, { buildChecks, skipChecklist } from "./Checklist.jsx";
 
 function Override({ label, kind, hint }) {
@@ -22,6 +23,7 @@ const Stat = ({ k, v, title }) => <div className="stat" title={title}><dt>{k}</d
 
 export default function Job({ state, mach, path, metric, config, changes = [] }) {
   const [check, setCheck] = useState(null);
+  const [parkAsk, setParkAsk] = useState(false);
   const note = useNote(state.selected).split("\n")[0];
   const start = () => api.put("start");
   const tryStart = () => { if (skipChecklist()) start(); else setCheck(buildChecks(state, config, metric, state.selected)); };
@@ -51,6 +53,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         {running && <button className="hold" onClick={() => api.put("pause")}>Pause</button>}
         {holding && <button className="go" onClick={() => api.put("unpause")}>Resume</button>}
         <button className="halt" disabled={!active} onClick={() => { markStopped(); api.put("stop"); }}>Stop</button>
+        {active && <button className="park" title="Stop here, lift Z and switch the machine off. Finish the job later with Resume." onClick={() => setParkAsk(true)}>Park…</button>}
       </div>
       <dl className="stats">
         <Stat k="Progress" v={`${active ? pct : 0}%`} />
@@ -66,6 +69,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       </dl>
       <Override label="Feed" kind="feed" hint="Feed rate override" />
       <Override label="Speed" kind="speed" hint="Spindle speed override" />
+      {(parkAsk || state.park) && <ParkDialog state={state} active={active} onClose={() => setParkAsk(false)} />}
       {check && <Checklist checks={check} onCancel={() => setCheck(null)} onRun={() => { setCheck(null); start(); }} />}
     </div>
   );
