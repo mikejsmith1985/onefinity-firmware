@@ -16,6 +16,7 @@ A fork of the [Onefinity CNC controller firmware](https://github.com/OneFinityCN
 | Connection drop log | 1.11.0 | Admin shows each time the page lost its link to the controller, with how long and why. |
 | Plain-language errors | 1.12.0 | E-stop and error messages come with what happened and what to do next. Messages the controller sends that aren't recognized are shown unchanged. |
 | Remembered Depth view settings | 1.12.0 | Tool diameter, shape and stock top are remembered per program file. |
+| Tool-change helper | 1.13.0 | The Job panel shows the next tool change in the program (tool, line, and which of how many). When a tool-change message stops the job, the pop-up says which tool to install. |
 | UI toggle | 1.10.0 | "Try the new UI" button in the classic menu and "Classic UI" in the new tab bar. |
 
 The classic UI at `/` is unchanged and always available as a fallback. The new UI is at `http://<controller-address>/next/`.
