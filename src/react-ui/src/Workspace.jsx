@@ -21,7 +21,7 @@ export default function Workspace({ state, path, pathBusy, send, mach, cfg, idle
         ))}
       </div>
       <div className="pane">
-        {tab === "depth" && <DepthView path={path} busy={pathBusy} />}
+        {tab === "depth" && <DepthView path={path} busy={pathBusy} file={state.selected} />}
         {tab === "path" && <PathView path={path} busy={pathBusy} state={state} />}
         {tab === "gcode" && <GCode state={state} />}
         {tab === "files" && <Files state={state} cfg={cfg} idle={idle} />}
