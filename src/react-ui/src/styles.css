@@ -161,7 +161,7 @@ a { color: #8db4ff; }
 .page-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
 .page-head h1 { margin: 0; font: 600 28px var(--ui); }
 .page-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
-.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 0 48px; align-items: start; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 0 48px; align-items: start; }
 .group { padding: 4px 0 16px; border-top: 1px solid var(--rule); margin-top: 12px; }
 .group h2 { margin: 12px 0 8px; font: 600 17px var(--ui); }
 .group h3 { margin: 18px 0 4px; font: 600 15px var(--ui); color: var(--dim); }
@@ -200,8 +200,8 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
 
 /* ---- modal ---- */
 .scrim { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgba(5,8,11,.74); }
-.modal { width: min(520px, 100%); max-height: calc(100vh - 32px); overflow: auto; background: var(--steel); border: 1px solid var(--rule); border-radius: 10px; padding: 20px 22px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
-.modal.wide { width: min(860px, 100%); }
+.modal { width: 520px; max-width: 100%; width: min(520px, 100%); max-height: calc(100vh - 32px); overflow: auto; background: var(--steel); border: 1px solid var(--rule); border-radius: 10px; padding: 20px 22px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.modal.wide { width: 860px; width: min(860px, 100%); }
 .modal h2 { margin: 0 0 12px; font: 600 21px var(--ui); }
 .modal-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
 
@@ -321,3 +321,7 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
 .rform { display: grid; gap: 10px; margin: 12px 0; } .rform label { display: flex; align-items: center; justify-content: space-between; gap: 16px; } .rform input[type=number] { width: 96px; } .rform label.check { justify-content: flex-start; }
 .warnbox { border-left: 4px solid var(--yellow); background: rgba(245,197,24,.08); padding: 8px 12px; margin: 10px 0; line-height: 1.45; }
 .runrow .park { background: transparent; border: 1px solid var(--rule); color: var(--chalk); }
+/* Spacing fallbacks for old Chromium (no flex gap); see flexgap.mjs */
+.no-fgap .radios.inline > * + * { margin-top: 0; }
+.no-fgap .radios.inline > * { margin-right: 16px; margin-bottom: 0; }
+.no-fgap .interrupted .irow > * + * { margin-top: 0; margin-left: 8px; }
