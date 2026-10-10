@@ -326,3 +326,9 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
 .no-fgap .radios.inline > * { margin-right: 16px; margin-bottom: 0; }
 .no-fgap .interrupted .irow > * + * { margin-top: 0; margin-left: 8px; }
 .macro-err { flex-basis: 100%; margin: 4px 0 0; color: #ff8a82; font-size: 14px; line-height: 1.4; }
+
+.dry-banner{background:#7a5200;color:#fff;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;font-weight:600}
+.dry-opt{display:flex;gap:.5rem;align-items:center;margin:.5rem 0;font-size:.95rem}
+.dry-opt input[type=number]{width:4.5rem}
+.dry-err{background:#8b1a1a;color:#fff;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0}
+button.go.dry{background:#b07400}

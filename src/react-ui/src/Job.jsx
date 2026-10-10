@@ -24,9 +24,20 @@ const Stat = ({ k, v, title }) => <div className="stat" title={title}><dt>{k}</d
 export default function Job({ state, mach, path, metric, config, changes = [] }) {
   const [check, setCheck] = useState(null);
   const [parkAsk, setParkAsk] = useState(false);
+  // Dry run: the controller sends the same program 30 mm (or the chosen lift) higher with the router,
+  // mist and probing blocked. It lasts for one run only, so it can never be left on.
+  const [dry, setDry] = useState(false);
+  const [lift, setLift] = useState(() => { try { return +localStorage.getItem("dryLift") || 30; } catch { return 30; } });
+  const [err, setErr] = useState("");
   const note = useNote(state.selected).split("\n")[0];
-  const start = () => api.put("start");
-  const tryStart = () => { if (skipChecklist()) start(); else setCheck(buildChecks(state, config, metric, state.selected)); };
+  const start = () => {
+    setErr("");
+    if (dry) { try { localStorage.setItem("dryLift", String(lift)); } catch { /* storage unavailable */ } }
+    return api.put("start", dry ? { dry_lift: +lift } : undefined)
+      .then(() => setDry(false))
+      .catch((e) => setErr(String(e.message || e).replace(/^\{"message":"|","code":\d+\}$/g, "")));
+  };
+  const tryStart = () => { if (dry || skipChecklist()) start(); else setCheck(buildChecks(state, config, metric, state.selected)); };
   const file = state.selected || "";
   const running = mach === "RUNNING" || mach === "HOMING";
   const holding = mach === "HOLDING" || mach === "STOPPING";
@@ -48,8 +59,16 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         {note && <em className="file-note" title={note}>{note}</em>}
       </div>
       <div className="bar" role="progressbar" aria-valuenow={active ? pct : 0} aria-valuemin="0" aria-valuemax="100"><i style={{ width: `${active ? (pct || 2) : 0}%` }} /></div>
+      {state.dry_run && <div className="dry-banner" role="status">DRY RUN – moves are lifted {Math.round(state.dry_lift || 0)} mm. Router, mist and probing are blocked. Normal runs are unaffected.</div>}
+      {!active && (
+        <label className="dry-opt" title="Run the selected program in the air: Z lifted, router and mist blocked. Applies to the next run only.">
+          <input type="checkbox" checked={dry} onChange={(e) => setDry(e.target.checked)} /> Dry run
+          {dry && <span> lift <input type="number" min="5" max="100" step="5" value={lift} onChange={(e) => setLift(e.target.value)} /> mm</span>}
+        </label>
+      )}
+      {err && <div className="dry-err" role="alert">{err}</div>}
       <div className="runrow">
-        {!active && <button className="go" disabled={!canStart} onClick={tryStart}>Run</button>}
+        {!active && <button className={dry ? "go dry" : "go"} disabled={!canStart} onClick={tryStart}>{dry ? "Dry run" : "Run"}</button>}
         {running && <button className="hold" onClick={() => api.put("pause")}>Pause</button>}
         {holding && <button className="go" onClick={() => api.put("unpause")}>Resume</button>}
         <button className="halt" disabled={!active} onClick={() => { markStopped(); api.put("stop"); }}>Stop</button>

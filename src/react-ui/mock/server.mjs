@@ -79,16 +79,16 @@ function broadcast(diff) {
   const msg = JSON.stringify(diff);
   for (const c of wss.clients) if (c.readyState === 1) c.send(msg);
 }
-function run() {
+function run(dryLift = 0) {
   const n = pts.length / 3;
   let i = 0;
-  broadcast({ xx: "RUNNING", cycle: "running", feed: 1500, speed: 17000, v: 0 });
+  broadcast({ xx: "RUNNING", cycle: "running", feed: 1500, speed: dryLift ? 0 : 17000, v: 0, dry_run: !!dryLift, dry_lift: dryLift });
   clearInterval(timer);
   timer = setInterval(() => {
     if (state.xx === "HOLDING") return;
     if (i >= n) {
       clearInterval(timer);
-      broadcast({ xx: "READY", cycle: "idle", feed: 0, speed: 0, line: 0, plan_time: 0 });
+      broadcast({ xx: "READY", cycle: "idle", feed: 0, speed: 0, line: 0, plan_time: 0, dry_run: false, dry_lift: 0 });
       return;
     }
     broadcast({ xp: pts[i * 3], yp: pts[i * 3 + 1], zp: pts[i * 3 + 2], line: i + 1, plan_time: i * 4 });
@@ -169,7 +169,17 @@ const server = http.createServer((req, res) => {
   }
   if (p === "/api/jog") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { jogLog.push(b); json(res, "ok"); }); return; }
   if (p === "/api/jogs") return json(res, jogLog);
-  if (p === "/api/start") { run(); return json(res, "ok"); }
+  if (p === "/api/start") {
+    let body = "";
+    req.on("data", (c) => { body += c; });
+    req.on("end", () => {
+      let lift = 0;
+      try { lift = +JSON.parse(body || "{}").dry_lift || 0; } catch { /* no body */ }
+      run(lift);
+      json(res, "ok");
+    });
+    return;
+  }
   if (p === "/api/pause") { broadcast({ xx: "HOLDING", pr: "User pause" }); return json(res, "ok"); }
   if (p === "/api/unpause") { broadcast({ xx: "RUNNING", pr: "" }); return json(res, "ok"); }
   if (p === "/api/stop") { clearInterval(timer); broadcast({ xx: "READY", cycle: "idle", feed: 0, speed: 0, pr: "" }); return json(res, "ok"); }

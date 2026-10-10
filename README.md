@@ -24,6 +24,7 @@ A fork of the [Onefinity CNC controller firmware](https://github.com/OneFinityCN
 | Works on the controller's own screen | 1.17.1 | The new UI is now built for the older Chromium on the controller's built-in display (it showed a blank page before). Spacing fallbacks added for old browsers, and if the UI can't start it now says why and links to the classic UI. |
 | Compatibility build for old screens | 1.17.2 | The new UI now ships with a compatibility version for very old browsers (Chromium 49 and later) that is used automatically when the browser can't run the normal one. |
 | Macro buttons report problems | 1.17.3 | A macro button waits until the controller has loaded the macro file before starting it, stays armed for 5 seconds after the first tap, and shows an error under the buttons if the macro could not start. |
+| Dry run | 1.18.0 | Tick Dry run next to Run to rehearse the selected program in the air. The controller plans the program unchanged and sends every move higher (30 mm by default, 5 to 100 mm allowed) with the router, mist and probing blocked. Nothing is stored: no Z offset is changed, the lift lasts for that one run only, and a banner shows while it is active. Needs Z homed. |
 | UI toggle | 1.10.0 | "Try the new UI" button in the classic menu and "Classic UI" in the new tab bar. |
 
 The classic UI at `/` is unchanged and always available as a fallback. The new UI is at `http://<controller-address>/next/`.

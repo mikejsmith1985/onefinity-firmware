@@ -456,7 +456,9 @@ class HomeHandler(bbctrl.APIHandler):
 
 
 class StartHandler(bbctrl.APIHandler):
-    def put_ok(self): self.get_ctrl().mach.start()
+    def put_ok(self):
+        # {"dry_lift": mm} runs the selected program as a dry run
+        self.get_ctrl().mach.start(self.json.get('dry_lift', 0))
 
 
 class EStopHandler(bbctrl.APIHandler):

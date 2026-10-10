@@ -90,7 +90,7 @@ class Checkpoint(object):
     # Recording ----------------------------------------------------------
     def _active(self):
         s = self.ctrl.state
-        return (s.get('cycle') == 'running' and
+        return (s.get('cycle') == 'running' and not s.get('dry_run', False) and
                 s.get('xx') in ('RUNNING', 'HOLDING', 'STOPPING'))
 
 
