@@ -27,6 +27,7 @@ A fork of the [Onefinity CNC controller firmware](https://github.com/OneFinityCN
 | Dry run | 1.18.0 | Tick Dry run next to Run to rehearse the selected program in the air. The controller plans the program unchanged and sends every move higher (30 mm by default, 5 to 100 mm allowed) with the router, mist and probing blocked. Nothing is stored: no Z offset is changed, the lift lasts for that one run only, and a banner shows while it is active. Needs Z homed. |
 | Setup sheet | 1.19.0 | Programs can carry `(SETUP key: text)` comment lines near the top (stock size, where zero goes, tool, speeds, probe corner). The Run checklist shows them, the Job panel has a Setup sheet button, the program is checked against the declared plate, and the corner last probed is compared with the corner the sheet needs. Controllers treat the lines as comments. |
 | New UI is the only UI | 1.20.0 | The React interface is now served at the controller's main address. The original interface is no longer shipped, and the "Classic UI" and "Try the new UI" buttons are gone. Old `/next/` bookmarks redirect to `/`. |
+| Resume fix for numbered programs | 1.20.1 | The resume program builder put `G1` in front of the line number (`G1 N10 X1`) when the first resumed line was a continuation of a Fusion-style program (lines numbered N10, N15, ...). The line number now stays first. |
 
 The interface is at `http://<controller-address>/`. The original Onefinity interface is not included from 1.20.0. To go back to it, install an earlier release (1.19.0 or older).
 

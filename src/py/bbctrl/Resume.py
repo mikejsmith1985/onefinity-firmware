@@ -151,7 +151,10 @@ def build(lines, line_no, name, opts, top_mm, source_hint = ''):
     first_words = [int(float(v)) for c, v in WORD.findall(strip(first)) if c.upper() == 'G']
     if m.motion is not None and not any(g in (0, 1, 2, 3) for g in first_words) \
        and any(c.upper() in AXES for c, v in WORD.findall(strip(first))):
-        first = 'G%d %s' % (m.motion, first.strip())
+        # Keep a leading line number (N word) first: "N10 G1 X1", not "G1 N10 X1"
+        mn = re.match(r'\s*(N\s*\d+\s*)(.*)$', first, re.I)
+        if mn: first = '%sG%d %s' % (mn.group(1), m.motion, mn.group(2).strip())
+        else: first = 'G%d %s' % (m.motion, first.strip())
 
     for a in 'XY':
         if m.pos[a] is None:
