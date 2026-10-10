@@ -28,6 +28,7 @@ const state = {
   imperial: false, power_shutdown: false,
   path_min_x: 0, path_max_x: 150, path_min_y: 0, path_max_y: 90, path_min_z: -15, path_max_z: 15,
 };
+const jogLog = [];
 const macros = [
   { name: "Dry Run On", color: "#4f8cff", file_name: "DryRun_On.nc" },
   { name: "Dry Run Off", color: "#4f8cff", file_name: "DryRun_Off.nc" },
@@ -40,6 +41,14 @@ const deepMerge = (a, b) => { for (const k of Object.keys(b)) { if (b[k] && type
 const config = rj("onefinity_defaults.json"); const variant = rj("onefinity_machinist_x35_defaults.json");
 config.motors = config.motors.map((m, i) => ({ ...m, ...(variant.motors[i] || {}), axis: ["X", "Y", "Y", "Z"][i] }));
 config.motors[3]["max-soft-limit"] = 133; config.motors[3]["homing-mode"] = "stall-max";
+const TOOL = process.env.MOCK_TOOL || "custom-modbus-vfd";
+const TNAME = { "custom-modbus-vfd": "Custom Modbus VFD", "delta-vfd": "Delta VFD015M21A (Beta)", "redline-vfd": "Redline VFD" }[TOOL];
+config.tool["selected-tool"] = TOOL; config.tool["tool-type"] = TNAME;
+const regs = config["modbus-spindle"].regs = Array.from({ length: 32 }, () => ({ "reg-type": "disabled", "reg-addr": 0, "reg-value": 0 }));
+regs[0] = { "reg-type": "connect-write", "reg-addr": 8192, "reg-value": 1 }; regs[1] = { "reg-type": "freq-set", "reg-addr": 8193, "reg-value": 0 }; regs[2] = { "reg-type": "status-read", "reg-addr": 8448, "reg-value": 0 };
+const TY = ["disabled","connect-write","max-freq-read","max-freq-fixed","freq-set","freq-signed-set","freq-scaled-set","stop-write","forward-write","reverse-write","freq-read","freq-signed-read","freq-actech-read","status-read","disconnect-write"];
+"0123".split("").forEach((r, i) => { state[r + "vt"] = TY.indexOf(regs[i]["reg-type"]); state[r + "va"] = regs[i]["reg-addr"]; state[r + "vv"] = regs[i]["reg-value"]; state[r + "vr"] = i === 2 ? 3 : 0; });
+state.mx = 1;
 config.full_version = "1.9.0"; config.macros = macros; config.settings = config.settings || {}; config.settings.units = "METRIC";
 state.macros = macros; state.macros_list = macros.map((m) => m.file_name); state.non_macros_list = state.files;
 state.gcode_list = { folders: [{ name: "Jobs", files: ["alternator_arm.nc"] }], files: ["fuel_filter_outline.nc", "tap_holes.nc"] };
@@ -130,6 +139,8 @@ const server = http.createServer((req, res) => {
     if (req.method === "GET") { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end("G21\nG90\nG0 Z15\nM3 S17000\nG1 X10 Y10 F300\nG1 Z-5\nG1 X140 F1500\nG1 Y80\nG1 X10\nG1 Y10\nM5\nM30\n"); }
     return json(res, "ok");
   }
+  if (p === "/api/jog") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { jogLog.push(b); json(res, "ok"); }); return; }
+  if (p === "/api/jogs") return json(res, jogLog);
   if (p === "/api/start") { run(); return json(res, "ok"); }
   if (p === "/api/pause") { broadcast({ xx: "HOLDING", pr: "User pause" }); return json(res, "ok"); }
   if (p === "/api/unpause") { broadcast({ xx: "RUNNING", pr: "" }); return json(res, "ok"); }

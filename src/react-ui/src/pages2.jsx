@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { useDrops, clearDrops } from "./drops.js";
 import { api, MACRO_PREFIX, DELETE_LIST_PREFIX } from "./controller.js";
 import { Page, Group, Modal, Confirm, SubTabs } from "./ui.jsx";
 
@@ -260,6 +261,9 @@ function General({ cfg, ver, state }) {
           </div>
           <p className="dim">Back up saves your settings and macros as a zip file. Reset replaces all non-network settings with the defaults for your machine.</p>
         </Group>
+        <Group title="Connection">
+          <Drops />
+        </Group>
         <Group title="Debugging">
           <div className="btnrow"><a className="btn" href="/api/log" target="_blank" rel="noreferrer">View log</a><a className="btn" href="/api/bugreport">Bug report</a></div>
         </Group>
@@ -370,5 +374,28 @@ export function Admin({ cfg, state, metric, sub, go, ver }) {
       <SubTabs items={[["general", "General"], ["network", "Network"]]} value={sub} onChange={(v) => go(`admin-${v}`)} />
       {sub === "network" ? <Network /> : <General cfg={cfg} ver={ver} state={state} />}
     </Page>
+  );
+}
+
+function Drops() {
+  const list = useDrops();
+  const day = Date.now() - 86400000;
+  const recent = list.filter((d) => d.at > day).length;
+  const dur = (ms) => (ms == null ? "still down" : ms < 1000 ? `${ms} ms` : ms < 60000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 60000)} min`);
+  return (
+    <>
+      <p className="note">Each time this page loses its link to the controller, it is logged here. The log is kept in this browser only. {list.length ? `${recent} in the last 24 hours.` : "None recorded yet."}</p>
+      {list.length > 0 && (
+        <>
+          <table className="grid-table">
+            <thead><tr><th>When</th><th>Lasted</th><th>Reason</th></tr></thead>
+            <tbody>{list.slice(0, 15).map((d, i) => (
+              <tr key={i}><th>{new Date(d.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" })}</th><td>{dur(d.ms)}</td><td>{d.reason}{d.background ? " (tab in background)" : ""}</td></tr>
+            ))}</tbody>
+          </table>
+          <div className="btnrow"><button onClick={clearDrops}>Clear log</button></div>
+        </>
+      )}
+    </>
   );
 }

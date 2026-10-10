@@ -526,7 +526,27 @@ class JogHandler(bbctrl.APIHandler):
 
             if ts < last: return # Out of order
 
-        self.get_ctrl().mach.jog(self.json)
+        ctrl = self.get_ctrl()
+        ctrl.mach.jog(self.json)
+
+        # Optional dead-man watchdog.  A client that sends "keepalive" must
+        # keep re-sending its jog command.  If the updates stop (browser
+        # closed, network dropped, Wi-Fi lost) while an axis is still moving,
+        # the jog is zeroed so the machine cannot run away.
+        ioloop = self.app.ioloop
+        timer = getattr(self.app, 'jog_watchdog', None)
+        if timer is not None:
+            ioloop.remove_timeout(timer)
+            self.app.jog_watchdog = None
+
+        moving = any(self.json.get(a, 0) for a in 'xyzabc')
+        if self.json.get('keepalive') and moving:
+            def stop():
+                self.app.jog_watchdog = None
+                try: ctrl.mach.jog(dict((a, 0) for a in 'xyzabc'))
+                except Exception as e: ctrl.log.get('Web').warning('Jog watchdog: %s', e)
+
+            self.app.jog_watchdog = ioloop.call_later(0.6, stop)
 
 
 displayRotatePattern = re.compile(r'display_rotate\s*=\s*(\d)')

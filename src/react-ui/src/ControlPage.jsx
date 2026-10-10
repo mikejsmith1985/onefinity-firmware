@@ -34,7 +34,7 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
       <section className="band jog-band">
         <Jog state={state} config={cfg.config} send={send} metric={metric} locked={busy || estopped} idle={idle && !estopped} ready={ready} onProbe={setProbe} />
       </section>
-      <section className="band job-band"><Job state={state} mach={mach} path={path} metric={metric} /></section>
+      <section className="band job-band"><Job state={state} mach={mach} path={path} metric={metric} config={cfg.config} /></section>
       <section className="band work-band">
         <Workspace state={state} path={path} pathBusy={pathBusy} send={send} mach={mach} cfg={cfg} idle={idle && !estopped} logs={logs} clearLogs={clearLogs} />
       </section>

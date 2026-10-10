@@ -36,6 +36,8 @@ export async function loadPath(file) {
   }
 }
 
+import { recordDown, recordUp } from "./drops.js";
+
 // Live machine state over the controller's raw websocket.
 export function useController() {
   const [state, setState] = useState({});
@@ -46,13 +48,22 @@ export function useController() {
   const listeners = useRef(new Set());
 
   useEffect(() => {
-    let closed = false, timer;
+    let closed = false, timer, lastMsg = Date.now(), everUp = false;
+    // The controller sends a heartbeat every 3 s. Silence for 8 s means the link is dead even if the
+    // socket still looks open (a common Wi-Fi failure). Close it so it reconnects and the drop is logged.
+    const watch = setInterval(() => {
+      const s = ws.current;
+      if (!s || s.readyState !== 1 || document.hidden) return;
+      const quiet = Date.now() - lastMsg;
+      if (quiet > 8000) { recordDown(`No data for ${Math.round(quiet / 1000)} s`); setOnline(false); s.close(); }
+    }, 2000);
     const connect = () => {
       const proto = location.protocol === "https:" ? "wss" : "ws";
       const s = new WebSocket(`${proto}://${location.host}/websocket`);
       ws.current = s;
-      s.onopen = () => setOnline(true);
+      s.onopen = () => { lastMsg = Date.now(); everUp = true; recordUp(); setOnline(true); };
       s.onmessage = (e) => {
+        lastMsg = Date.now();
         let d; try { d = JSON.parse(e.data); } catch { return; }
         setOnline(true);
         delete d.heartbeat;
@@ -71,10 +82,10 @@ export function useController() {
           return { ...prev, ...d };
         });
       };
-      s.onclose = () => { setOnline(false); if (!closed) timer = setTimeout(connect, 2000); };
+      s.onclose = () => { setOnline(false); if (!closed && everUp) recordDown("Connection closed"); if (!closed) timer = setTimeout(connect, 2000); };
     };
     connect();
-    return () => { closed = true; clearTimeout(timer); ws.current && ws.current.close(); };
+    return () => { closed = true; clearTimeout(timer); clearInterval(watch); ws.current && ws.current.close(); };
   }, []);
 
   const send = useCallback((gcode) => {

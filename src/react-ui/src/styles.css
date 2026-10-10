@@ -286,3 +286,18 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
 
 .nav a.classic { min-height: 36px; align-self: center; margin-left: auto; padding: 0 12px; border: 1px solid var(--rule); border-radius: 6px; border-bottom-width: 1px; font-size: 14px; }
 .nav a.classic:hover { border-color: #3b4756; }
+
+.modes { display: inline-flex; margin-bottom: 10px; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+.modes button { border: 0; border-radius: 0; min-height: 40px; padding: 0 18px; background: none; color: var(--dim); }
+.modes button.on { background: rgba(79,140,255,.18); color: var(--chalk); }
+.steps.six { grid-template-columns: repeat(6, 1fr); } .steps.six button b { font-size: 16px; } .steps.six button small { font-size: 11px; }
+.k.hk { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.k.hk:active { background: rgba(79,140,255,.28); border-color: var(--blue); }
+
+.checks { list-style: none; margin: 0 0 12px; padding: 0; }
+.checks li { display: grid; grid-template-columns: 26px 110px 1fr; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--rule); align-items: start; }
+.checks li b { font-weight: 600; } .checks li span:last-child { color: var(--dim); }
+.checks .mark { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font: 700 13px var(--num); }
+.checks .ok .mark { background: var(--green); color: #07140d; } .checks .warn .mark { background: var(--yellow); color: #231b00; } .checks .stop .mark { background: var(--red); color: #fff; }
+.checks .stop span:last-child { color: #ff8a82; }
+@media (max-width: 720px) { .checks li { grid-template-columns: 26px 1fr; } .checks li span:last-child { grid-column: 2; } }

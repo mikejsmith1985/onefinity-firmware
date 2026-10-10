@@ -10,6 +10,10 @@ A fork of the [Onefinity CNC controller firmware](https://github.com/OneFinityCN
 | Depth view | 1.7.0 | Simulates cut depth under the tool path, with a play slider. It also works on controllers without WebGL. |
 | Mist off on pause | 1.7.0 | Mist turns off while a job is paused and comes back on resume. |
 | New UI at `/next` | 1.8.0 | A React interface where every page is a tab across the top: Control, Macros, Settings, Motors, Tool, I/O, Admin, Cheat sheet, Help. |
+| VFD register editor | 1.11.0 | The Tool tab shows the active Modbus program, lets you customize or clear it for a custom VFD, and shows the front-panel setup notes for each supported VFD. |
+| Hold-to-jog | 1.11.0 | Choose Step or Hold in the jog pad. In Hold mode the machine moves while you hold a key, at 1 to 100% of max speed. The controller stops the jog by itself if the page stops sending updates. |
+| Run checklist | 1.11.0 | Pressing Run shows homing, fit, work zero and spindle drive status first. Can be turned off per device. |
+| Connection drop log | 1.11.0 | Admin shows each time the page lost its link to the controller, with how long and why. |
 | UI toggle | 1.10.0 | "Try the new UI" button in the classic menu and "Classic UI" in the new tab bar. |
 
 The classic UI at `/` is unchanged and always available as a fallback. The new UI is at `http://<controller-address>/next/`.
@@ -69,9 +73,9 @@ Version numbers are set in `package.json` and `src/py/bbctrl/Config.py`. A new f
 
 ## Known limitations of the new UI
 
-- Jogging moves in steps. There is no hold-to-jog ring.
+- Hold-to-jog has not been tested on a real machine. Test it at 1% first with the tool well above the work.
 - The old 3D path viewer is replaced by the Depth view and a 2D tool-path view.
-- The VFD register editor for unsupported tools is not in the new UI. Use the classic UI for that.
+- The VFD register editor has not been tried against a real VFD.
 - Camera and probing in the new UI have not been tested on real hardware.
 
 ## Camera
