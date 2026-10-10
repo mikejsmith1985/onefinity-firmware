@@ -18,6 +18,7 @@ A fork of the [Onefinity CNC controller firmware](https://github.com/OneFinityCN
 | Remembered Depth view settings | 1.12.0 | Tool diameter, shape and stock top are remembered per program file. |
 | Tool-change helper | 1.13.0 | The Job panel shows the next tool change in the program (tool, line, and which of how many). When a tool-change message stops the job, the pop-up says which tool to install. |
 | Run history, file notes, camera snapshot | 1.14.0 | A History tab lists each run with time and result (finished, stopped or E-stop). A Notes tab keeps a note per program, with its first line shown in the Job panel. The Camera tab can save a snapshot to your PC. In 1.15.0 history and notes are saved on the controller, so every device and browser sees the same ones. |
+| Power-loss recovery, stage 1 | 1.16.0 | While a job runs the controller saves the program and line number (about every 10 seconds, only when the line changes, off the motion path). After a power loss or E-stop the Control tab shows the interrupted job and the line. Can be turned off in Admin. Resuming the job comes in a later version. |
 | UI toggle | 1.10.0 | "Try the new UI" button in the classic menu and "Classic UI" in the new tab bar. |
 
 The classic UI at `/` is unchanged and always available as a fallback. The new UI is at `http://<controller-address>/next/`.

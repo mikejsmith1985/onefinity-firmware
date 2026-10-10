@@ -515,7 +515,7 @@ class NextStoreHandler(bbctrl.APIHandler):
     # Small JSON documents for the new UI (run history, file notes), kept on
     # the controller so every browser sees the same data.  Only whitelisted
     # names are accepted and each document is capped in size.
-    NAMES = ('runs', 'notes')
+    NAMES = ('runs', 'notes', 'prefs', 'checkpoint')
     MAX_BYTES = 1000000
 
     def _path(self, name):
@@ -526,6 +526,11 @@ class NextStoreHandler(bbctrl.APIHandler):
 
 
     def get(self, name):
+        if name == 'checkpoint':
+            cp = getattr(self.get_ctrl(), 'checkpoint', None)
+            self.write_json(cp.get() if cp else None)
+            return
+
         path = self._path(name)
         data = None
         if os.path.exists(path):
@@ -536,12 +541,23 @@ class NextStoreHandler(bbctrl.APIHandler):
 
 
     def put_ok(self, name):
+        if name == 'checkpoint':
+            # The only thing a client may do is dismiss an interrupted job.
+            cp = getattr(self.get_ctrl(), 'checkpoint', None)
+            if cp and isinstance(self.json, dict) and self.json.get('action') == 'dismiss':
+                cp.dismiss()
+            return
+
         path = self._path(name)
         if len(self.request.body) > self.MAX_BYTES:
             raise HTTPError(413, 'Document too large')
         tmp = path + '.tmp'
         with open(tmp, 'w', encoding = 'utf-8') as f: json.dump(self.json, f)
         os.replace(tmp, path)
+
+        if name == 'prefs':
+            cp = getattr(self.get_ctrl(), 'checkpoint', None)
+            if cp: cp.reload()
 
 
 class JogHandler(bbctrl.APIHandler):
@@ -955,7 +971,7 @@ class Web(tornado.web.Application):
 
         handlers = [
             (r'/websocket', WSConnection),
-            (r'/api/next-store/(runs|notes)', NextStoreHandler),
+            (r'/api/next-store/(runs|notes|prefs|checkpoint)', NextStoreHandler),
             (r'/api/log', LogHandler),
             (r'/api/message/(\d+)/ack', MessageAckHandler),
             (r'/api/bugreport', BugReportHandler),
