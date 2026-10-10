@@ -51,6 +51,7 @@ from bbctrl.Planner import Planner
 from bbctrl.Preplanner import Preplanner
 from bbctrl.State import State
 from bbctrl.Checkpoint import Checkpoint
+from bbctrl.Resume import Resume
 from bbctrl.Comm import Comm
 from bbctrl.CommandQueue import CommandQueue
 from bbctrl.MainLCDPage import MainLCDPage

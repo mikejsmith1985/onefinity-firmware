@@ -203,6 +203,20 @@ class Checkpoint(object):
 
 
     # Actions ------------------------------------------------------------
+    def mark(self, status):
+        # Re-save the newest record with a different status, e.g. 'parked'
+        if not self.current: return
+        with self.lock:
+            self.seq += 1
+            seq = self.seq
+        rec = dict(self.current, seq = seq, t = int(time.time()), status = status)
+        self.current = rec
+        with self.lock: self.latest = rec
+        if not self.writing:
+            self.writing = True
+            threading.Thread(target = self._writer, daemon = True).start()
+
+
     def dismiss(self):
         # The operator has seen the interrupted job and does not want to
         # resume it.

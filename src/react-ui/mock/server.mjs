@@ -140,6 +140,24 @@ const server = http.createServer((req, res) => {
     if (req.method === "GET") { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end("G21\nG90\nG0 Z15\nM3 S17000\nG1 X10 Y10 F300\nG1 Z-5\nG1 X140 F1500\nG1 Y80\nG1 X10\nG1 Y10\nT2 M6\nG1 X20\nM5\nT3\nM6\nM30\n"); }
     return json(res, "ok");
   }
+  if (p === "/api/next-resume") {
+    let b = ""; req.on("data", (d) => (b += d));
+    req.on("end", () => {
+      const q = JSON.parse(b || "{}");
+      if (q.action === "build") {
+        if (process.env.MOCK_UNHOMED) { res.writeHead(400, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ message: "Home the machine first.", code: 400 })); }
+        return json(res, { file: "resume-alternator_arm.nc", source: "alternator_arm.nc", line: 4212, line_text: "G1 X61.25 Y18.4", header_lines: 20, tool: 2, spindle: "M3", speed: 17000, units: "mm", wcs: "G54", pos: { x: 61.25, y: 12.9, z: -6 }, spinup: q.opts.spinup, plunge: q.opts.plunge, pause: q.opts.pause, warnings: [], offset_ok: !process.env.MOCK_OFFSET, offset_delta: process.env.MOCK_OFFSET ? { x: 0.4 } : {} });
+      }
+      if (q.action === "park") {
+        clearInterval(timer); broadcast({ park: "parking" });
+        setTimeout(() => { broadcast({ xx: "READY", cycle: "idle", feed: 0, speed: 0, park: "parked" }); if (store.checkpoint) store.checkpoint.status = "parked"; }, 1500);
+        return json(res, "ok");
+      }
+      if (q.action === "clear") { broadcast({ park: "" }); return json(res, "ok"); }
+      res.writeHead(400); res.end("{}");
+    });
+    return;
+  }
   if (p === "/api/next-store/checkpoint") {
     if (req.method === "PUT") { req.on("data", () => {}); req.on("end", () => { if (store.checkpoint) store.checkpoint.status = "dismissed"; json(res, "ok"); }); return; }
     return json(res, store.checkpoint ?? null);

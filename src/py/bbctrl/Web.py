@@ -560,6 +560,31 @@ class NextStoreHandler(bbctrl.APIHandler):
             if cp: cp.reload()
 
 
+class ResumeHandler(bbctrl.APIHandler):
+    # build: write a program that continues the interrupted job
+    # park:  stop the job, turn the spindle off and lift Z so the machine
+    #        can be powered off, to be resumed later
+    def put(self):
+        ctrl = self.get_ctrl()
+        res = getattr(ctrl, 'resume', None)
+        if res is None: raise HTTPError(503, 'Resume is not available')
+        action = self.json.get('action') if isinstance(self.json, dict) else None
+
+        try:
+            if action == 'build':
+                self.write_json(res.build(self.json.get('opts') or {}))
+            elif action == 'park':
+                res.park()
+                self.write_json('ok')
+            elif action == 'clear':
+                res.clear_park()
+                self.write_json('ok')
+            else: raise HTTPError(400, 'Unknown action')
+        except Exception as e:
+            if isinstance(e, HTTPError): raise
+            raise HTTPError(400, '%s', str(e))
+
+
 class JogHandler(bbctrl.APIHandler):
     def put_ok(self):
         # Handle possible out of order jog command processing
@@ -972,6 +997,7 @@ class Web(tornado.web.Application):
         handlers = [
             (r'/websocket', WSConnection),
             (r'/api/next-store/(runs|notes|prefs|checkpoint)', NextStoreHandler),
+            (r'/api/next-resume', ResumeHandler),
             (r'/api/log', LogHandler),
             (r'/api/message/(\d+)/ack', MessageAckHandler),
             (r'/api/bugreport', BugReportHandler),

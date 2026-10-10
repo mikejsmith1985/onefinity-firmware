@@ -405,14 +405,21 @@ function Drops() {
 }
 
 function Recovery({ state }) {
-  const [on, setOn] = useState(null);
+  const [prefs, setP] = useState(null);
   const { cp } = useCheckpoint(state);
-  useEffect(() => { getPrefs().then((p) => setOn(!!p.progress)); }, []);
-  const flip = (v) => { setOn(v); setPrefs({ progress: v }); };
+  useEffect(() => { getPrefs().then(setP); }, []);
+  const save = (k, v) => { setP((p) => ({ ...p, [k]: v })); setPrefs({ [k]: v }); };
   return (
     <>
-      <label className="check"><input type="checkbox" className="switch" checked={!!on} disabled={on === null} onChange={(e) => flip(e.target.checked)} /> Save job progress</label>
-      <p className="note">While a job runs, the controller saves the program name and line number to its memory card about every 10 seconds, only when the line has changed. If power is lost or the job is interrupted, you can see where it stopped. This is a few kilobytes of writes per save and runs off the motion path, so it does not affect cutting. Turn it off if you prefer no extra writes.</p>
+      <label className="check"><input type="checkbox" className="switch" checked={!!prefs?.progress} disabled={!prefs} onChange={(e) => save("progress", e.target.checked)} /> Save job progress</label>
+      <p className="note">While a job runs, the controller saves the program name and line number to its memory card about every 10 seconds, only when the line has changed. If power is lost or the job is stopped, you can resume from that line. This is a few kilobytes of writes per save and runs off the motion path, so it does not affect cutting. Turn it off if you prefer no extra writes. Parking a job needs it on.</p>
+      {prefs && (
+        <div className="rform">
+          <label>Spindle spin-up wait when resuming (seconds)<input type="number" min="0" max="120" value={prefs.spinup} onChange={(e) => save("spinup", e.target.value)} /></label>
+          <label>Plunge speed when resuming (mm/min)<input type="number" min="10" max="5000" value={prefs.plunge} onChange={(e) => save("plunge", e.target.value)} /></label>
+          <label className="check"><input type="checkbox" checked={!!prefs.pause} onChange={(e) => save("pause", e.target.checked)} /> Pause over the restart point so I can check it</label>
+        </div>
+      )}
       {cp && cp.file && <p className="note">Last saved: <b>{cp.file}</b>, line {Number(cp.line).toLocaleString()}, {new Date(cp.t * 1000).toLocaleString()} ({cp.status}){isInterrupted(cp) ? " - interrupted" : ""}.</p>}
     </>
   );

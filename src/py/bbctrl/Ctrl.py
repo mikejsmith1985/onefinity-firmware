@@ -65,6 +65,11 @@ class Ctrl(object):
                 self.checkpoint = None
                 self.log.get('Ctrl').exception('Job progress saving unavailable')
 
+            try: self.resume = bbctrl.Resume(self)
+            except Exception:
+                self.resume = None
+                self.log.get('Ctrl').exception('Resume unavailable')
+
             self.mach.connect()
 
             self.lcd.add_new_page(bbctrl.MainLCDPage(self))
