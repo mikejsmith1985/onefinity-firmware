@@ -117,6 +117,7 @@ export default function App() {
           <button data-autofocus className="primary" onClick={() => { api.put("unpause").catch(() => {}); ack(); }}>Continue</button>
         </> : <button data-autofocus className="primary" onClick={ack}>OK</button>}>
           <ul className="plain big">{popups.map((m, i) => <li key={i}>{m.text}</li>)}</ul>
+          {popups.some((m) => /tool/i.test(m.text)) && <div className="why"><b>Install tool {state.tool || 0}.</b><p>This is the tool the program selected. Check the tool number before you continue, and re-probe Z if your tool change does that.</p></div>}
         </Modal>
       )}
       {ctl.lastError && ctl.lastError.at !== errSeen && (
