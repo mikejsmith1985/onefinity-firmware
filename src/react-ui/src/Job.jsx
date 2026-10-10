@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import { api } from "./controller.js";
 import { fmtTime } from "./axis.js";
+import { useNote } from "./notes.js";
+import { markStopped } from "./history.js";
 import Checklist, { buildChecks, skipChecklist } from "./Checklist.jsx";
 
 function Override({ label, kind, hint }) {
@@ -20,6 +22,7 @@ const Stat = ({ k, v, title }) => <div className="stat" title={title}><dt>{k}</d
 
 export default function Job({ state, mach, path, metric, config, changes = [] }) {
   const [check, setCheck] = useState(null);
+  const note = useNote(state.selected).split("\n")[0];
   const start = () => api.put("start");
   const tryStart = () => { if (skipChecklist()) start(); else setCheck(buildChecks(state, config, metric, state.selected)); };
   const file = state.selected || "";
@@ -40,13 +43,14 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       <div className="job-file">
         <small>Program</small>
         <strong title={file}>{file || "No program selected"}</strong>
+        {note && <em className="file-note" title={note}>{note}</em>}
       </div>
       <div className="bar" role="progressbar" aria-valuenow={active ? pct : 0} aria-valuemin="0" aria-valuemax="100"><i style={{ width: `${active ? (pct || 2) : 0}%` }} /></div>
       <div className="runrow">
         {!active && <button className="go" disabled={!canStart} onClick={tryStart}>Run</button>}
         {running && <button className="hold" onClick={() => api.put("pause")}>Pause</button>}
         {holding && <button className="go" onClick={() => api.put("unpause")}>Resume</button>}
-        <button className="halt" disabled={!active} onClick={() => api.put("stop")}>Stop</button>
+        <button className="halt" disabled={!active} onClick={() => { markStopped(); api.put("stop"); }}>Stop</button>
       </div>
       <dl className="stats">
         <Stat k="Progress" v={`${active ? pct : 0}%`} />

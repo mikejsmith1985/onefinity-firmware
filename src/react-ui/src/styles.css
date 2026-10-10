@@ -306,3 +306,8 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
 .why p { margin: 4px 0 0; color: var(--chalk); line-height: 1.45; }
 .banner { padding: 10px 24px; background: rgba(229,72,63,.14); border-bottom: 1px solid var(--red); color: var(--chalk); line-height: 1.45; }
 .banner b { color: #ff8a82; }
+
+.file-note { display: block; margin-top: 2px; font-style: normal; font-size: 14px; color: var(--yellow); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-pane label { display: block; margin-bottom: 8px; } .notes-pane textarea { font: 500 15px/1.5 var(--ui); }
+.tabs .note-dot { background: var(--yellow); }
+.history td, .history th { white-space: nowrap; } .history td:nth-child(2) { white-space: normal; word-break: break-all; }
