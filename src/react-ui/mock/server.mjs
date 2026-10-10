@@ -29,6 +29,7 @@ const state = {
   path_min_x: 0, path_max_x: 150, path_min_y: 0, path_max_y: 90, path_min_z: -15, path_max_z: 15,
 };
 const jogLog = [];
+const store = {};
 const macros = [
   { name: "Dry Run On", color: "#4f8cff", file_name: "DryRun_On.nc" },
   { name: "Dry Run Off", color: "#4f8cff", file_name: "DryRun_Off.nc" },
@@ -138,6 +139,11 @@ const server = http.createServer((req, res) => {
   if (p.startsWith("/api/file/")) {
     if (req.method === "GET") { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end("G21\nG90\nG0 Z15\nM3 S17000\nG1 X10 Y10 F300\nG1 Z-5\nG1 X140 F1500\nG1 Y80\nG1 X10\nG1 Y10\nT2 M6\nG1 X20\nM5\nT3\nM6\nM30\n"); }
     return json(res, "ok");
+  }
+  if (p.startsWith("/api/next-store/")) {
+    const n = p.split("/").pop();
+    if (req.method === "PUT") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { store[n] = JSON.parse(b); json(res, "ok"); }); return; }
+    return json(res, store[n] ?? null);
   }
   if (p === "/api/jog") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { jogLog.push(b); json(res, "ok"); }); return; }
   if (p === "/api/jogs") return json(res, jogLog);

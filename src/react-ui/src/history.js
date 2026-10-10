@@ -1,11 +1,40 @@
 // Run history, kept in this browser. A run starts when a program starts and ends when the machine goes idle or E-stops.
 import { useEffect, useRef, useState } from "react";
 
+import { remoteGet, remotePut } from "./store.js";
+
 const KEY = "next-runs";
 const subs = new Set();
-let list = (() => { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch { return []; } })();
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(list.slice(0, 200))); } catch {} subs.forEach((f) => f()); };
-export const clearRuns = () => { list = []; save(); };
+const MAX = 200;
+// Stored as { clearedAt, runs }. Runs are merged by start time and file across browsers; clearedAt lets "Clear history" reach every device.
+const norm = (d) => (Array.isArray(d) ? { clearedAt: 0, runs: d } : { clearedAt: d?.clearedAt || 0, runs: Array.isArray(d?.runs) ? d.runs : [] });
+export function mergeRuns(a, b) {
+  a = norm(a); b = norm(b);
+  const clearedAt = Math.max(a.clearedAt, b.clearedAt);
+  const seen = new Map();
+  for (const r of [...a.runs, ...b.runs]) if (r.at > clearedAt) seen.set(`${r.at}|${r.file}`, r);
+  return { clearedAt, runs: [...seen.values()].sort((x, y) => y.at - x.at).slice(0, MAX) };
+}
+let data = (() => { try { return norm(JSON.parse(localStorage.getItem(KEY) || "null")); } catch { return norm(null); } })();
+let list = data.runs;
+const save = () => { list = data.runs; try { localStorage.setItem(KEY, JSON.stringify(data)); } catch {} subs.forEach((f) => f()); };
+
+let syncing = false, again = false;
+export async function syncRuns() {
+  if (syncing) { again = true; return; }
+  syncing = true;
+  try {
+    const remote = await remoteGet("runs");
+    const merged = mergeRuns(data, remote);
+    const changedLocal = JSON.stringify(merged) !== JSON.stringify(data);
+    data = merged; if (changedLocal) save();
+    if (!remote || JSON.stringify(norm(remote)) !== JSON.stringify(merged)) await remotePut("runs", merged);
+  } finally { syncing = false; if (again) { again = false; syncRuns(); } }
+}
+syncRuns();
+if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => { if (!document.hidden) syncRuns(); });
+
+export const clearRuns = () => { data = { clearedAt: Date.now(), runs: [] }; save(); syncRuns(); };
 let stopFlag = false;
 export const markStopped = () => { stopFlag = true; };
 
@@ -31,7 +60,7 @@ export function useRunTracker(state) {
       if (c.holdAt !== null) c.hold += now - c.holdAt;
       const ms = now - c.at;
       const status = xx === "ESTOPPED" ? "E-stop" : (stopFlag || c.stopping) ? "Stopped" : "Finished";
-      list = [{ file: c.file, at: c.at, ms, runMs: Math.max(0, ms - c.hold), status }, ...list]; save();
+      data = { ...data, runs: [{ file: c.file, at: c.at, ms, runMs: Math.max(0, ms - c.hold), status }, ...data.runs].slice(0, MAX) }; save(); syncRuns();
       cur.current = null; stopFlag = false;
     }
   }, [xx, cycle, selected]);

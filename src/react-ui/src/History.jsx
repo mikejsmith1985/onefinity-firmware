@@ -8,7 +8,7 @@ export default function History() {
   if (!runs.length) return <p className="empty">Programs you run from this page are listed here, with how long each took and how it ended.</p>;
   return (
     <div className="history">
-      <p className="note">Kept in this browser only. {runs.filter((r) => r.status === "Finished").length} finished runs, {fmtTime(total / 1000)} of run time in total.</p>
+      <p className="note">Saved on the controller, so every device sees it. {runs.filter((r) => r.status === "Finished").length} finished runs, {fmtTime(total / 1000)} of run time in total.</p>
       <table className="grid-table">
         <thead><tr><th>Started</th><th>Program</th><th>Run time</th><th>Result</th></tr></thead>
         <tbody>{runs.slice(0, 50).map((r, i) => (
