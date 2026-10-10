@@ -1,3 +1,4 @@
+import { useRunTracker, markStopped } from "./history.js";
 import { explain } from "./explain.js";
 import React, { useEffect, useState, useCallback } from "react";
 import { useController, useConfig, metricOf, api } from "./controller.js";
@@ -36,6 +37,7 @@ function parseHash() {
 export default function App() {
   const ctl = useController();
   const { state, online, send } = ctl;
+  useRunTracker(state);
   const cfg = useConfig(state);
   const [route, setRoute] = useState(parseHash());
   const [power, setPower] = useState(false);
@@ -113,7 +115,7 @@ export default function App() {
 
       {popups.length > 0 && (
         <Modal title="G-code message" dismissable={false} actions={holding ? <>
-          <button onClick={() => { api.put("stop").catch(() => {}); ack(); }}>Stop</button>
+          <button onClick={() => { markStopped(); api.put("stop").catch(() => {}); ack(); }}>Stop</button>
           <button data-autofocus className="primary" onClick={() => { api.put("unpause").catch(() => {}); ack(); }}>Continue</button>
         </> : <button data-autofocus className="primary" onClick={ack}>OK</button>}>
           <ul className="plain big">{popups.map((m, i) => <li key={i}>{m.text}</li>)}</ul>
