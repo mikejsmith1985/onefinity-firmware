@@ -130,6 +130,67 @@ def scan(lines, upto):
     return m
 
 
+def locate(lines, pos, floor, tol = 0.1):
+    # Finds where the tool physically is inside the program.
+    # pos: work position in millimetres, {'x':, 'y':, 'z':}.
+    # floor: 1-based line to start looking from (the saved line).
+    # Returns (line, distance_mm) for the EARLIEST straight move at or after
+    # floor that passes through pos, or None.  Earliest is the safe choice: if
+    # the same path is cut again and again (finishing laps), restarting at an
+    # earlier lap only re-cuts air, while a later one would skip cutting.
+    # Only simple absolute G0/G1 programs are searched; anything else (arcs,
+    # incremental moves, variables, G53 moves, a change of work coordinate
+    # system) gives no match, and the saved line is used instead.
+    try: target = [float(pos[a]) for a in 'xyz']
+    except (TypeError, ValueError, KeyError): return None
+
+    cur = [None, None, None]
+    metric = True
+    motion = None
+    dist = 90
+    wcs = None
+    for n, raw in enumerate(lines, 1):
+        text = strip(raw)
+        if not text or text.startswith('%'): continue
+        if '#' in text or '[' in text: return None
+        words = [(c.upper(), float(v)) for c, v in WORD.findall(text)]
+        g = [v for c, v in words if c == 'G']
+        vals = dict(words)
+        if 53 in g:
+            cur = [None, None, None]
+            continue
+        for v in g:
+            if v == 20: metric = False
+            elif v == 21: metric = True
+            elif v in (90, 91): dist = int(v)
+            elif v == int(v) and 54 <= v <= 59:
+                if wcs is not None and wcs != int(v): return None
+                wcs = int(v)
+            elif v in (0, 1, 2, 3): motion = int(v)
+        if dist != 90: return None
+        k = 1.0 if metric else MM
+        new = [vals[a] * k if a in vals else cur[i] for i, a in enumerate('XYZ')]
+        has_axes = any(a in vals for a in 'XYZ')
+
+        if has_axes and motion in (2, 3):
+            if 'I' in vals or 'J' in vals or 'K' in vals or 'R' in vals:
+                cur = new
+                continue
+        if has_axes and motion in (0, 1) and n >= floor and None not in cur and None not in new:
+            d = _seg_dist(cur, new, target)
+            if d <= tol: return n, d
+        cur = new
+    return None
+
+
+def _seg_dist(a, b, p):
+    ab = [b[i] - a[i] for i in range(3)]
+    ap = [p[i] - a[i] for i in range(3)]
+    den = sum(v * v for v in ab)
+    t = 0.0 if den == 0 else max(0.0, min(1.0, sum(ab[i] * ap[i] for i in range(3)) / den))
+    return sum((a[i] + t * ab[i] - p[i]) ** 2 for i in range(3)) ** 0.5
+
+
 def build(lines, line_no, name, opts, top_mm, source_hint = ''):
     # lines: the original program (list of strings, no newlines)
     # line_no: 1-based number of the line that was running
@@ -290,16 +351,46 @@ class Resume(object):
         path = self.ctrl.get_upload(src)
         if not os.path.isfile(path):
             raise ResumeError('The program %s is no longer on the controller.' % src)
-        if rec.get('sha') and sha_of(path) != rec['sha']:
-            raise ResumeError('%s has changed since the job was interrupted, '
-                              'so the saved line no longer points at the same '
-                              'place. Start the job again.' % src)
+        changed = bool(rec.get('sha')) and sha_of(path) != rec['sha']
 
         with open(path, 'r', encoding = 'utf-8', errors = 'replace') as f:
             lines = f.read().splitlines()
 
-        line = int(rec.get('line') or 0)
+        saved = int(rec.get('line') or 0)
+        line = saved
+        notes = []
+
+        # Where is the tool right now?  The saved line can be behind the
+        # machine, and after a controlled stop the tool is still on the path.
+        # If it is, restart there.  After a power loss the machine has been
+        # homed away from the path, so there is no match and the saved line is used.
+        found = None
+        try:
+            s = self.ctrl.state
+            work = dict((a, float(s.get(a + 'p', 0) or 0) - float(s.get('offset_' + a, 0) or 0))
+                        for a in 'xyz')
+            found = locate(lines, work, saved)
+        except Exception as e: self.log.warning('Could not match the tool position: %s' % e)
+
+        if found:
+            line = found[0]
+            if line != saved:
+                notes.append('The tool is on the program path at line %d, ahead of the '
+                             'saved line %d, so the program restarts at line %d.'
+                             % (line, saved, line))
+
+        if changed:
+            if not found:
+                raise ResumeError('%s has changed since the job was interrupted, and '
+                                  'the tool is not on its path, so the saved line cannot '
+                                  'be trusted. Start the job again.' % src)
+            notes.append('%s was changed after the job was interrupted. The restart point '
+                         'was found from where the tool is, not from the saved line.' % src)
+
         text, info = build(lines, line, src, opts, self._top_mm())
+        info['saved_line'] = saved
+        info['located'] = bool(found)
+        info['warnings'] = notes + info['warnings']
 
         name = output_name(src)
         tmp = self.ctrl.get_upload(name + '.tmp')

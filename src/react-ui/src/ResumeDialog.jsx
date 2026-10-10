@@ -36,6 +36,7 @@ export default function ResumeDialog({ cp, state, config, metric, onClose }) {
         <p><b>{info.file}</b> is loaded. Check the points below, then press Run in the Job panel.</p>
         <dl className="rdl">
           <Row k="Restarts at line" v={`${info.line}: ${info.line_text}`} />
+          {info.located && <Row k="Found from" v={info.saved_line !== info.line ? `where the tool is now (saved line was ${info.saved_line})` : "where the tool is now, which matches the saved line"} />}
           <Row k="Start point" v={["x", "y", "z"].filter((a) => p[a] !== undefined).map((a) => `${a.toUpperCase()} ${p[a]}`).join("   ") + ` ${u}`} />
           <Row k="Tool" v={info.tool !== null && info.tool !== undefined ? `T${info.tool} must be in the spindle` : "not set by the program"} />
           <Row k="Spindle" v={info.spindle === "off" ? "off at this point" : `${info.spindle} ${Math.round(info.speed || 0)} rpm, ${info.spinup} s to reach speed`} />
@@ -53,7 +54,7 @@ export default function ResumeDialog({ cp, state, config, metric, onClose }) {
       <button onClick={onClose}>Cancel</button>
       <button className="primary" disabled={busy || !prefs || !homed || !idle} onClick={build}>{busy ? "Building…" : "Build resume program"}</button>
     </>}>
-      <p>Continue <b>{cp.file}</b> from line {Number(cp.line).toLocaleString()}. This writes a new program that moves to the saved point, starts the spindle and carries on. Nothing moves until you press Run.</p>
+      <p>Continue <b>{cp.file}</b> from line {Number(cp.line).toLocaleString()}. This writes a new program that moves to the restart point, starts the spindle and carries on. If the tool is still on the program's path, the restart point is found from where the tool is, which can be ahead of the saved line. Nothing moves until you press Run.</p>
       <ol className="rsteps">
         <li className={homed ? "ok" : "todo"}>{homed ? "Machine is homed." : "Home the machine first (X, Y and Z). The saved point is only valid after homing."}</li>
         <li>Put the same tool back in the spindle{cp.tool ? <> (T{cp.tool})</> : null} and make sure the stock has not moved.</li>
