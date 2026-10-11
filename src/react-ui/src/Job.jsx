@@ -36,7 +36,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
   const start = () => {
     setErr("");
     if (dry) { try { localStorage.setItem("dryLift", String(lift)); } catch { /* storage unavailable */ } }
-    return api.put("start", dry ? { dry_lift: +lift } : undefined)
+    return api.put("start", dry ? { dry_lift: Math.min(100, Math.max(5, +lift || 30)) } : undefined)
       .then(() => setDry(false))
       .catch((e) => setErr(String(e.message || e).replace(/^\{"message":"|","code":\d+\}$/g, "")));
   };
@@ -104,10 +104,21 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       <div className="bar" role="progressbar" aria-valuenow={active ? pct : 0} aria-valuemin="0" aria-valuemax="100"><i style={{ width: `${active ? (pct || 2) : 0}%` }} /></div>
       {state.dry_run && <div className="dry-banner" role="status">DRY RUN – moves are lifted {Math.round(state.dry_lift || 0)} mm. Router, mist and probing are blocked. Normal runs are unaffected.</div>}
       {!active && (
-        <label className="dry-opt" title="Run the selected program in the air: Z lifted, router and mist blocked. Applies to the next run only.">
-          <input type="checkbox" checked={dry} onChange={(e) => setDry(e.target.checked)} /> Dry run
-          {dry && <span> lift <input type="number" min="5" max="100" step="5" value={lift} onChange={(e) => setLift(e.target.value)} /> mm</span>}
-        </label>
+        <div className="dry-opt">
+          <label title="Run the selected program in the air: Z lifted, router and mist blocked. Applies to the next run only.">
+            <input type="checkbox" checked={dry} onChange={(e) => setDry(e.target.checked)} /> Dry run
+          </label>
+          {dry && (
+            <span className="dry-lift">
+              <label htmlFor="dry-lift">lift</label>
+              <input id="dry-lift" type="text" inputMode="decimal" autoComplete="off" value={lift}
+                onFocus={(e) => e.target.select()}
+                onChange={(e) => setLift(e.target.value.replace(/[^0-9.]/g, ""))}
+                onBlur={() => setLift((v) => String(Math.min(100, Math.max(5, +v || 30))))} />
+              <span>mm</span>
+            </span>
+          )}
+        </div>
       )}
       {err && <div className="dry-err" role="alert">{err}</div>}
       {!active && live.length > 0 && (
