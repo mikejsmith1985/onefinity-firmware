@@ -70,6 +70,11 @@ class Ctrl(object):
                 self.resume = None
                 self.log.get('Ctrl').exception('Resume unavailable')
 
+            try: self.align = bbctrl.Align(self)
+            except Exception:
+                self.align = None
+                self.log.get('Ctrl').exception('Alignment unavailable')
+
             self.mach.connect()
 
             self.lcd.add_new_page(bbctrl.MainLCDPage(self))

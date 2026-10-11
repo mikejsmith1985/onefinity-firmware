@@ -112,6 +112,7 @@ const json = (res, obj, code = 200) => {
   res.end(JSON.stringify(obj));
 };
 
+let camFocus = null;
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://x");
   const p = url.pathname;
@@ -129,7 +130,24 @@ const server = http.createServer((req, res) => {
   if (p === "/api/network") return json(res, { ipAddresses: ["192.168.1.42"], hostname: "onefinity", wifi: { enabled: true, ssid: "Shop-WiFi", networks: [{ Name: "Shop-WiFi", Quality: 78 }, { Name: "Neighbor", Quality: 34 }, { Name: "Guest", Quality: 55 }] } });
   if (p === "/api/time") return json(res, { timeinfo: "Local time: Fri 2026-10-09 10:15:00\nTime zone: America/New_York (EDT)", timezones: "America/New_York\nAmerica/Chicago\nUTC" });
   if (p === "/api/screen-rotation") return json(res, { rotated: false });
-  if (p === "/api/video") { res.writeHead(404); return res.end(); }
+  if (p === "/api/video") {
+    const f = path_.join(path_.dirname(new URL(import.meta.url).pathname), "camera.jpg");
+    if (!fs.existsSync(f)) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { "Content-Type": "image/jpeg" }); return res.end(fs.readFileSync(f));
+  }
+  if (p === "/api/camera") {
+    let b = ""; req.on("data", (d) => (b += d));
+    req.on("end", () => {
+      if (req.method === "PUT") { const q = JSON.parse(b || "{}"); camFocus = q.focus; }
+      json(res, { connected: true, locked: camFocus !== null, focus: camFocus ?? 30, range: { min: 0, max: 250, step: 5, default: 0 } });
+    });
+    return;
+  }
+  if (p === "/api/next-align") {
+    let b = ""; req.on("data", (d) => (b += d));
+    req.on("end", () => { const q = JSON.parse(b || "{}"); json(res, { file: "aligned-" + q.file, source: q.file, angle: q.angle, lines: 42 }); });
+    return;
+  }
   if (p === "/api/path/" + state.selected + "/positions" || /\/positions$/.test(p)) {
     res.writeHead(200, { "Content-Type": "application/octet-stream" }); return res.end(positions);
   }

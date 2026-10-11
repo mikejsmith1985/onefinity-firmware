@@ -587,6 +587,34 @@ class ResumeHandler(bbctrl.APIHandler):
             raise HTTPError(400, '%s', str(e))
 
 
+class CameraHandler(bbctrl.APIHandler):
+    # GET: is a camera connected, and its focus range and value.
+    # PUT {"focus": n} locks focus at n, {"focus": null} gives it back to
+    # autofocus.
+    def get(self):
+        cam = self.application.camera
+        self.write_json(cam.get_status() if cam else {'connected': False})
+
+
+    def put(self):
+        cam = self.application.camera
+        if cam is None: raise HTTPError(503, 'Camera is disabled')
+        focus = self.json.get('focus') if isinstance(self.json, dict) else None
+        try: cam.set_focus(None if focus is None else int(focus))
+        except (TypeError, ValueError): raise HTTPError(400, 'Bad focus value')
+        self.write_json(cam.get_status())
+
+
+class AlignHandler(bbctrl.APIHandler):
+    # Write a copy of a program rotated about its X0 Y0 (camera alignment).
+    def put(self):
+        al = getattr(self.get_ctrl(), 'align', None)
+        if al is None: raise HTTPError(503, 'Alignment is not available')
+        j = self.json if isinstance(self.json, dict) else {}
+        try: self.write_json(al.build(j.get('file'), j.get('angle')))
+        except bbctrl.AlignError as e: raise HTTPError(400, '%s', str(e))
+
+
 class JogHandler(bbctrl.APIHandler):
     def put_ok(self):
         # Handle possible out of order jog command processing
@@ -1000,6 +1028,8 @@ class Web(tornado.web.Application):
             (r'/websocket', WSConnection),
             (r'/api/next-store/(runs|notes|prefs|checkpoint|probe)', NextStoreHandler),
             (r'/api/next-resume', ResumeHandler),
+            (r'/api/next-align', AlignHandler),
+            (r'/api/camera', CameraHandler),
             (r'/api/log', LogHandler),
             (r'/api/message/(\d+)/ack', MessageAckHandler),
             (r'/api/bugreport', BugReportHandler),

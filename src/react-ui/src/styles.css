@@ -244,6 +244,15 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
 .hist { list-style: none; padding: 0; margin: 8px 0; } .hist button { width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--rule); border-radius: 0; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; }
 .cam { position: relative; display: inline-block; max-width: 100%; } .cam img { display: block; max-width: 100%; border-radius: 6px; border: 1px solid var(--rule); }
 .cross { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(var(--yellow), var(--yellow)) center / 1px 100% no-repeat, linear-gradient(var(--yellow), var(--yellow)) center / 100% 1px no-repeat; opacity: .8; }
+.cam-layout { display: flex; flex-wrap: wrap; align-items: flex-start; }
+.cam-layout > .cam, .cam-layout > .empty { flex: 1 1 360px; margin: 0 16px 12px 0; }
+.align { flex: 1 1 320px; max-width: 520px; }
+.align h3 { margin: 4px 0 6px; font-size: 15px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); }
+.align h3 + p { margin-top: 0; } .align p { margin: 10px 0 6px; line-height: 1.4; }
+.align select { margin: 0 6px; }
+.align .num { font-variant-numeric: tabular-nums; }
+.align h3:not(:first-child) { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--rule); }
+.cam-focus { display: flex; align-items: center; margin-left: 8px; } .cam-focus > * { margin-right: 8px; } .cam-focus input[type=range] { width: 160px; }
 .canvases canvas.smooth { image-rendering: auto; }
 .canvases canvas.marker { pointer-events: none; }
 
