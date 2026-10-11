@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { api } from "./controller.js";
 import { fmtTime } from "./axis.js";
 import { useNote } from "./notes.js";
@@ -40,17 +40,35 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       .then(() => setDry(false))
       .catch((e) => setErr(String(e.message || e).replace(/^\{"message":"|","code":\d+\}$/g, "")));
   };
+  // Always-visible warning when the loaded program's zero corner or plate does not match what the controller knows.
+  const [live, setLive] = useState([]);
+  useEffect(() => {
+    let gone = false;
+    if (!state.selected) { setLive([]); return undefined; }
+    (async () => {
+      try {
+        const setup = await readSetup(state.selected);
+        if (!setup?.corner) { if (!gone) setLive([]); return; }
+        const rec = await remoteGet("probe");
+        const bad = [...probeChecks(setup, rec, state), ...stockChecks(setup, metric)].filter((c) => c.level !== "ok");
+        if (!gone) setLive(bad);
+      } catch { if (!gone) setLive([]); }
+    })();
+    return () => { gone = true; };
+  }, [state.selected, state.offset_x, state.offset_y, state.offset_z, metric]); // eslint-disable-line react-hooks/exhaustive-deps
   const [sheet, setSheet] = useState(null);
   const [sheetBusy, setSheetBusy] = useState(false);
   const tryStart = async () => {
-    if (dry) return start();
     setErr("");
     let setup = null;
     try { setup = await readSetup(state.selected); } catch { /* run without a sheet */ }
     const rec = setup?.corner ? await remoteGet("probe") : null;
     const checks = buildChecks(state, config, metric, state.selected, setup, rec);
     // A program with a setup sheet always shows it. A move outside the plate is never skipped.
-    const mustShow = !!setup || checks.some((c) => c.level === "stop");
+    const stopped = checks.some((c) => c.level === "stop");
+    // A dry run only interrupts for a red item (wrong zero corner, move outside the plate); a normal run always shows the sheet.
+    if (dry && !stopped) return start();
+    const mustShow = !!setup || stopped;
     if (skipChecklist() && !mustShow) start(); else setCheck({ checks, setup });
   };
   const openSheet = async () => {
@@ -92,6 +110,11 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         </label>
       )}
       {err && <div className="dry-err" role="alert">{err}</div>}
+      {!active && live.length > 0 && (
+        <div className={`live-warn ${live.some((c) => c.level === "stop") ? "stop" : "warn"}`} role="alert">
+          {live.map((c, i) => <p key={i}><b>{c.name}.</b> {c.text}</p>)}
+        </div>
+      )}
       <div className="runrow">
         {!active && <button className={dry ? "go dry" : "go"} disabled={!canStart} onClick={tryStart}>{dry ? "Dry run" : "Run"}</button>}
         {running && <button className="hold" onClick={() => api.put("pause")}>Pause</button>}

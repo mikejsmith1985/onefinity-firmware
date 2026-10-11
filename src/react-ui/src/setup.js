@@ -151,11 +151,12 @@ const cornerName = (c) => CORNER_NAMES[c] || c;
 export function probeChecks(setup, rec, state) {
   if (!setup?.corner) return [];
   const want = setup.corner;
+  const WANT = cornerName(want).toUpperCase();
   if (!rec || !rec.loc) {
-    return [{ level: "warn", name: "Zero", text: `The sheet needs zero probed on the ${cornerName(want)}. The controller has no record of a corner probe, so it cannot confirm that. Check it by eye.` }];
+    return [{ level: "warn", name: "Zero", text: `This program needs zero on the ${WANT}. The controller has no record of a corner probe, so it cannot confirm that. Check it by eye before you run.` }];
   }
   if (rec.loc !== want) {
-    return [{ level: "stop", name: "Zero", text: `The sheet needs zero on the ${cornerName(want)}, but the last probe was the ${cornerName(rec.loc)}. Probe again on the right corner, or run only if you set zero some other way on purpose.` }];
+    return [{ level: "stop", name: "WRONG ZERO", text: `This program was written for zero on the ${WANT}. Your last probe was on the ${cornerName(rec.loc).toUpperCase()}. Every cut would land in the wrong place. Probe XYZ on the ${cornerName(want)}, then run again.` }];
   }
   const moved = ["x", "y"].filter((a) => rec.off && rec.off[a] != null && state && state[`offset_${a}`] != null && Math.abs(state[`offset_${a}`] - rec.off[a]) > 0.05);
   const when = rec.time ? new Date(rec.time).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : "earlier";
