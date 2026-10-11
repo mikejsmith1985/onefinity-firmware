@@ -456,7 +456,9 @@ class HomeHandler(bbctrl.APIHandler):
 
 
 class StartHandler(bbctrl.APIHandler):
-    def put_ok(self): self.get_ctrl().mach.start()
+    def put_ok(self):
+        # {"dry_lift": mm} runs the selected program as a dry run
+        self.get_ctrl().mach.start(self.json.get('dry_lift', 0))
 
 
 class EStopHandler(bbctrl.APIHandler):
@@ -515,7 +517,7 @@ class NextStoreHandler(bbctrl.APIHandler):
     # Small JSON documents for the new UI (run history, file notes), kept on
     # the controller so every browser sees the same data.  Only whitelisted
     # names are accepted and each document is capped in size.
-    NAMES = ('runs', 'notes', 'prefs', 'checkpoint')
+    NAMES = ('runs', 'notes', 'prefs', 'checkpoint', 'probe')
     MAX_BYTES = 1000000
 
     def _path(self, name):
@@ -583,6 +585,34 @@ class ResumeHandler(bbctrl.APIHandler):
         except Exception as e:
             if isinstance(e, HTTPError): raise
             raise HTTPError(400, '%s', str(e))
+
+
+class CameraHandler(bbctrl.APIHandler):
+    # GET: is a camera connected, and its focus range and value.
+    # PUT {"focus": n} locks focus at n, {"focus": null} gives it back to
+    # autofocus.
+    def get(self):
+        cam = self.application.camera
+        self.write_json(cam.get_status() if cam else {'connected': False})
+
+
+    def put(self):
+        cam = self.application.camera
+        if cam is None: raise HTTPError(503, 'Camera is disabled')
+        focus = self.json.get('focus') if isinstance(self.json, dict) else None
+        try: cam.set_focus(None if focus is None else int(focus))
+        except (TypeError, ValueError): raise HTTPError(400, 'Bad focus value')
+        self.write_json(cam.get_status())
+
+
+class AlignHandler(bbctrl.APIHandler):
+    # Write a copy of a program rotated about its X0 Y0 (camera alignment).
+    def put(self):
+        al = getattr(self.get_ctrl(), 'align', None)
+        if al is None: raise HTTPError(503, 'Alignment is not available')
+        j = self.json if isinstance(self.json, dict) else {}
+        try: self.write_json(al.build(j.get('file'), j.get('angle')))
+        except bbctrl.AlignError as e: raise HTTPError(400, '%s', str(e))
 
 
 class JogHandler(bbctrl.APIHandler):
@@ -996,8 +1026,10 @@ class Web(tornado.web.Application):
 
         handlers = [
             (r'/websocket', WSConnection),
-            (r'/api/next-store/(runs|notes|prefs|checkpoint)', NextStoreHandler),
+            (r'/api/next-store/(runs|notes|prefs|checkpoint|probe)', NextStoreHandler),
             (r'/api/next-resume', ResumeHandler),
+            (r'/api/next-align', AlignHandler),
+            (r'/api/camera', CameraHandler),
             (r'/api/log', LogHandler),
             (r'/api/message/(\d+)/ack', MessageAckHandler),
             (r'/api/bugreport', BugReportHandler),
@@ -1037,13 +1069,14 @@ class Web(tornado.web.Application):
             (r'/api/time', TimeHandler),
             (r'/api/rotary', RotaryHandler),
             (r'/api/remote-diagnostics', RemoteDiagnosticsHandler),
-            # New React interface; the original UI at / is untouched.
-            (r'/next', tornado.web.RedirectHandler, {'url': '/next/'}),
-            (r'/next/(.*)', StaticFileHandler,
-             {'path': bbctrl.get_resource('http/next/'),
-              'default_filename': 'index.html'}),
+            # The React interface is the interface. Old /next/ bookmarks go to /.
+            (r'/next', tornado.web.RedirectHandler, {'url': '/'}),
+            (r'/next/(.*)', tornado.web.RedirectHandler, {'url': '/'}),
+            # Data files the interface reads from the controller's root address.
+            (r'/(config-template\.json|buildbotics\.nc|favicon\.ico|onefinity_[a-z0-9_]+\.json|images/.*|fonts/.*)',
+             StaticFileHandler, {'path': bbctrl.get_resource('http/')}),
             (r'/(.*)', StaticFileHandler,
-             {'path': bbctrl.get_resource('http/'),
+             {'path': bbctrl.get_resource('http/next/'),
               'default_filename': 'index.html'}),
             ]
 

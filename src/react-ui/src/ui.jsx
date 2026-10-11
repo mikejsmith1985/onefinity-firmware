@@ -2,13 +2,21 @@ import React, { useEffect, useRef } from "react";
 
 export function Modal({ title, children, actions, onClose, wide, dismissable = true }) {
   const ref = useRef(null);
+  // Callers pass a new onClose on every render. Keep it in a ref so the focus
+  // effect runs once, when the dialog opens. Re-running it on each keystroke
+  // moved focus around and made the on-screen keyboard open and close.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     const prev = document.activeElement;
     ref.current?.querySelector("[data-autofocus]")?.focus();
-    const key = (e) => { if (e.key === "Escape" && dismissable && onClose) onClose(); };
+    return () => { prev && prev.focus && prev.focus(); };
+  }, []);
+  useEffect(() => {
+    const key = (e) => { if (e.key === "Escape" && dismissable && closeRef.current) closeRef.current(); };
     window.addEventListener("keydown", key);
-    return () => { window.removeEventListener("keydown", key); prev && prev.focus && prev.focus(); };
-  }, [onClose, dismissable]);
+    return () => window.removeEventListener("keydown", key);
+  }, [dismissable]);
   return (
     <div className="scrim" onMouseDown={(e) => { if (e.target === e.currentTarget && dismissable && onClose) onClose(); }}>
       <div className={`modal${wide ? " wide" : ""}`} role="dialog" aria-modal="true" aria-label={title} ref={ref}>

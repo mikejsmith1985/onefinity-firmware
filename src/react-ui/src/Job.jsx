@@ -1,10 +1,13 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { api } from "./controller.js";
 import { fmtTime } from "./axis.js";
 import { useNote } from "./notes.js";
 import { markStopped } from "./history.js";
 import ParkDialog from "./ParkDialog.jsx";
-import Checklist, { buildChecks, skipChecklist } from "./Checklist.jsx";
+import Checklist, { buildChecks, skipChecklist, SheetView } from "./Checklist.jsx";
+import { readSetup, stockChecks, probeChecks } from "./setup.js";
+import { remoteGet } from "./store.js";
+import { Modal } from "./ui.jsx";
 
 function Override({ label, kind, hint }) {
   const [v, setV] = useState(100);
@@ -24,9 +27,59 @@ const Stat = ({ k, v, title }) => <div className="stat" title={title}><dt>{k}</d
 export default function Job({ state, mach, path, metric, config, changes = [] }) {
   const [check, setCheck] = useState(null);
   const [parkAsk, setParkAsk] = useState(false);
+  // Dry run: the controller sends the same program 30 mm (or the chosen lift) higher with the router,
+  // mist and probing blocked. It lasts for one run only, so it can never be left on.
+  const [dry, setDry] = useState(false);
+  const [lift, setLift] = useState(() => { try { return +localStorage.getItem("dryLift") || 30; } catch { return 30; } });
+  const [err, setErr] = useState("");
   const note = useNote(state.selected).split("\n")[0];
-  const start = () => api.put("start");
-  const tryStart = () => { if (skipChecklist()) start(); else setCheck(buildChecks(state, config, metric, state.selected)); };
+  const start = () => {
+    setErr("");
+    if (dry) { try { localStorage.setItem("dryLift", String(lift)); } catch { /* storage unavailable */ } }
+    return api.put("start", dry ? { dry_lift: Math.min(100, Math.max(5, +lift || 30)) } : undefined)
+      .then(() => setDry(false))
+      .catch((e) => setErr(String(e.message || e).replace(/^\{"message":"|","code":\d+\}$/g, "")));
+  };
+  // Always-visible warning when the loaded program's zero corner or plate does not match what the controller knows.
+  const [live, setLive] = useState([]);
+  useEffect(() => {
+    let gone = false;
+    if (!state.selected) { setLive([]); return undefined; }
+    (async () => {
+      try {
+        const setup = await readSetup(state.selected);
+        if (!setup?.corner) { if (!gone) setLive([]); return; }
+        const rec = await remoteGet("probe");
+        const bad = [...probeChecks(setup, rec, state), ...stockChecks(setup, metric)].filter((c) => c.level !== "ok");
+        if (!gone) setLive(bad);
+      } catch { if (!gone) setLive([]); }
+    })();
+    return () => { gone = true; };
+  }, [state.selected, state.offset_x, state.offset_y, state.offset_z, metric]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [sheet, setSheet] = useState(null);
+  const [sheetBusy, setSheetBusy] = useState(false);
+  const tryStart = async () => {
+    setErr("");
+    let setup = null;
+    try { setup = await readSetup(state.selected); } catch { /* run without a sheet */ }
+    const rec = setup?.corner ? await remoteGet("probe") : null;
+    const checks = buildChecks(state, config, metric, state.selected, setup, rec);
+    // A program with a setup sheet always shows it. A move outside the plate is never skipped.
+    const stopped = checks.some((c) => c.level === "stop");
+    // A dry run only interrupts for a red item (wrong zero corner, move outside the plate); a normal run always shows the sheet.
+    if (dry && !stopped) return start();
+    const mustShow = !!setup || stopped;
+    if (skipChecklist() && !mustShow) start(); else setCheck({ checks, setup });
+  };
+  const openSheet = async () => {
+    setSheetBusy(true); setErr("");
+    try {
+      const setup = await readSetup(state.selected);
+      const rec = setup?.corner ? await remoteGet("probe") : null;
+      setSheet(setup ? { setup, checks: [...probeChecks(setup, rec, state), ...stockChecks(setup, metric)] } : { setup: null, checks: [] });
+    } catch (e) { setErr(String(e.message || e)); }
+    setSheetBusy(false);
+  };
   const file = state.selected || "";
   const running = mach === "RUNNING" || mach === "HOMING";
   const holding = mach === "HOLDING" || mach === "STOPPING";
@@ -45,11 +98,36 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       <div className="job-file">
         <small>Program</small>
         <strong title={file}>{file || "No program selected"}</strong>
+        {file && !active && <button className="linkish" disabled={sheetBusy} onClick={openSheet} title="Where to zero, which corner to probe, tool and feeds for this program">{sheetBusy ? "Reading…" : "Setup sheet"}</button>}
         {note && <em className="file-note" title={note}>{note}</em>}
       </div>
       <div className="bar" role="progressbar" aria-valuenow={active ? pct : 0} aria-valuemin="0" aria-valuemax="100"><i style={{ width: `${active ? (pct || 2) : 0}%` }} /></div>
+      {state.dry_run && <div className="dry-banner" role="status">DRY RUN – moves are lifted {Math.round(state.dry_lift || 0)} mm. Router, mist and probing are blocked. Normal runs are unaffected.</div>}
+      {!active && (
+        <div className="dry-opt">
+          <label title="Run the selected program in the air: Z lifted, router and mist blocked. Applies to the next run only.">
+            <input type="checkbox" checked={dry} onChange={(e) => setDry(e.target.checked)} /> Dry run
+          </label>
+          {dry && (
+            <span className="dry-lift">
+              <label htmlFor="dry-lift">lift</label>
+              <input id="dry-lift" type="text" inputMode="decimal" autoComplete="off" value={lift}
+                onFocus={(e) => e.target.select()}
+                onChange={(e) => setLift(e.target.value.replace(/[^0-9.]/g, ""))}
+                onBlur={() => setLift((v) => String(Math.min(100, Math.max(5, +v || 30))))} />
+              <span>mm</span>
+            </span>
+          )}
+        </div>
+      )}
+      {err && <div className="dry-err" role="alert">{err}</div>}
+      {!active && live.length > 0 && (
+        <div className={`live-warn ${live.some((c) => c.level === "stop") ? "stop" : "warn"}`} role="alert">
+          {live.map((c, i) => <p key={i}><b>{c.name}.</b> {c.text}</p>)}
+        </div>
+      )}
       <div className="runrow">
-        {!active && <button className="go" disabled={!canStart} onClick={tryStart}>Run</button>}
+        {!active && <button className={dry ? "go dry" : "go"} disabled={!canStart} onClick={tryStart}>{dry ? "Dry run" : "Run"}</button>}
         {running && <button className="hold" onClick={() => api.put("pause")}>Pause</button>}
         {holding && <button className="go" onClick={() => api.put("unpause")}>Resume</button>}
         <button className="halt" disabled={!active} onClick={() => { markStopped(); api.put("stop"); }}>Stop</button>
@@ -70,7 +148,16 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       <Override label="Feed" kind="feed" hint="Feed rate override" />
       <Override label="Speed" kind="speed" hint="Spindle speed override" />
       {(parkAsk || state.park) && <ParkDialog state={state} active={active} onClose={() => setParkAsk(false)} />}
-      {check && <Checklist checks={check} onCancel={() => setCheck(null)} onRun={() => { setCheck(null); start(); }} />}
+      {check && <Checklist checks={check.checks} setup={check.setup} onCancel={() => setCheck(null)} onRun={() => { setCheck(null); start(); }} />}
+      {sheet && (
+        <Modal title="Setup sheet" onClose={() => setSheet(null)} actions={<button data-autofocus onClick={() => setSheet(null)}>Close</button>}>
+          {sheet.setup ? <SheetView setup={sheet.setup} /> : <p>This program has no setup sheet.</p>}
+          {sheet.checks.length > 0 && (
+            <ul className="checks">{sheet.checks.map((c, i) => <li key={i} className={c.level}><span className="mark" aria-label={c.level}>{c.level === "ok" ? "✓" : c.level === "warn" ? "!" : "✕"}</span><b>{c.name}</b><span>{c.text}</span></li>)}</ul>
+          )}
+          {sheet.checks.length > 0 && <p className="sheet-note">These checks run again when you press Run.</p>}
+        </Modal>
+      )}
     </div>
   );
 }

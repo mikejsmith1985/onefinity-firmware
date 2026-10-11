@@ -14,7 +14,7 @@ export default function Interrupted({ cp, busy, onDismiss, state, config, metric
       <div>
         <b>{cp.status === "parked" ? "Parked job" : "Interrupted job"}: {cp.file}</b>
         <span> Last saved at line {Number(cp.line).toLocaleString()}{cp.nlines ? ` of ${cp.nlines.toLocaleString()}` : ""}, {when}. {WHY[cp.status]}</span>
-        <small>The machine position may not be where the job left it. Home the machine, then use Resume to continue from the saved line.</small>
+        <small>Resume continues from the saved line, or from where the tool is if it is still on the program path. After a power loss or E-stop, home the machine first.</small>
       </div>
       <div className="irow">
         <button className="primary" onClick={() => setOpen(true)}>Resume…</button>
