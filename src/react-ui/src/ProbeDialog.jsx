@@ -1,4 +1,5 @@
 import { remotePut } from "./store.js";
+import { probeActive } from "./setter.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./controller.js";
 import { Modal } from "./ui.jsx";
@@ -125,7 +126,7 @@ export default function ProbeDialog({ type, config, state, send, subscribe, rota
     if ("ofprobe_ok" in d) { setCenterOk(d.ofprobe_ok); R.current.centerOk = d.ofprobe_ok; }
     if ("ofprobe_dz" in d) setCenterDz(d.ofprobe_dz);
     if (f.active) {
-      if (d.pw === 0) f.contacted = true;
+      if ("pw" in d && probeActive({ ...R.current.state, ...d })) f.contacted = true;
       if (d.log?.msg === "Switch not found") { f.failed = true; setFailed(true); }
       if (d.cycle !== undefined) {
         if (d.cycle !== "idle") f.started = true;
@@ -134,7 +135,7 @@ export default function ProbeDialog({ type, config, state, send, subscribe, rota
     }
     notify();
   }), [subscribe]);
-  useEffect(() => { if (state.pw === 0 && f.active) { f.contacted = true; notify(); } }, [state.pw]);
+  useEffect(() => { if (probeActive(state) && f.active) { f.contacted = true; notify(); } }, [state.pw, state.pt]);
 
   const executeProbe = () => {
     const { config, rotary, type, loc, dia: d } = R.current;

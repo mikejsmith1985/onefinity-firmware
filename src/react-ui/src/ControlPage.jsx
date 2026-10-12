@@ -9,6 +9,7 @@ import { useProgram, parseToolChanges } from "./toolplan.js";
 import Workspace from "./Workspace.jsx";
 import ProbeDialog from "./ProbeDialog.jsx";
 import MeasureStock from "./MeasureStock.jsx";
+import ToolSetter from "./ToolSetter.jsx";
 
 export default function ControlPage({ ctl, cfg, mach, metric }) {
   const { state, send, subscribe, logs, clearLogs } = ctl;
@@ -50,7 +51,10 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
       {probe === "measure" && cfg.config && (
         <MeasureStock config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
       )}
-      {probe && probe !== "measure" && cfg.config && (
+      {probe === "setter" && cfg.config && (
+        <ToolSetter config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
+      )}
+      {probe && probe !== "measure" && probe !== "setter" && cfg.config && (
         <ProbeDialog type={probe} config={cfg.config} state={state} send={send} subscribe={subscribe} rotary={rotary} metric={metric} onClose={() => setProbe(null)} />
       )}
     </main>

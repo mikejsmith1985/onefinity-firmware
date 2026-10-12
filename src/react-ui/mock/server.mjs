@@ -96,7 +96,21 @@ function run(dryLift = 0) {
   }, 400);
 }
 function mdi(text) {
-  if (text === "mock:touch") { broadcast({ pw: 0 }); setTimeout(() => broadcast({ pw: 1 }), 300); return; }
+  // Probe input: pt 1 = normally open (touched reads 0), 2 = normally closed (touched reads 1)
+  const rest = state.pt === 2 ? 0 : 1;
+  if (text === "mock:touch") { broadcast({ pw: 1 - rest }); setTimeout(() => broadcast({ pw: rest }), 300); return; }
+  if (text === "mock:nc") { broadcast({ pt: 2, pw: 0 }); return; }
+  if (text === "mock:open-loop") { broadcast({ pw: 1 }); return; }
+  if (text.includes("#<_ofs_ok>")) {
+    const ref = text.includes("#<_ofs_ref> = #5063");
+    broadcast({ xx: "RUNNING", cycle: "running", ofs_ok: 0, ofs_fail: 0 });
+    setTimeout(() => {
+      if (process.env.MOCK_SETTER_FAIL) broadcast({ ofs_fail: 1 });
+      else broadcast(ref ? { ofs_ref: -15.2, ofs_ok: 1 } : { ofs_ok: 1, offset_z: (state.offset_z || 0) + 12.7 });
+      broadcast({ xx: "READY", cycle: "idle" });
+    }, 1200);
+    return;
+  }
   if (text.includes("#<_ofm_ok>")) {
     const cal = /calibration/.test(text), y = text.includes("_ofm_l> = [");
     broadcast({ xx: "RUNNING", cycle: "running", ofm_ok: 0, ofm_fail: 0 });
