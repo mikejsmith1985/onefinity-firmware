@@ -34,7 +34,7 @@ export default function Workspace({ lines, state, path, pathBusy, send, mach, cf
         {tab === "history" && <History />}
         {tab === "messages" && <Messages logs={logs} clear={clearLogs} />}
         {tab === "indicators" && <Indicators state={state} send={send} />}
-        {tab === "camera" && <Camera />}
+        {tab === "camera" && <Camera state={state} cfg={cfg} idle={idle} />}
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { makeGrid, makeTool, run } from "./sim.js";
+import { readSetupHeader } from "./setup.js";
 
 const SNAPSHOTS = 12, FRAME_MS = 40, PLAY_SECONDS = 20;
 const STOPS = [[253,231,37],[186,222,40],[122,209,81],[68,191,112],[34,168,132],[32,144,140],[42,120,142],[65,68,135],[68,1,84]];
@@ -20,16 +21,35 @@ export default function DepthView({ path, busy: pathBusy, file }) {
   const [type, setType] = useState(load("type", "flat"));
   const [vAngle, setVAngle] = useState(parseFloat(load("vangle", "60")) || 60);
   const [stockTop, setStockTop] = useState(0);
-  // Tool and stock settings are remembered per program file.
+  // The tool comes from the program's setup sheet (tool-geom line) when it has one. Values typed here
+  // are remembered per program file and win over the sheet until "Use setup sheet" is pressed.
   const [ready, setReady] = useState(null);
+  const [manual, setManual] = useState(false);
+  const [sheetTool, setSheetTool] = useState(null);
+  const applyTool = (g) => { setDia(g.dia); setType(g.type); if (g.angle) setVAngle(g.angle); };
   useEffect(() => {
+    let cancelled = false;
+    setReady(null);
     let v = null; try { v = JSON.parse(localStorage.getItem("next-depth:" + file) || "null"); } catch {}
-    if (v) { setDia(v.dia); setType(v.type); setVAngle(v.vAngle); setStockTop(v.stockTop); }
-    setReady(file);
+    (async () => {
+      let geom = null;
+      if (file) { try { geom = (await readSetupHeader(file))?.toolGeom || null; } catch { /* no sheet */ } }
+      if (cancelled) return;
+      setSheetTool(geom);
+      const own = !!(v && v.manual);
+      if (v && (own || !geom)) { setDia(v.dia); setType(v.type); setVAngle(v.vAngle); setStockTop(v.stockTop); }
+      else if (v) setStockTop(v.stockTop);
+      else setStockTop(0);
+      if (geom && !own) applyTool(geom);
+      setManual(own);
+      setReady(file);
+    })();
+    return () => { cancelled = true; };
   }, [file]);
   useEffect(() => {
-    if (file && ready === file) { try { localStorage.setItem("next-depth:" + file, JSON.stringify({ dia, type, vAngle, stockTop })); } catch {} }
-  }, [ready, file, dia, type, vAngle, stockTop]);
+    if (file && ready === file) { try { localStorage.setItem("next-depth:" + file, JSON.stringify({ dia, type, vAngle, stockTop, manual })); } catch {} }
+  }, [ready, file, dia, type, vAngle, stockTop, manual]);
+  const edit = (set) => (value) => { setManual(true); set(value); };
   const [pos, setPos] = useState(0);
   const [last, setLast] = useState(0);
   const [percent, setPercent] = useState(0);
@@ -77,6 +97,7 @@ export default function DepthView({ path, busy: pathBusy, file }) {
     setPlaying(false);
     const s = sim.current = { token: Symbol() };
     const token = s.token;
+    if (ready !== file) return; // wait until this file's tool settings are loaded
     if (!path || !path.positions || path.positions.length < 6 || !(dia > 0)) { setLast(0); return; }
     const radius = dia / 2, n = path.positions.length / 3;
     s.tool = makeTool(radius, type === "v" ? vAngle : 0);
@@ -107,7 +128,7 @@ export default function DepthView({ path, busy: pathBusy, file }) {
     setTimeout(slice, 0);
     return () => { sim.current.token = null; };
     // eslint-disable-next-line
-  }, [path, dia, type, vAngle, stockTop]);
+  }, [path, dia, type, vAngle, stockTop, ready]);
 
   useEffect(() => {
     if (!playing) return;
@@ -132,12 +153,15 @@ export default function DepthView({ path, busy: pathBusy, file }) {
   return (
     <div className="depth">
       <div className="depth-tools">
-        <label>Tool diameter<input type="number" step="0.001" min="0.1" value={dia} onChange={(e) => setDia(parseFloat(e.target.value) || 0)} /><em>mm</em></label>
+        <label>Tool diameter<input type="number" step="0.001" min="0.1" value={dia} onChange={(e) => edit(setDia)(parseFloat(e.target.value) || 0)} /><em>mm</em></label>
         <label>Shape
-          <select value={type} onChange={(e) => setType(e.target.value)}><option value="flat">Flat end mill</option><option value="v">V-bit</option></select>
+          <select value={type} onChange={(e) => edit(setType)(e.target.value)}><option value="flat">Flat end mill</option><option value="v">V-bit</option></select>
         </label>
-        {type === "v" && <label>Angle<input type="number" min="10" max="150" value={vAngle} onChange={(e) => setVAngle(parseFloat(e.target.value) || 60)} /><em>°</em></label>}
-        <label>Stock top at Z<input type="number" step="0.1" value={stockTop} onChange={(e) => setStockTop(parseFloat(e.target.value) || 0)} /><em>mm</em></label>
+        {type === "v" && <label>Angle<input type="number" min="10" max="150" value={vAngle} onChange={(e) => edit(setVAngle)(parseFloat(e.target.value) || 60)} /><em>°</em></label>}
+        <label>Stock top at Z<input type="number" step="0.1" value={stockTop} onChange={(e) => edit(setStockTop)(parseFloat(e.target.value) || 0)} /><em>mm</em></label>
+        {sheetTool && !manual && <span className="depth-src">Tool from setup sheet</span>}
+        {sheetTool && manual && <button className="depth-src" onClick={() => { applyTool(sheetTool); setManual(false); }}>Use setup sheet tool</button>}
+        {!sheetTool && ready === file && file && <span className="depth-src muted">No tool in this program's setup sheet. Set it here.</span>}
       </div>
 
       <div className="stage">

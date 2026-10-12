@@ -136,7 +136,10 @@ class Mach(Comm):
     def _set_mist(self, on): self._i2c_set('1oa', 1 if on else 0)
 
 
-    def _set_cycle(self, cycle): self.ctrl.state.set('cycle', cycle)
+    def _set_cycle(self, cycle):
+        # A dry run never outlives its cycle
+        if cycle == 'idle': self.planner.end_dry()
+        self.ctrl.state.set('cycle', cycle)
 
 
     def _begin_cycle(self, cycle):
@@ -356,11 +359,23 @@ class Mach(Comm):
             super().clear()
 
 
-    def start(self):
+    def _check_dry_lift(self, lift):
+        try: lift = float(lift)
+        except (TypeError, ValueError): raise Exception('Bad dry run lift')
+        if not 5 <= lift <= 100:
+            raise Exception('Dry run lift must be between 5 and 100 mm')
+        if not self.ctrl.state.is_axis_homed('z'):
+            raise Exception('Home the machine before a dry run so the Z '
+                            'limit is known')
+        return lift
+
+
+    def start(self, dry_lift = 0):
         filename = self.ctrl.state.get('selected', '')
         if not filename: return
+        if dry_lift: dry_lift = self._check_dry_lift(dry_lift)
         self._begin_cycle('running')
-        self.planner.load(filename)
+        self.planner.load(filename, dry_lift)
         super().resume()
 
 

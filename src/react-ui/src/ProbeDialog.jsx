@@ -1,3 +1,5 @@
+import { remotePut } from "./store.js";
+import { probeActive } from "./setter.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./controller.js";
 import { Modal } from "./ui.jsx";
@@ -15,8 +17,7 @@ const LABELS = {
   CheckProbe: "Check probe", BitDimensions: "Bit dimensions", ProbeLocation: "Probe location", PlaceProbeBlock: "Place probe block",
   Probe: "Probe", MoveProbeBlock: "Move probe block", Probe2: "Probe second corner", Done: "Done",
 };
-const IMPERIAL_BITS = ["1/2 in", "3/8 in", "1/4 in", "1/8 in", "1/16 in", "1/32 in"];
-const METRIC_BITS = ["12 mm", "10 mm", "8 mm", "6 mm", "4 mm", "3 mm"];
+const PRESET_BITS = ["1/8 in", "1/4 in"];
 
 // ---- cutter diameter parsing (same rules as the original dialog) ----
 const RX = /^\s*(?:(\d+)\s*\/\s*(\d+)|(\d*\.\d+)|(\d+(?:\.\d+)?))\s*("|in|inch|inches|mm|millimeters)\s*$/;
@@ -93,8 +94,12 @@ export default function ProbeDialog({ type, config, state, send, subscribe, rota
 
   const [step, setStep] = useState("None");
   const [steps, setSteps] = useState([]);
-  const [dia, setDia] = useState(ls("cutterDiameter"));
-  const [diaRot, setDiaRot] = useState(ls("cutterDiameterRotary"));
+  const [dia, setDia] = useState(() => ls("cutterDiameter") || PRESET_BITS[0]);
+  const [diaRot, setDiaRot] = useState(() => ls("cutterDiameterRotary") || PRESET_BITS[0]);
+  // "preset": pick 1/8 or 1/4 in. "custom": type a size.
+  const [diaMode, setDiaMode] = useState(() => { const v = normDia(ls("cutterDiameter")); return !v || PRESET_BITS.includes(v) ? "preset" : "custom"; });
+  const customRef = useRef(null);
+  useEffect(() => { if (diaMode === "custom") customRef.current?.focus(); }, [diaMode]);
   const [loc, setLoc] = useState(() => { const s = ls(locKey); return locations.some(([v]) => v === s) ? s : locations[0][0]; });
   const [jogStep, setJogStep] = useState(10);
   const [failed, setFailed] = useState(false);
@@ -104,7 +109,7 @@ export default function ProbeDialog({ type, config, state, send, subscribe, rota
   // Everything the async flow needs lives in one ref so it can read the latest values.
   const R = useRef({});
   R.current.dia = parseDia(rotary ? diaRot : dia);
-  R.current.loc = loc; R.current.config = config; R.current.rotary = rotary; R.current.type = type; R.current.send = send;
+  R.current.loc = loc; R.current.config = config; R.current.rotary = rotary; R.current.type = type; R.current.send = send; R.current.state = state;
   R.current.state = state; R.current.centerOk = centerOk;
 
   const f = useRef({ active: false, contacted: false, started: false, failed: false, complete: false, ack: false, cancelled: false }).current;
@@ -121,7 +126,7 @@ export default function ProbeDialog({ type, config, state, send, subscribe, rota
     if ("ofprobe_ok" in d) { setCenterOk(d.ofprobe_ok); R.current.centerOk = d.ofprobe_ok; }
     if ("ofprobe_dz" in d) setCenterDz(d.ofprobe_dz);
     if (f.active) {
-      if (d.pw === 0) f.contacted = true;
+      if ("pw" in d && probeActive({ ...R.current.state, ...d })) f.contacted = true;
       if (d.log?.msg === "Switch not found") { f.failed = true; setFailed(true); }
       if (d.cycle !== undefined) {
         if (d.cycle !== "idle") f.started = true;
@@ -130,7 +135,7 @@ export default function ProbeDialog({ type, config, state, send, subscribe, rota
     }
     notify();
   }), [subscribe]);
-  useEffect(() => { if (state.pw === 0 && f.active) { f.contacted = true; notify(); } }, [state.pw]);
+  useEffect(() => { if (probeActive(state) && f.active) { f.contacted = true; notify(); } }, [state.pw, state.pt]);
 
   const executeProbe = () => {
     const { config, rotary, type, loc, dia: d } = R.current;
@@ -281,6 +286,11 @@ ${rest}
         await stepDone("Probe2", list, complete, fail);
         await stepDone("Done", list, ack);
         if (usesLocation && isCenterLoc(R.current.loc) && R.current.centerOk === 0) return;
+        // Remember where zero was set so the Run check can compare it with the program's setup sheet
+        if (usesLocation) {
+          const st = R.current.state || {};
+          remotePut("probe", { loc: R.current.loc, time: Date.now(), off: { x: st.offset_x ?? null, y: st.offset_y ?? null, z: st.offset_z ?? null } });
+        }
         if (isXYZ) R.current.send(rotary ? "G90\nG0 Y0" : "G90\nG0 X0Y0");
       } catch (e) {
         if (e.message !== "cancelled") console.error("Error during probing:", e);
@@ -329,12 +339,25 @@ ${rest}
         <div className="probe-main">
           {step === "CheckProbe" && <><p>Attach the probe magnet to the collet, then touch the probe block to the bit.</p><Svg data={isXYZ ? CheckXYZ : CheckZ} w={300} /></>}
           {step === "BitDimensions" && <>
-            <label className="stack">Cutter diameter
-              <input data-autofocus list="bits" spellCheck="false" value={rotary ? diaRot : dia} aria-invalid={!curDia}
-                onChange={(e) => (rotary ? setDiaRot(e.target.value) : setDia(e.target.value))} />
-              <datalist id="bits">{[...IMPERIAL_BITS, ...METRIC_BITS].map((b) => <option key={b} value={b} />)}</datalist>
-              <small>Examples: 1/2", 10 mm, 0.25 in</small>
-            </label>
+            <div className="stack">
+              <label className="stack">Cutter diameter
+                <select data-autofocus value={diaMode === "custom" ? "custom" : normDia(rotary ? diaRot : dia) || PRESET_BITS[0]}
+                  onChange={(e) => {
+                    const v = e.target.value; const set = rotary ? setDiaRot : setDia;
+                    if (v === "custom") { set(""); setDiaMode("custom"); } else { set(v); setDiaMode("preset"); }
+                  }}>
+                  {PRESET_BITS.map((b) => <option key={b} value={b}>{b}</option>)}
+                  <option value="custom">Other size (type it in)</option>
+                </select>
+              </label>
+              {diaMode === "custom" && (
+                <label className="stack">Size
+                  <input ref={customRef} spellCheck="false" autoComplete="off" placeholder="for example 6 mm or 0.2 in" value={rotary ? diaRot : dia} aria-invalid={!curDia}
+                    onChange={(e) => (rotary ? setDiaRot(e.target.value) : setDia(e.target.value))} />
+                  <small>Examples: 3/16", 6 mm, 0.25 in</small>
+                </label>
+              )}
+            </div>
             <Svg data={BitDiameter} w={150} />
           </>}
           {step === "ProbeLocation" && <>
