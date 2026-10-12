@@ -96,6 +96,17 @@ function run(dryLift = 0) {
   }, 400);
 }
 function mdi(text) {
+  if (text === "mock:touch") { broadcast({ pw: 0 }); setTimeout(() => broadcast({ pw: 1 }), 300); return; }
+  if (text.includes("#<_ofm_ok>")) {
+    const cal = /calibration/.test(text), y = text.includes("_ofm_l> = [");
+    broadcast({ xx: "RUNNING", cycle: "running", ofm_ok: 0, ofm_fail: 0 });
+    setTimeout(() => {
+      if (process.env.MOCK_MEASURE_FAIL) broadcast({ ofm_fail: +process.env.MOCK_MEASURE_FAIL });
+      else broadcast({ ofm_w: cal ? 52.5 : 101.237, ofm_l: y ? 60.412 : 0, ofm_rxa: 10, ofm_rxb: cal ? 62.5 : 111.237, ofm_ok: 1, offset_x: 160.2, offset_y: y ? 88.1 : state.offset_y, offset_z: -42.3 });
+      broadcast({ xx: "READY", cycle: "idle" });
+    }, 1500);
+    return;
+  }
   const m = /G0\s+(.*)/i.exec(text);
   if (/^G91/i.test(text) && m) {
     const d = {};
