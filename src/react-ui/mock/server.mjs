@@ -28,6 +28,8 @@ const state = {
   imperial: false, power_shutdown: false,
   path_min_x: 0, path_max_x: 150, path_min_y: 0, path_max_y: 90, path_min_z: -15, path_max_z: 15,
 };
+// MOCK_START_UNHOMED=1 starts with no axis homed (as after a controller restart).
+if (process.env.MOCK_START_UNHOMED) for (const i of [0, 1, 2, 3]) state[`${i}homed`] = false;
 const jogLog = [];
 const store = { checkpoint: process.env.MOCK_INTERRUPTED ? { v: 1, seq: 5, t: Math.floor(Date.now() / 1000) - 3600, status: "running", file: "alternator_arm.nc", nlines: 12840, line: 4212 } : null };
 const macros = [
@@ -230,7 +232,11 @@ const server = http.createServer((req, res) => {
   if (p === "/api/stop") { clearInterval(timer); broadcast({ xx: "READY", cycle: "idle", feed: 0, speed: 0, pr: "" }); return json(res, "ok"); }
   if (p === "/api/estop") { clearInterval(timer); broadcast({ xx: "ESTOPPED", er: "User triggered EStop", feed: 0, speed: 0 }); return json(res, "ok"); }
   if (p === "/api/clear") { broadcast({ xx: "READY", er: "" }); return json(res, "ok"); }
-  if (p.startsWith("/api/home")) { broadcast({ "0homed": true, "1homed": true, "2homed": true }); return json(res, "ok"); }
+  if (p.startsWith("/api/home")) {
+    broadcast({ xx: "HOMING", cycle: "homing" });
+    setTimeout(() => broadcast({ "0homed": true, "1homed": true, "2homed": true, "3homed": true, xx: "READY", cycle: "idle" }), 1200);
+    return json(res, "ok");
+  }
   if (p.startsWith("/api/position/")) {
     const a = p.split("/").pop();
     return json(res, "ok");

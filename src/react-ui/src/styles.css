@@ -348,7 +348,8 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
 .dry-opt{display:flex;gap:.5rem;align-items:center;margin:.5rem 0;font-size:.95rem}
 .dry-opt label{display:inline-flex;gap:.4rem;align-items:center}
 .dry-lift{display:inline-flex;gap:.4rem;align-items:center}
-.dry-lift input{width:4.5rem}
+.dry-lift button{min-height:40px;min-width:44px;padding:0 10px;font-size:1.2rem;line-height:1}
+.dry-lift output{min-width:4.2rem;text-align:center;font-variant-numeric:tabular-nums}
 .dry-err{background:#8b1a1a;color:#fff;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0}
 button.go.dry{background:#b07400}
 

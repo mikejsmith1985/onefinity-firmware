@@ -31,12 +31,14 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
   // mist and probing blocked. It lasts for one run only, so it can never be left on.
   const [dry, setDry] = useState(false);
   const [lift, setLift] = useState(() => { try { return +localStorage.getItem("dryLift") || 30; } catch { return 30; } });
+  // Set with buttons in 5 mm steps (5 to 100 mm), so it needs no keyboard on the controller's touch screen.
+  const liftMm = Math.min(100, Math.max(5, Math.round((+lift || 30) / 5) * 5));
   const [err, setErr] = useState("");
   const note = useNote(state.selected).split("\n")[0];
   const start = () => {
     setErr("");
-    if (dry) { try { localStorage.setItem("dryLift", String(lift)); } catch { /* storage unavailable */ } }
-    return api.put("start", dry ? { dry_lift: Math.min(100, Math.max(5, +lift || 30)) } : undefined)
+    if (dry) { try { localStorage.setItem("dryLift", String(liftMm)); } catch { /* storage unavailable */ } }
+    return api.put("start", dry ? { dry_lift: liftMm } : undefined)
       .then(() => setDry(false))
       .catch((e) => setErr(String(e.message || e).replace(/^\{"message":"|","code":\d+\}$/g, "")));
   };
@@ -126,13 +128,11 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
             <input type="checkbox" checked={dry} onChange={(e) => setDry(e.target.checked)} /> Dry run
           </label>
           {dry && (
-            <span className="dry-lift">
-              <label htmlFor="dry-lift">lift</label>
-              <input id="dry-lift" type="text" inputMode="decimal" autoComplete="off" value={lift}
-                onFocus={(e) => e.target.select()}
-                onChange={(e) => setLift(e.target.value.replace(/[^0-9.]/g, ""))}
-                onBlur={() => setLift((v) => String(Math.min(100, Math.max(5, +v || 30))))} />
-              <span>mm</span>
+            <span className="dry-lift" role="group" aria-label="Dry run lift">
+              lift
+              <button type="button" aria-label="Lift 5 mm less" disabled={liftMm <= 5} onClick={() => setLift(String(Math.max(5, liftMm - 5)))}>−</button>
+              <output id="dry-lift" aria-live="polite">{liftMm} mm</output>
+              <button type="button" aria-label="Lift 5 mm more" disabled={liftMm >= 100} onClick={() => setLift(String(Math.min(100, liftMm + 5)))}>+</button>
             </span>
           )}
         </div>
