@@ -8,6 +8,7 @@ import { useCheckpoint } from "./checkpoint.js";
 import { useProgram, parseToolChanges } from "./toolplan.js";
 import Workspace from "./Workspace.jsx";
 import ProbeDialog from "./ProbeDialog.jsx";
+import MeasureStock from "./MeasureStock.jsx";
 
 export default function ControlPage({ ctl, cfg, mach, metric }) {
   const { state, send, subscribe, logs, clearLogs } = ctl;
@@ -46,7 +47,10 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
       <section className="band work-band">
         <Workspace lines={lines} state={state} path={path} pathBusy={pathBusy} send={send} mach={mach} cfg={cfg} idle={idle && !estopped} logs={logs} clearLogs={clearLogs} />
       </section>
-      {probe && cfg.config && (
+      {probe === "measure" && cfg.config && (
+        <MeasureStock config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
+      )}
+      {probe && probe !== "measure" && cfg.config && (
         <ProbeDialog type={probe} config={cfg.config} state={state} send={send} subscribe={subscribe} rotary={rotary} metric={metric} onClose={() => setProbe(null)} />
       )}
     </main>

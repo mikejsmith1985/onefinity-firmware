@@ -244,6 +244,9 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
 .hist { list-style: none; padding: 0; margin: 8px 0; } .hist button { width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--rule); border-radius: 0; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; }
 .cam { position: relative; display: inline-block; max-width: 100%; } .cam img { display: block; max-width: 100%; border-radius: 6px; border: 1px solid var(--rule); }
 .cross { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(var(--yellow), var(--yellow)) center / 1px 100% no-repeat, linear-gradient(var(--yellow), var(--yellow)) center / 100% 1px no-repeat; opacity: .8; }
+.measure-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 16px; margin: 8px 0; }
+.probe-main .check { display: flex; gap: 10px; align-items: center; margin: 12px 0; }
+.probe-main ul.err { margin: 10px 0; padding-left: 18px; }
 .cam-layout { display: flex; flex-wrap: wrap; align-items: flex-start; }
 .cam-layout > .cam, .cam-layout > .empty { flex: 1 1 360px; margin: 0 16px 12px 0; }
 .align { flex: 1 1 320px; max-width: 520px; }
