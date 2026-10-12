@@ -7,6 +7,8 @@
 //   tool-d: 3.175                            tool diameter in mm
 //   probe-corner: back-left                  corner the work zero must be probed on
 //                                            (front-left, front-right, back-left, back-right, center)
+//   tool-geom: flat 6.35  /  v 6.35 90       tool the Depth view simulates: shape, diameter in mm and,
+//                                            for a V-bit or chamfer mill, the included angle
 // Comments are ignored by the planner, so a program with a sheet runs exactly like any other.
 
 const LINE = /^\s*\(\s*SETUP\s+([A-Za-z0-9-]+)\s*:\s*(.*?)\s*\)\s*$/;
@@ -14,7 +16,7 @@ const LABELS = {
   job: "Job", zero: "Work zero", plate: "Plate", probe: "Probe", part: "Part position", tool: "Tool", router: "Router",
   z0: "Z zero", feeds: "Feeds", time: "Run time", chamfer: "Chamfer", before: "Before you start", next: "Next",
 };
-const HIDDEN = new Set(["stock", "tool-d", "probe-corner"]);
+const HIDDEN = new Set(["stock", "tool-d", "probe-corner", "tool-geom"]);
 const HEADER_BYTES = 32768;
 
 const num = (s) => { const v = parseFloat(s); return Number.isFinite(v) ? v : null; };
@@ -24,6 +26,16 @@ function parseRange(text, axis) {
   if (!m) return null;
   const a = num(m[1]), b = num(m[2]);
   return a === null || b === null ? null : { min: Math.min(a, b), max: Math.max(a, b) };
+}
+
+// "flat 6.35" or "v 6.35 90" -> { type: "flat" | "v", dia, angle }. Null when it can't be read.
+export function parseToolGeom(text) {
+  const m = /^\s*(flat|v)\s+([\d.]+)(?:\s+([\d.]+))?\s*$/i.exec(text || "");
+  if (!m) return null;
+  const type = m[1].toLowerCase(), dia = num(m[2]), angle = m[3] ? num(m[3]) : null;
+  if (!(dia > 0)) return null;
+  if (type === "v" && !(angle > 0 && angle < 180)) return null;
+  return type === "v" ? { type, dia, angle } : { type, dia };
 }
 
 // Reads the SETUP lines out of the start of a program. Returns null when the program has no sheet.
@@ -42,6 +54,7 @@ export function parseSetup(text) {
   return {
     fields, stock: stock && stock.x && stock.y ? stock : null, toolD: raw["tool-d"] ? num(raw["tool-d"]) : null,
     corner: raw["probe-corner"] ? raw["probe-corner"].toLowerCase().trim() : null,
+    toolGeom: parseToolGeom(raw["tool-geom"]),
   };
 }
 
@@ -60,6 +73,12 @@ async function fetchProgram(file, all) {
   }
   reader.cancel().catch(() => {});
   return text;
+}
+
+// Reads only the sheet at the top of a program, without measuring the whole program.
+export async function readSetupHeader(file) {
+  if (!file) return null;
+  return parseSetup(await fetchProgram(file, false));
 }
 
 export async function readSetup(file) {
