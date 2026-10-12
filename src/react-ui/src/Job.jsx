@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { api } from "./controller.js";
 import { fmtTime } from "./axis.js";
 import { useNote } from "./notes.js";
@@ -42,12 +42,29 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
   };
   // Always-visible warning when the loaded program's zero corner or plate does not match what the controller knows.
   const [live, setLive] = useState([]);
+  // The probe record is saved after probing ends (when Done is pressed), after the offsets stop changing,
+  // so the check also re-runs when a new record is saved, and every few seconds while a warning shows.
+  const [probeTick, setProbeTick] = useState(0);
+  const sheetCache = useRef({ file: null, setup: undefined });
+  useEffect(() => {
+    const bump = () => setProbeTick((t) => t + 1);
+    window.addEventListener("next-store:probe", bump);
+    return () => window.removeEventListener("next-store:probe", bump);
+  }, []);
+  useEffect(() => {
+    if (!live.length) return undefined;
+    const t = setInterval(() => setProbeTick((n) => n + 1), 3000);
+    return () => clearInterval(t);
+  }, [live.length]);
   useEffect(() => {
     let gone = false;
     if (!state.selected) { setLive([]); return undefined; }
     (async () => {
       try {
-        const setup = await readSetup(state.selected);
+        // The sheet only changes with the program, so it is read once per file; the probe record is re-read every time.
+        const key = `${state.selected}|${state.selected_time || ""}`; // a re-uploaded file gets a new time
+        let setup = sheetCache.current.file === key ? sheetCache.current.setup : undefined;
+        if (setup === undefined) { setup = await readSetup(state.selected); sheetCache.current = { file: key, setup }; }
         if (!setup?.corner) { if (!gone) setLive([]); return; }
         const rec = await remoteGet("probe");
         const bad = [...probeChecks(setup, rec, state), ...stockChecks(setup, metric)].filter((c) => c.level !== "ok");
@@ -55,7 +72,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       } catch { if (!gone) setLive([]); }
     })();
     return () => { gone = true; };
-  }, [state.selected, state.offset_x, state.offset_y, state.offset_z, metric]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.selected, state.selected_time, state.offset_x, state.offset_y, state.offset_z, metric, probeTick]); // eslint-disable-line react-hooks/exhaustive-deps
   const [sheet, setSheet] = useState(null);
   const [sheetBusy, setSheetBusy] = useState(false);
   const tryStart = async () => {
