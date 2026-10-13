@@ -113,6 +113,8 @@ button.depth-src { min-height: 40px; padding: 0 12px; }
 .code { margin: 0; flex: 1; overflow: auto; font: 500 14px/1.6 ui-monospace, Menlo, Consolas, monospace; background: var(--bed); border: 1px solid var(--rule); border-radius: 6px; padding: 8px 0; max-height: 60vh; }
 .code div { padding: 0 12px; white-space: pre; } .code span { display: inline-block; width: 4ch; margin-right: 14px; text-align: right; color: var(--dim); }
 .code .now { background: rgba(79,140,255,.22); box-shadow: inset 3px 0 var(--blue); }
+.code .tag-marker { color: var(--dim); font-style: italic; } .code .tag-marker span { font-style: normal; }
+.swatches { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 8px 0 0; font: 500 13px ui-monospace, Menlo, Consolas, monospace; }
 
 .files-head { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; } .err { color: #ff8a82; }
 .files ul { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }

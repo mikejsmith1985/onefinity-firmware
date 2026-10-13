@@ -4,6 +4,8 @@ import { Field, Page, Group, SubTabs, Modal } from "./ui.jsx";
 import { Io } from "./io.jsx";
 import { status_to_string } from "./modbus.js";
 import { VfdNotes, VfdProgram } from "./VfdRegs.jsx";
+import { getPrefs, setPrefs } from "./checkpoint.js";
+import { COLORS } from "./gcodeColor.js";
 
 const get = (o, p) => p.reduce((a, k) => (a == null ? a : a[k]), o);
 const set = (o, p, v) => { let t = o; for (const k of p.slice(0, -1)) t = t[k]; t[p[p.length - 1]] = v; };
@@ -47,10 +49,26 @@ export function Settings({ cfg, metric }) {
             <h3>Probe block for rotary</h3>
             {Object.keys(t["probe-rotary"]).filter((k) => k !== "probe-diameter").map((k) => <React.Fragment key={k}>{B(["probe-rotary", k])}</React.Fragment>)}
           </Group>
-          <Group title="G-code">{Object.keys(t.gcode).map((k) => <React.Fragment key={k}>{B(["gcode", k])}</React.Fragment>)}</Group>
+          <Group title="G-code">{Object.keys(t.gcode).map((k) => <React.Fragment key={k}>{B(["gcode", k])}</React.Fragment>)}<GcodeColors /></Group>
         </div>
       </div>
     </Page>
+  );
+}
+
+// Colored comment lines in the G-code tab (see gcodeColor.js). Saved on the controller, so every screen agrees.
+function GcodeColors() {
+  const [on, setOn] = useState(null);
+  useEffect(() => { getPrefs().then((p) => setOn(!!p.gcodeColors)); }, []);
+  const flip = (v) => { setOn(v); setPrefs({ gcodeColors: v }); };
+  const shown = ["blue", "red", "green", "yellow", "orange", "purple", "cyan", "pink", "gray", "white"];
+  return (
+    <>
+      <h3>Colored comments</h3>
+      <label className="check"><input type="checkbox" className="switch" checked={!!on} disabled={on === null} onChange={(e) => flip(e.target.checked)} /> Color tagged comment lines in the G-code tab</label>
+      <p className="note">Start a comment with <code>@</code> and a color to color that line, for example <code>(@blue Material: 24 x 12 x 0.75)</code> or <code>; @red Bit: 1/4" downcut</code>. The tag is hidden on screen. A tag on its own line, such as <code>(@green)</code>, colors every line after it until <code>(@end)</code>. Hex colors like <code>(@#ff8800 ...)</code> also work. Tags are ordinary comments, so tagged programs run the same with this off or on any other controller.</p>
+      <div className="swatches">{shown.map((c) => <span key={c} style={{ color: COLORS[c] }}>@{c}</span>)}</div>
+    </>
   );
 }
 
