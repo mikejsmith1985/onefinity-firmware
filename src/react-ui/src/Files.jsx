@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from "react";
 import { api, DELETE_LIST_PREFIX, MACRO_PREFIX } from "./controller.js";
 import { Modal, Confirm } from "./ui.jsx";
+import { isEnter } from "./vkbd.js";
 
 const OK_EXT = ["nc", "ngc", "gcode", "gc"];
 
@@ -78,8 +79,8 @@ export default function Files({ state, cfg, idle }) {
     } catch (e) { setErr(e.message); }
   };
 
-  const addFolder = async () => {
-    const n = newName.trim();
+  const addFolder = async (raw = newName) => {
+    const n = String(raw).trim();
     if (!n) return;
     if (folders.includes(n)) { setErr("A folder with that name already exists."); return; }
     setDlg(null); setNewName("");
@@ -141,8 +142,8 @@ export default function Files({ state, cfg, idle }) {
       </ul>
 
       {dlg === "newfolder" && (
-        <Modal title="New folder" onClose={() => setDlg(null)} actions={<><button onClick={() => setDlg(null)}>Cancel</button><button className="primary" disabled={!newName.trim()} onClick={addFolder}>Create</button></>}>
-          <label className="stack">Folder name<input data-autofocus maxLength={15} value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addFolder()} /></label>
+        <Modal title="New folder" onClose={() => setDlg(null)} actions={<><button onClick={() => setDlg(null)}>Cancel</button><button className="primary" disabled={!newName.trim()} onClick={() => addFolder()}>Create</button></>}>
+          <label className="stack">Folder name<input data-autofocus maxLength={15} value={newName} autoComplete="off" onChange={(e) => setNewName(e.target.value)} onKeyUp={(e) => { if (isEnter(e)) addFolder(e.currentTarget.value); }} /></label>
         </Modal>
       )}
       {dlg === "delfolder" && (

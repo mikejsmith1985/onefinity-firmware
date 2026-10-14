@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Modal } from "./ui.jsx";
+import { NumInput, Modal } from "./ui.jsx";
 import { api } from "./controller.js";
 import { remotePut } from "./store.js";
 import { getPrefs, setPrefs } from "./checkpoint.js";
@@ -137,8 +137,8 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
 
   const num = (k, label, help) => (
     <label className="stack">{label}
-      <input type="number" step="any" value={p[k] === undefined ? "" : (k === "travel" ? p[k] : +(p[k] / u).toFixed(4))}
-        onChange={(e) => edit(k, k === "travel" ? +e.target.value : +e.target.value * u)} />
+      <NumInput digits={4} value={p[k] === undefined ? "" : (k === "travel" ? p[k] : p[k] / u)}
+        onChange={(n) => edit(k, k === "travel" ? n : n * u)} />
       {help && <small>{help}</small>}
     </label>
   );
@@ -162,7 +162,7 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
             <p>Clamp a block you know the exact width of (a 1-2-3 block, a gauge block, or a part you measured with calipers) with its ends free. The machine touches both ends and works out the effective size of the stylus ball. Work zero is not changed.</p>
             <div className="stack">
               <label className="stack">Exact X width of the block ({unit})
-                <input type="number" step="any" data-autofocus value={form.trueW} onChange={(e) => setForm((f) => ({ ...f, trueW: e.target.value }))} /></label>
+                <input type="text" inputMode="decimal" autoComplete="off" data-autofocus value={form.trueW} onChange={(e) => setForm((f) => ({ ...f, trueW: e.target.value }))} /></label>
             </div>
             <p><button onClick={() => setCalib(false)}>Back to measuring</button></p>
           </> : <>
@@ -170,9 +170,9 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
             {hint && <p className="dim">{hint}</p>}
             <div className="measure-grid">
               <label className="stack">Approximate X size ({unit})
-                <input type="number" step="any" value={form.w} onChange={(e) => setForm((f) => ({ ...f, w: e.target.value }))} /></label>
+                <input type="text" inputMode="decimal" autoComplete="off" value={form.w} onChange={(e) => setForm((f) => ({ ...f, w: e.target.value }))} /></label>
               {p.probeY && <label className="stack">Approximate Y size ({unit})
-                <input type="number" step="any" value={form.l} onChange={(e) => setForm((f) => ({ ...f, l: e.target.value }))} /></label>}
+                <input type="text" inputMode="decimal" autoComplete="off" value={form.l} onChange={(e) => setForm((f) => ({ ...f, l: e.target.value }))} /></label>}
             </div>
             <small className="dim">Within {show(p.margin, 0)} {unit} is close enough.</small>
             <label className="check"><input type="checkbox" checked={!!p.probeY} onChange={(e) => { const on = e.target.checked; setP((x) => ({ ...x, probeY: on, origin: on ? "center" : "center-x" })); }} /> Also touch the front and back faces (only when they stand above the vise jaws and clamps)</label>

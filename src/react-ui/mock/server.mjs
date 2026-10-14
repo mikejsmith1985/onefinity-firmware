@@ -4,7 +4,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path_ from "node:path";
 import { fileURLToPath } from "node:url";
-const NEXT = path_.resolve(path_.dirname(fileURLToPath(import.meta.url)), "../../resources/next");
+const NEXT = process.env.MOCK_UI_DIR || path_.resolve(path_.dirname(fileURLToPath(import.meta.url)), "../../resources/next");
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".woff2": "font/woff2", ".woff": "font/woff" };
 import { WebSocketServer } from "ws";
 
@@ -97,7 +97,9 @@ function run(dryLift = 0) {
     i++;
   }, 400);
 }
+const mdiLog = [];
 function mdi(text) {
+  mdiLog.push(text);
   // Probe input: pt 1 = normally open (touched reads 0), 2 = normally closed (touched reads 1)
   const rest = state.pt === 2 ? 0 : 1;
   if (text === "mock:touch") { broadcast({ pw: 1 - rest }); setTimeout(() => broadcast({ pw: rest }), 300); return; }
@@ -216,6 +218,7 @@ const server = http.createServer((req, res) => {
   }
   if (p === "/api/jog") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { jogLog.push(b); json(res, "ok"); }); return; }
   if (p === "/api/jogs") return json(res, jogLog);
+  if (p === "/api/mdis") return json(res, mdiLog);
   if (p === "/api/start") {
     let body = "";
     req.on("data", (c) => { body += c; });
@@ -251,4 +254,7 @@ wss.on("connection", (ws) => {
 });
 setInterval(() => { for (const c of wss.clients) if (c.readyState === 1) c.send(JSON.stringify({ heartbeat: 1 })); }, 3000);
 
+// MOCK_CHATTER=1: send a small status update every 200 ms, like a real controller does while idle,
+// so the UI re-renders while you type (needed to reproduce on-screen keyboard problems).
+if (process.env.MOCK_CHATTER) setInterval(() => broadcast({ rpi_temp: 45 + Math.random() }), 200);
 server.listen(PORT, () => console.log(`mock controller on :${PORT}`));

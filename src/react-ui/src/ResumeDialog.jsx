@@ -62,8 +62,8 @@ export default function ResumeDialog({ cp, state, config, metric, onClose }) {
       </ol>
       {prefs && (
         <div className="rform">
-          <label>Spindle spin-up wait (seconds)<input type="number" min="0" max="120" value={prefs.spinup} onChange={(e) => edit("spinup", e.target.value)} /></label>
-          <label>Plunge speed (mm/min)<input type="number" min="10" max="5000" value={prefs.plunge} onChange={(e) => edit("plunge", e.target.value)} /></label>
+          <label>Spindle spin-up wait (seconds)<input type="text" inputMode="numeric" autoComplete="off" value={prefs.spinup} onChange={(e) => edit("spinup", e.target.value)} /></label>
+          <label>Plunge speed (mm/min)<input type="text" inputMode="numeric" autoComplete="off" value={prefs.plunge} onChange={(e) => edit("plunge", e.target.value)} /></label>
           <label className="check"><input type="checkbox" checked={!!prefs.pause} onChange={(e) => edit("pause", e.target.checked)} /> Pause over the start point so I can check it</label>
         </div>
       )}

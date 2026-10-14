@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { NumInput } from "./ui.jsx";
 import { makeGrid, makeTool, run } from "./sim.js";
 import { readSetupHeader } from "./setup.js";
 
@@ -153,12 +154,12 @@ export default function DepthView({ path, busy: pathBusy, file }) {
   return (
     <div className="depth">
       <div className="depth-tools">
-        <label>Tool diameter<input type="number" step="0.001" min="0.1" value={dia} onChange={(e) => edit(setDia)(parseFloat(e.target.value) || 0)} /><em>mm</em></label>
+        <label>Tool diameter<NumInput min={0.1} max={100} value={dia} onChange={edit(setDia)} /><em>mm</em></label>
         <label>Shape
           <select value={type} onChange={(e) => edit(setType)(e.target.value)}><option value="flat">Flat end mill</option><option value="v">V-bit</option></select>
         </label>
-        {type === "v" && <label>Angle<input type="number" min="10" max="150" value={vAngle} onChange={(e) => edit(setVAngle)(parseFloat(e.target.value) || 60)} /><em>°</em></label>}
-        <label>Stock top at Z<input type="number" step="0.1" value={stockTop} onChange={(e) => edit(setStockTop)(parseFloat(e.target.value) || 0)} /><em>mm</em></label>
+        {type === "v" && <label>Angle<NumInput min={10} max={150} value={vAngle} onChange={edit(setVAngle)} /><em>°</em></label>}
+        <label>Stock top at Z<NumInput value={stockTop} onChange={edit(setStockTop)} /><em>mm</em></label>
         {sheetTool && !manual && <span className="depth-src">Tool from setup sheet</span>}
         {sheetTool && manual && <button className="depth-src" onClick={() => { applyTool(sheetTool); setManual(false); }}>Use setup sheet tool</button>}
         {!sheetTool && ready === file && file && <span className="depth-src muted">No tool in this program's setup sheet. Set it here.</span>}

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Modal } from "./ui.jsx";
+import { NumInput, Modal } from "./ui.jsx";
 import { api } from "./controller.js";
 import { computeAxis } from "./axis.js";
 import { getPrefs, setPrefs } from "./checkpoint.js";
@@ -113,7 +113,7 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
         <button className="quiet" onClick={() => setAdv((a) => !a)}>{adv ? "Hide" : "Show"} details</button>
         {adv && <div className="measure-grid">
           <label className="stack">Clearance above the saved height ({unit})
-            <input type="number" step="any" value={+(s.clear / u).toFixed(3)} onChange={(e) => update((x) => ({ ...x, clear: +e.target.value * u }))} />
+            <NumInput digits={3} min={0} value={s.clear / u} onChange={(n) => update((x) => ({ ...x, clear: n * u }))} />
             <small>How much longer a new tool can be than the one used to save the position.</small></label>
           {located && <p className="dim">Setter at machine X {fmt(s.x)}, Y {fmt(s.y)}, Z {fmt(s.z)} {unit}.{s.ref ? ` Reference ${fmt(s.ref.ref)} ${unit}.` : ""}</p>}
         </div>}
