@@ -41,8 +41,6 @@ export default function App() {
   const cfg = useConfig(state);
   const [route, setRoute] = useState(parseHash());
   const [power, setPower] = useState(false);
-  const [askHome, setAskHome] = useState(false);
-  const [homeAsked, setHomeAsked] = useState(false);
   const [errSeen, setErrSeen] = useState(0);
   const ver = useLatestVersion(cfg);
 
@@ -54,13 +52,16 @@ export default function App() {
   const tone = TONE[mach] || "idle";
   const estopped = mach === "ESTOPPED";
 
-  // Offer to home once, when the machine is idle and an axis isn't homed.
-  useEffect(() => {
-    if (homeAsked || !cfg.config || mach !== "READY" || state.cycle !== "idle") return;
-    const axes = ["x", "y", "z", "a"].map((a) => computeAxis(state, cfg.config, a, metric)).filter((a) => a.enabled);
-    if (axes.length && axes.some((a) => !a.homed)) setAskHome(true);
-    setHomeAsked(true);
-  }, [homeAsked, cfg.config, mach, state.cycle]);
+  // Offer to home after a restart. The question belongs to the machine, not to this screen: the controller
+  // keeps one answer for every browser (state.home_prompt, reset when it restarts), so answering it on the PC
+  // closes it at the machine too. It also closes everywhere as soon as homing starts or every axis is homed,
+  // and isn't asked again until the next restart (a later Unhome doesn't bring it back).
+  const homeAxes = cfg.config ? ["x", "y", "z", "a"].map((a) => computeAxis(state, cfg.config, a, metric)).filter((a) => a.enabled) : [];
+  const allHomed = homeAxes.length > 0 && homeAxes.every((a) => a.homed);
+  const homeDone = state.home_prompt === "done";
+  const homePromptDone = useCallback(() => api.put("home-prompt").catch(() => {}), []);
+  useEffect(() => { if (allHomed && !homeDone) homePromptDone(); }, [allHomed, homeDone, homePromptDone]);
+  const askHome = !homeDone && !allHomed && homeAxes.length > 0 && mach === "READY" && state.cycle === "idle";
 
   // G-code messages (MSG, M0 pauses) need an answer before the program goes on.
   const popups = (state.messages || []).filter((m) => !/^#/.test(m.text));
@@ -129,7 +130,7 @@ export default function App() {
         </Modal>
       )}
       {askHome && (
-        <Confirm title="Home the machine?" confirmLabel="Home" onCancel={() => setAskHome(false)} onConfirm={() => { setAskHome(false); api.put("home").catch(() => {}); }}>
+        <Confirm title="Home the machine?" confirmLabel="Home" onCancel={homePromptDone} onConfirm={() => { homePromptDone(); api.put("home").catch(() => {}); }}>
           <p>One or more axes aren't homed yet. Homing moves the machine to its limit switches. Keep hands and tools clear.</p>
         </Confirm>
       )}

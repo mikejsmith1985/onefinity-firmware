@@ -73,6 +73,15 @@ class LogHandler(bbctrl.RequestHandler):
         self.set_header('Content-Type', 'text/plain')
 
 
+class HomePromptHandler(bbctrl.APIHandler):
+    # The "Home the machine?" question after a restart belongs to the
+    # machine, not to one browser.  Once anyone answers it (or the machine is
+    # homed), every connected screen closes it and it isn't asked again until
+    # the controller restarts.  Kept in the live state, so it resets on restart.
+    def put_ok(self):
+        self.get_ctrl().state.set('home_prompt', 'done')
+
+
 class MessageAckHandler(bbctrl.APIHandler):
     def put_ok(self, id):
         self.get_ctrl().state.ack_message(int(id))
@@ -1032,6 +1041,7 @@ class Web(tornado.web.Application):
             (r'/api/camera', CameraHandler),
             (r'/api/log', LogHandler),
             (r'/api/message/(\d+)/ack', MessageAckHandler),
+            (r'/api/home-prompt', HomePromptHandler),
             (r'/api/bugreport', BugReportHandler),
             (r'/api/reboot', RebootHandler),
             (r'/api/shutdown', ShutdownHandler),
