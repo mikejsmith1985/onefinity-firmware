@@ -404,6 +404,37 @@ class Resume(object):
         return info
 
 
+    # Put the work zero back where it was when the job stopped -------------
+    # The checkpoint keeps the work offsets (machine position of work zero) at
+    # the moment the job was interrupted.  On a homed machine they are valid
+    # again, so the zero can be restored without probing the part, which is
+    # often impossible once it is half cut.  Z is only right if the cutter has
+    # not been moved in the collet, so the caller chooses the axes.
+    def restore_zero(self, axes):
+        cp = self.ctrl.checkpoint
+        rec = cp.get() if cp else None
+        if not rec or not rec.get('file') or rec.get('status') == 'dismissed':
+            raise ResumeError('There is no interrupted job to take the zero from.')
+        if self.ctrl.state.get('cycle') != 'idle':
+            raise ResumeError('Wait until the machine is idle.')
+        self._check_homed()
+        saved = rec.get('offset') or {}
+        axes = [a for a in (axes or 'xyz') if a in 'xyz' and saved.get(a) is not None]
+        if not axes: raise ResumeError('The interrupted job has no saved zero.')
+
+        s = self.ctrl.state
+        scale = 1.0 if s.get('metric', True) else 1 / 25.4   # G92 takes program units
+        words = []
+        for a in axes:
+            pos = float(s.get(a + 'p', 0) or 0)                # machine position, mm
+            words.append('%s%s' % (a.upper(), fmt((pos - float(saved[a])) * scale)))
+        cmd = 'G92 ' + ' '.join(words)
+        self.log.info('Restoring the interrupted job\'s zero: %s' % cmd)
+        self.ctrl.mach.mdi(cmd)
+        return {'axes': axes, 'cmd': cmd,
+                'offset': dict((a, float(saved[a])) for a in axes)}
+
+
     def _offset_check(self, rec):
         s = self.ctrl.state
         tol = 0.05 if s.get('metric') else 0.002

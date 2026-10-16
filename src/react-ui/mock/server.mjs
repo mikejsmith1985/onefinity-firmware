@@ -31,7 +31,9 @@ const state = {
 // MOCK_START_UNHOMED=1 starts with no axis homed (as after a controller restart).
 if (process.env.MOCK_START_UNHOMED) for (const i of [0, 1, 2, 3]) state[`${i}homed`] = false;
 const jogLog = [];
-const store = { checkpoint: process.env.MOCK_INTERRUPTED ? { v: 1, seq: 5, t: Math.floor(Date.now() / 1000) - 3600, status: "running", file: "alternator_arm.nc", nlines: 12840, line: 4212 } : null };
+const store = { checkpoint: process.env.MOCK_INTERRUPTED ? { v: 1, seq: 5, t: Math.floor(Date.now() / 1000) - 3600, status: "running", file: "alternator_arm.nc", nlines: 12840, line: 4212, offset: { x: 163.142, y: 217.435, z: -58.989 } } : null };
+// MOCK_OFFSET=1: the zero has changed since the job stopped (as after a restart restored an older zero)
+if (process.env.MOCK_OFFSET) Object.assign(state, { offset_x: 188.322, offset_y: 146.319, offset_z: -55.036 });
 const macros = [
   { name: "Dry Run On", color: "#4f8cff", file_name: "DryRun_On.nc" },
   { name: "Dry Run Off", color: "#4f8cff", file_name: "DryRun_Off.nc" },
@@ -197,7 +199,13 @@ const server = http.createServer((req, res) => {
       const q = JSON.parse(b || "{}");
       if (q.action === "build") {
         if (process.env.MOCK_UNHOMED) { res.writeHead(400, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ message: "Home the machine first.", code: 400 })); }
-        return json(res, { file: "resume-alternator_arm.nc", source: "alternator_arm.nc", line: 4212, line_text: "G1 X61.25 Y18.4", header_lines: 20, tool: 2, spindle: "M3", speed: 17000, units: "mm", wcs: "G54", pos: { x: 61.25, y: 12.9, z: -6 }, spinup: q.opts.spinup, plunge: q.opts.plunge, pause: q.opts.pause, warnings: [], offset_ok: !process.env.MOCK_OFFSET, offset_delta: process.env.MOCK_OFFSET ? { x: 0.4 } : {} });
+        return json(res, { file: "resume-alternator_arm.nc", source: "alternator_arm.nc", line: 4212, line_text: "G1 X61.25 Y18.4", header_lines: 20, tool: 2, spindle: "M3", speed: 17000, units: "mm", wcs: "G54", pos: { x: 61.25, y: 12.9, z: -6 }, spinup: q.opts.spinup, plunge: q.opts.plunge, pause: q.opts.pause, warnings: [], ...(() => { const sv = store.checkpoint?.offset || {}; const d = {}; for (const a of "xyz") if (sv[a] !== undefined && Math.abs((state["offset_" + a] || 0) - sv[a]) > 0.05) d[a] = +((state["offset_" + a] || 0) - sv[a]).toFixed(4); return { offset_ok: !Object.keys(d).length, offset_delta: d }; })() });
+      }
+      if (q.action === "restore_zero") {
+        const sv = store.checkpoint?.offset || {}, axes = [...(q.axes || "xyz")].filter((a) => sv[a] !== undefined), d = {};
+        for (const a of axes) d["offset_" + a] = sv[a];
+        broadcast(d);
+        return json(res, { axes, cmd: "G92 (mock)", offset: d });
       }
       if (q.action === "park") {
         clearInterval(timer); broadcast({ park: "parking" });

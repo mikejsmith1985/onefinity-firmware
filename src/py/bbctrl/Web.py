@@ -587,6 +587,8 @@ class ResumeHandler(bbctrl.APIHandler):
             elif action == 'park':
                 res.park()
                 self.write_json('ok')
+            elif action == 'restore_zero':
+                self.write_json(res.restore_zero(self.json.get('axes') or 'xyz'))
             elif action == 'clear':
                 res.clear_park()
                 self.write_json('ok')

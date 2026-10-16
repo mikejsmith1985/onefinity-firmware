@@ -167,6 +167,34 @@ class Mach(Comm):
                 and not self.planner.is_busy() and not super().is_active()):
             self.planner.position_change()
             self._set_cycle('idle')
+            # Offsets arrive a moment after the cycle ends
+            self.ctrl.ioloop.call_later(1.5, self._remember_offsets)
+
+
+    # After a restart the controller puts the work zero back when the machine
+    # is homed, from axes.offset_* in the config.  The stock firmware only
+    # wrote those when a Zero button was used, so a zero set by probing (or a
+    # program) was lost and an older one came back.  Keep them in step with
+    # the live zero whenever the machine settles idle with that axis homed.
+    def _remember_offsets(self):
+        try:
+            state = self.ctrl.state
+            if self._get_cycle() != 'idle': return
+            vals = {}
+            for axis in 'xyz':
+                if not state.is_axis_homed(axis): continue
+                off = state.get('offset_' + axis)
+                # 0 means "no zero set" to the restore after homing (it only
+                # restores onto 0), and is what every axis reads just after a
+                # restart, before that restore has run.  Never store it.
+                if off is None or abs(float(off)) < 1e-9: continue
+                cur = self.ctrl.config.get('offset_' + axis)
+                if cur is None or abs(float(cur) - float(off)) > 0.0005:
+                    vals['offset_' + axis] = float(off)
+            if vals:
+                self.ctrl.config.set('axes', vals)
+                self.log.info('Remembered work zero for restart: %s' % vals)
+        except Exception: self.log.exception('Could not remember the work zero')
 
 
     def _update(self, update):
@@ -190,6 +218,7 @@ class Mach(Comm):
             not super().is_active()):
             self.planner.position_change()
             self._set_cycle('idle')
+            self.ctrl.ioloop.call_later(1.5, self._remember_offsets)
 
         # Planner stop
         if state == 'READY' and self.stopping:

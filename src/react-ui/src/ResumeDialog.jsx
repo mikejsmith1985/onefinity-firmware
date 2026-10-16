@@ -19,6 +19,38 @@ export default function ResumeDialog({ cp, state, config, metric, onClose }) {
   const idle = state.cycle === "idle";
   const edit = (k, v) => setP((p) => ({ ...p, [k]: v }));
 
+  // Work zero: the checkpoint saved where it was when the job stopped. On a homed machine that is valid again,
+  // so it can be put back without probing a part that is already half cut.
+  const saved = cp.offset || {};
+  const tol = 0.05; // mm (offsets are mm in both unit modes)
+  const diff = ["x", "y", "z"].filter((a) => typeof saved[a] === "number" && typeof state[`offset_${a}`] === "number" && Math.abs(state[`offset_${a}`] - saved[a]) > tol);
+  const [collet, setCollet] = useState(false);
+  const [zbusy, setZbusy] = useState("");
+  const [zmsg, setZmsg] = useState(null);
+  const restore = async (axes, rebuild) => {
+    setZbusy(axes); setZmsg(null); setErr("");
+    try {
+      const r = await api.put("next-resume", { action: "restore_zero", axes });
+      setZmsg({ ok: true, text: `Work zero put back on ${r.axes.map((a) => a.toUpperCase()).join(", ")} from when the job stopped.${axes.includes("z") ? "" : " Set Z zero again before running."}` });
+      if (rebuild) { await new Promise((ok) => setTimeout(ok, 1500)); await build(); }
+    } catch (e) { setZmsg({ ok: false, text: errText(e) }); }
+    setZbusy("");
+  };
+  const fmtOff = (v) => (metric ? `${v.toFixed(3)} mm` : `${(v / 25.4).toFixed(4)} in`);
+  const zeroBox = (rebuild) => (
+    <div className="warnbox">
+      <p>Your work zero has changed since the job stopped ({diff.map((a) => `${a.toUpperCase()} by ${fmtOff(state[`offset_${a}`] - saved[a])}`).join(", ")}). Running now would cut in the wrong place.</p>
+      <p>The zero from when it stopped is saved, and it is valid again on a homed machine, so you can put it back without probing the part.</p>
+      <label className="check"><input type="checkbox" checked={collet} onChange={(e) => setCollet(e.target.checked)} /> The cutter hasn't been taken out of the collet or moved in it since the job stopped</label>
+      <div className="rbtns">
+        <button className="primary" disabled={!!zbusy || !homed || !idle || !collet} onClick={() => restore("xyz", rebuild)}>{zbusy === "xyz" ? "Restoring…" : "Put back X, Y and Z"}</button>
+        <button disabled={!!zbusy || !homed || !idle} onClick={() => restore("xy", rebuild)}>{zbusy === "xy" ? "Restoring…" : "Put back X and Y only"}</button>
+      </div>
+      <small>Use X and Y only if the cutter was changed or re-seated: then set Z zero again on an uncut part of the stock top before running.</small>
+    </div>
+  );
+  const zeroMsg = zmsg && <p className={zmsg.ok ? "okbox" : "warnbox"} role="status">{zmsg.text}</p>;
+
   const build = async () => {
     setBusy(true); setErr("");
     try {
@@ -42,7 +74,8 @@ export default function ResumeDialog({ cp, state, config, metric, onClose }) {
           <Row k="Spindle" v={info.spindle === "off" ? "off at this point" : `${info.spindle} ${Math.round(info.speed || 0)} rpm, ${info.spinup} s to reach speed`} />
           <Row k="Before cutting" v={info.pause ? "Z lifts to the top, the tool moves over the start point and the job pauses so you can check it" : "Z lifts to the top and the tool moves over the start point"} />
         </dl>
-        {!info.offset_ok && <p className="warnbox">Your work zero is not where it was when the job was interrupted ({Object.entries(info.offset_delta).map(([a, d]) => `${a.toUpperCase()} off by ${d}`).join(", ")}). Set the zero again before running, or the cut will be in the wrong place.</p>}
+        {!info.offset_ok && (diff.length ? zeroBox(true) : <p className="warnbox">Your work zero is not where it was when the job was interrupted ({Object.entries(info.offset_delta).map(([a, d]) => `${a.toUpperCase()} off by ${d}`).join(", ")}). Set the zero again before running, or the cut will be in the wrong place.</p>)}
+        {zeroMsg}
         {info.warnings.map((w, i) => <p key={i} className="warnbox">{w}</p>)}
         <p className="note">The tool is lowered slowly to the start point and assumes Z0 is the top of the stock. Resume is accurate to how repeatably the machine homes, so use it for roughing and pocketing, and check finishing passes.</p>
       </Modal>
@@ -58,8 +91,10 @@ export default function ResumeDialog({ cp, state, config, metric, onClose }) {
       <ol className="rsteps">
         <li className={homed ? "ok" : "todo"}>{homed ? "Machine is homed." : "Home the machine first (X, Y and Z). The saved point is only valid after homing."}</li>
         <li>Put the same tool back in the spindle{cp.tool ? <> (T{cp.tool})</> : null} and make sure the stock has not moved.</li>
-        <li>Work zero must be the same as before. It is restored when you home, and checked when the program is built.</li>
+        <li className={diff.length ? "todo" : "ok"}>{diff.length ? "Work zero has changed since the job stopped. Put it back below." : "Work zero is the same as when the job stopped."}</li>
       </ol>
+      {diff.length > 0 && homed && zeroBox(false)}
+      {zeroMsg}
       {prefs && (
         <div className="rform">
           <label>Spindle spin-up wait (seconds)<input type="text" inputMode="numeric" autoComplete="off" value={prefs.spinup} onChange={(e) => edit("spinup", e.target.value)} /></label>
