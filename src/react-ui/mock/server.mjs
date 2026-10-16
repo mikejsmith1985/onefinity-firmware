@@ -54,7 +54,9 @@ const TY = ["disabled","connect-write","max-freq-read","max-freq-fixed","freq-se
 state.mx = 1;
 config.full_version = "1.9.0"; config.macros = macros; config.settings = config.settings || {}; config.settings.units = "METRIC";
 state.macros = macros; state.macros_list = macros.map((m) => m.file_name); state.non_macros_list = state.files;
-state.gcode_list = { folders: [{ name: "Jobs", files: ["alternator_arm.nc"] }], files: ["fuel_filter_outline.nc", "tap_holes.nc"] };
+// Same shape as the real controller's config: folders with {file_name} entries. tap_holes.nc is in no folder
+// (as when a program is uploaded straight to /api/file) and must still show in the default folder.
+state.gcode_list = [{ name: "default", type: "folder", files: [{ file_name: "fuel_filter_outline.nc" }] }, { name: "Jobs", type: "folder", files: [{ file_name: "alternator_arm.nc" }] }];
 state.messages = [];
 state.log = [];
 

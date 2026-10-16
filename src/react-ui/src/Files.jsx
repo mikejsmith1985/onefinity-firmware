@@ -21,7 +21,13 @@ export default function Files({ state, cfg, idle }) {
   const folders = lists.filter((f) => f.type === "folder").map((f) => f.name);
   const inFolder = lists.find((f) => f.type === "folder" && f.name === folder);
   const all = (state.files || []).filter((f) => !f.startsWith(MACRO_PREFIX) && !macroFiles.includes(f));
-  const names = inFolder ? inFolder.files.map((f) => f.file_name).filter((n) => all.includes(n)) : lists.length ? [] : all;
+  // Programs that aren't listed in any folder (for example uploaded straight to /api/file from CAM or a script)
+  // show in the default folder, so nothing on the controller is ever hidden.
+  const filed = new Set(lists.filter((f) => f.type === "folder").flatMap((f) => (f.files || []).map((x) => x.file_name)));
+  const unfiled = all.filter((n) => !filed.has(n));
+  const names = folder === "default"
+    ? [...(inFolder ? inFolder.files.map((f) => f.file_name).filter((n) => all.includes(n)) : []), ...unfiled]
+    : inFolder ? inFolder.files.map((f) => f.file_name).filter((n) => all.includes(n)) : [];
 
   const shown = useMemo(() => {
     let l = names.filter((n) => n.toLowerCase().includes(q.toLowerCase()));
