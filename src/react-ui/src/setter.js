@@ -15,6 +15,7 @@
 export const SETTER_DEFAULTS = {
   clear: 30,     // start the touch this far above the saved height (covers longer tools)
   travel: 1000,  // mm/min for the guarded descent
+  keep: 30,      // keep-out radius around the saved center, mm (programs that pass closer are checked)
 };
 
 export const SETTER_FAILS = {
@@ -75,4 +76,91 @@ export function refStatus(rec, state) {
     return { ok: false, why: "moved" };
   }
   return { ok: true };
+}
+
+// Probe-to-cutter calibration.
+//
+// The 3D probe and a cutter don't trip the setter at the same point: a cutter
+// is rigid, so it trips when the setter plunger has pressed down by the
+// setter's own pre-travel, but the probe's stylus gives too, and whichever of
+// the two switches trips first ends the touch. The probe also tripped on the
+// stock top after its own pre-travel when Measure stock set Z zero. So a
+// reference taken with the probe is off from one taken with a cutter by a
+// small, fixed amount that depends on the probe and the setter.
+//
+// It is measured once: take a reference with the probe (Measure stock), then,
+// without moving the stock, Probe Z with a cutter and take a reference with
+// it. Both references are in their own tool's work Z, so the difference is the
+// correction, independent of either tool's length:
+//   corr = probe reference - cutter reference
+// Later probe references are stored already corrected (probe ref - corr).
+export const CORR_MAX = 5; // mm; anything bigger means the stock moved or a step was missed
+
+export function probeCorrection(probeRef, cutterRef) {
+  if (typeof probeRef !== "number" || typeof cutterRef !== "number") return { ok: false, why: "missing" };
+  const c = probeRef - cutterRef;
+  if (!(Math.abs(c) <= CORR_MAX)) return { ok: false, why: "big", c };
+  return { ok: true, c };
+}
+
+// The reference to store after the probe touched the setter (raw = work Z at the trip).
+export function probeRefValue(raw, setter) {
+  const c = typeof setter?.corr?.c === "number" ? setter.corr.c : 0;
+  return raw - c;
+}
+
+// Keep-out check: does the loaded program move over the tool setter low enough to hit it?
+//
+// positions: planner path, x,y,z triples in work mm (Float32Array).
+// setter: {x, y} machine mm, keep: keep-out radius mm (from the saved center).
+// off: {x, y} machine position of work zero. toolR: cutter radius mm.
+// topZ: work Z of the setter top (the current reference), or null when unknown,
+// in which case only X/Y is checked.
+export const SETTER_KEEP_DEFAULT = 30;
+export const SETTER_Z_MARGIN = 2;
+
+export function setterClash(positions, setter, off, toolR, topZ) {
+  if (!positions || positions.length < 6 || !setter || typeof setter.x !== "number") return null;
+  const cx = setter.x - (off.x || 0), cy = setter.y - (off.y || 0); // setter center in work X/Y
+  const reach = (setter.keep > 0 ? setter.keep : SETTER_KEEP_DEFAULT) + (toolR || 0);
+  const limitZ = typeof topZ === "number" ? topZ + SETTER_Z_MARGIN : Infinity;
+  let closest = Infinity, closestLow = Infinity, hits = 0, lowZ = Infinity;
+  const n = positions.length / 3;
+  for (let i = 1; i < n; i++) {
+    const a = (i - 1) * 3, b = i * 3;
+    const ax = positions[a], ay = positions[a + 1], az = positions[a + 2];
+    const bx = positions[b], by = positions[b + 1], bz = positions[b + 2];
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    let t = l2 > 0 ? ((cx - ax) * dx + (cy - ay) * dy) / l2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const d = Math.hypot(ax + t * dx - cx, ay + t * dy - cy);
+    const z = Math.min(az, bz); // lowest point of the segment, to be safe
+    if (d < closest) closest = d;
+    if (z < limitZ && d < closestLow) closestLow = d;
+    if (d < reach && z < limitZ) { hits++; lowZ = Math.min(lowZ, z); }
+  }
+  return { hits, closest, closestLow, lowZ, reach, center: { x: cx, y: cy }, zChecked: limitZ !== Infinity };
+}
+
+const len = (v, metric) => (metric ? `${v.toFixed(1)} mm` : `${(v / 25.4).toFixed(2)} in`);
+
+// Checklist items for the setter keep-out. path: {positions}, setter: saved setter prefs,
+// state: controller state, toolD: cutter diameter mm (from the setup sheet), metric.
+export function setterChecks(path, setter, state, toolD, metric = true) {
+  if (!setter || typeof setter.x !== "number") return [];
+  if (!path?.positions) return [{ level: "warn", name: "Tool setter", text: "The program's path isn't ready yet, so it wasn't checked against the tool setter." }];
+  const ref = refStatus(setter.ref, state);
+  const topZ = ref.ok ? setter.ref.ref : null;
+  const r = setterClash(path.positions, setter, { x: state.offset_x, y: state.offset_y }, (toolD || 0) / 2, topZ);
+  if (!r) return [];
+  const where = `the tool setter (within ${len(r.reach, metric)} of its center${toolD ? ", counting the cutter's radius" : ""})`;
+  if (r.hits && r.zChecked) {
+    return [{ level: "stop", name: "TOOL SETTER", text: `This program moves over ${where} as low as Z ${len(r.lowZ, metric)}. The setter's top is at about Z ${len(topZ, metric)}, so the cutter would hit it or pass within ${len(SETTER_Z_MARGIN, metric)} of it. Move the stock or the setter, then run again.` }];
+  }
+  if (r.hits) {
+    return [{ level: "warn", name: "Tool setter", text: `This program moves over ${where}. There's no current setter reference, so the controller can't tell whether those moves are high enough to clear it. Check by eye, or take a reference first.` }];
+  }
+  const near = r.zChecked ? r.closestLow : r.closest;
+  if (!isFinite(near)) return [{ level: "ok", name: "Tool setter", text: `Every move stays at least ${len(SETTER_Z_MARGIN, metric)} above the tool setter's top.` }];
+  return [{ level: "ok", name: "Tool setter", text: `The cutter stays ${len(Math.max(0, near - (toolD || 0) / 2), metric)} from the tool setter's center at the closest point${r.zChecked ? " below the setter's top" : ""}.` }];
 }

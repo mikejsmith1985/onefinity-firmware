@@ -8,7 +8,7 @@ const KEY = "next-skip-checklist";
 export const skipChecklist = () => { try { return localStorage.getItem(KEY) === "1"; } catch { return false; } };
 
 // Builds the list of checks. level: ok | warn | stop
-export function buildChecks(state, config, metric, file, setup = null, probeRec = null) {
+export function buildChecks(state, config, metric, file, setup = null, probeRec = null, extra = []) {
   const out = [];
   out.push({ level: file ? "ok" : "stop", name: "Program", text: file || "No program is selected." });
 
@@ -27,6 +27,7 @@ export function buildChecks(state, config, metric, file, setup = null, probeRec 
   // Setup sheet in the program: check the moves against the plate it describes
   out.push(...probeChecks(setup, probeRec, state));
   out.push(...stockChecks(setup, metric));
+  out.push(...extra);
 
   const zero = cs.map((c) => `${c.axis.toUpperCase()} ${fmtLen(c.off, metric)}`).join("   ");
   out.push({ level: "ok", name: "Work zero", text: `Machine position of zero: ${zero}. Confirm this is where you set it.` });

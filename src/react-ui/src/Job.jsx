@@ -7,6 +7,8 @@ import ParkDialog from "./ParkDialog.jsx";
 import Checklist, { buildChecks, skipChecklist, SheetView } from "./Checklist.jsx";
 import { readSetup, stockChecks, probeChecks } from "./setup.js";
 import { remoteGet } from "./store.js";
+import { getSetter } from "./ToolSetter.jsx";
+import { setterChecks } from "./setter.js";
 import { Modal } from "./ui.jsx";
 
 function Override({ label, kind, hint }) {
@@ -51,7 +53,8 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
   useEffect(() => {
     const bump = () => setProbeTick((t) => t + 1);
     window.addEventListener("next-store:probe", bump);
-    return () => window.removeEventListener("next-store:probe", bump);
+    window.addEventListener("next-store:prefs", bump); // tool setter position or reference changed
+    return () => { window.removeEventListener("next-store:probe", bump); window.removeEventListener("next-store:prefs", bump); };
   }, []);
   useEffect(() => {
     if (!live.length) return undefined;
@@ -67,14 +70,15 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         const key = `${state.selected}|${state.selected_time || ""}`; // a re-uploaded file gets a new time
         let setup = sheetCache.current.file === key ? sheetCache.current.setup : undefined;
         if (setup === undefined) { setup = await readSetup(state.selected); sheetCache.current = { file: key, setup }; }
-        if (!setup?.corner) { if (!gone) setLive([]); return; }
-        const rec = await remoteGet("probe");
-        const bad = [...probeChecks(setup, rec, state), ...stockChecks(setup, metric)].filter((c) => c.level !== "ok");
+        const setter = await getSetter();
+        const sc = path?.positions ? setterChecks(path, setter, state, setup?.toolD, metric) : [];
+        const rec = setup?.corner ? await remoteGet("probe") : null;
+        const bad = [...probeChecks(setup, rec, state), ...stockChecks(setup, metric), ...sc].filter((c) => c.level !== "ok");
         if (!gone) setLive(bad);
       } catch { if (!gone) setLive([]); }
     })();
     return () => { gone = true; };
-  }, [state.selected, state.selected_time, state.offset_x, state.offset_y, state.offset_z, metric, probeTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.selected, state.selected_time, state.offset_x, state.offset_y, state.offset_z, metric, probeTick, path]); // eslint-disable-line react-hooks/exhaustive-deps
   const [sheet, setSheet] = useState(null);
   const [sheetBusy, setSheetBusy] = useState(false);
   const tryStart = async () => {
@@ -82,7 +86,9 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
     let setup = null;
     try { setup = await readSetup(state.selected); } catch { /* run without a sheet */ }
     const rec = setup?.corner ? await remoteGet("probe") : null;
-    const checks = buildChecks(state, config, metric, state.selected, setup, rec);
+    let extra = [];
+    try { extra = setterChecks(path, await getSetter(), state, setup?.toolD, metric); } catch { /* no setter saved */ }
+    const checks = buildChecks(state, config, metric, state.selected, setup, rec, extra);
     // A program with a setup sheet always shows it. A move outside the plate is never skipped.
     const stopped = checks.some((c) => c.level === "stop");
     // A dry run only interrupts for a red item (wrong zero corner, move outside the plate); a normal run always shows the sheet.
@@ -95,7 +101,9 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
     try {
       const setup = await readSetup(state.selected);
       const rec = setup?.corner ? await remoteGet("probe") : null;
-      setSheet(setup ? { setup, checks: [...probeChecks(setup, rec, state), ...stockChecks(setup, metric)] } : { setup: null, checks: [] });
+      let sc = [];
+      try { sc = setterChecks(path, await getSetter(), state, setup?.toolD, metric); } catch { /* no setter saved */ }
+      setSheet(setup ? { setup, checks: [...probeChecks(setup, rec, state), ...stockChecks(setup, metric), ...sc] } : { setup: null, checks: sc });
     } catch (e) { setErr(String(e.message || e)); }
     setSheetBusy(false);
   };

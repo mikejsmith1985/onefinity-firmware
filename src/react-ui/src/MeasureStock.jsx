@@ -4,7 +4,7 @@ import { api } from "./controller.js";
 import { remotePut } from "./store.js";
 import { getPrefs, setPrefs } from "./checkpoint.js";
 import { readSetup } from "./setup.js";
-import { probeActive, setterProgram, refStatus } from "./setter.js";
+import { probeActive, setterProgram, refStatus, probeRefValue } from "./setter.js";
 import { getSetter, saveSetter, setterArgs } from "./ToolSetter.jsx";
 import { MEASURE_DEFAULTS, FAILS, ORIGINS_XY, ORIGINS_X, checkOpts, measureProgram, calibratedBall } from "./measure.js";
 
@@ -110,7 +110,10 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
     const s = R.current.state;
     const ok = s.ofs_ok === 1 && !R.current.failed;
     if (ok) {
-      const n = { ...setter, ref: { ref: s.ofs_ref, offZ: s.offset_z, time: Date.now(), by: "probe" } };
+      // Stored corrected for the probe-vs-cutter difference (if calibrated); the raw value is kept for calibrating.
+      const now = Date.now();
+      const n = { ...setter, ref: { ref: probeRefValue(s.ofs_ref, setter), offZ: s.offset_z, time: now, by: "probe", corrected: typeof setter.corr?.c === "number" },
+        lastProbe: { ref: s.ofs_ref, offZ: s.offset_z, time: now } };
       setSetter(n); saveSetter(n);
     }
     setResult((r) => ({ ...r, setter: ok ? "ok" : R.current.failed ? "notfound" : "fail" }));
