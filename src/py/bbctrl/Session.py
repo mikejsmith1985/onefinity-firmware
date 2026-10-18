@@ -63,7 +63,10 @@ class Session(object):
 
     def get(self, name):
         e = self.values.get(name)
-        return {'v': e['v'], 'rev': e['rev']} if e else {'v': None, 'rev': 0}
+        if e: return {'v': e['v'], 'rev': e['rev']}
+        # A cleared entry keeps its revision, so a compare-and-set based on
+        # this read is accepted.
+        return {'v': None, 'rev': self._tomb_rev(name)}
 
 
     def put(self, name, value, rev = None):
@@ -81,8 +84,10 @@ class Session(object):
         cur = self.values.get(name)
         cur_rev = cur['rev'] if cur else self._tomb_rev(name)
 
-        if rev is not None and int(rev) != cur_rev:
-            return False, self.get(name) if cur else {'v': None, 'rev': cur_rev}
+        # rev 0 means "only if it is empty": accepted while nothing is set, so
+        # a screen that last saw the entry cleared can open it again.
+        if rev is not None and int(rev) != cur_rev and not (int(rev) == 0 and cur is None):
+            return False, self.get(name)
 
         total = size + sum(len(json.dumps(e['v'])) for k, e in
                            self.values.items() if k != name)

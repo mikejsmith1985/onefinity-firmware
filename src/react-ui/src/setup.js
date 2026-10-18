@@ -184,3 +184,41 @@ export function probeChecks(setup, rec, state) {
   }
   return [{ level: "ok", name: "Zero", text: `Probed on the ${cornerName(want)} (${when}), and zero has not been changed since.` }];
 }
+
+// ---- quick-read summary of a sheet (1.28.1) ----
+// The sheet comes out of the post processor in capitals. This turns the parts the operator needs at a glance
+// (bit, router dial, where and how to probe) into short values, and the rest into sentence case.
+const KEEP_UPPER = /^(x|y|z|xy|xyz|xz|yz|z0|x0|y0|mdf|ca|cnc|rpm|fpr\w*|t\d+|op-?\d*|n\d+\w*|s\d+|d[\d.]+|v|ok|pla|petg|2fl|o-flute|1-flute|2-flute|3-flute|4-flute|wcs|id|od)$/i;
+export function sentenceCase(text) {
+  if (!text) return text;
+  const letters = text.replace(/[^A-Za-z]/g, "");
+  if (!letters || letters.replace(/[^A-Z]/g, "").length < letters.length * 0.8) return text; // already mixed case
+  let out = text.toLowerCase().replace(/[a-z0-9](?:[a-z0-9_/-]|\.(?=[a-z0-9]))*/g, (w) => (KEEP_UPPER.test(w) ? w.toUpperCase() : w));
+  out = out.replace(/\bside ([ab])\b/g, (m, a) => `side ${a.toUpperCase()}`);
+  out = out.replace(/(^|[.!?]\s+)([a-z])/g, (m, a, b) => a + b.toUpperCase());
+  out = out.replace(/(\d)\s+X\s+(\d)/g, "$1 × $2");
+  return out.replace(/\bmm\b/g, "mm").replace(/(\d)\s?mm\b/g, "$1 mm");
+}
+
+const field = (setup, k) => (setup?.fields || []).find((f) => f.key === k)?.text || "";
+
+export function sheetSummary(setup) {
+  if (!setup) return null;
+  const tool = field(setup, "tool"), router = field(setup, "router"), zero = field(setup, "zero"), before = field(setup, "before");
+  const tm = /^\s*T(\d+)\s+(.*?)(?:\s+-\s+|$)/i.exec(tool);
+  const stick = /NEEDS\s+([\d.]+)\s*MM\s+BELOW THE COLLET/i.exec(tool);
+  const dial = /DIAL\s*([\d.]+)/i.exec(router), rpm = /\bS(\d{3,6})\b/i.exec(router);
+  const geom = setup.toolGeom;
+  let corner = setup.corner;
+  if (!corner) { const m = /\b(FRONT|BACK)-(LEFT|RIGHT)\b/i.exec(zero); corner = m ? `${m[1]}-${m[2]}`.toLowerCase() : /\bCENT(ER|RE)\b/i.test(zero) ? "center" : null; }
+  const probeText = `${before} ${field(setup, "job")}`;
+  const probe = /PROBE\s+XYZ/i.test(probeText) ? "xyz" : /PROBE\s+Z\b/i.test(probeText) ? "z" : setup.corner ? "xyz" : null;
+  const what = /BOARD/i.test(zero) ? "board" : "plate";
+  const z0 = /Z0 ON ([^,]+)/i.exec(zero);
+  return {
+    tool: tm ? { num: tm[1], name: tm[2], stick: stick ? +stick[1] : null, geom } : tool ? { num: null, name: tool.split(" - ")[0], stick: null, geom } : null,
+    dial: dial ? dial[1] : null, rpm: rpm ? +rpm[1] : null,
+    corner, probe, what, z0: z0 ? sentenceCase(z0[1]).toLowerCase() : null,
+    before: sentenceCase(before),
+  };
+}

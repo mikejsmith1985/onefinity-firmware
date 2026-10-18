@@ -108,7 +108,7 @@ state.ui = {}; state.store_rev = {}; state.last_error = null; state.fo = 1000; s
 const uiRevs = {}; let errId = 0, starts = 0;
 function uiPut(name, body) {
   const cur = state.ui[name], rev = cur ? cur.rev : uiRevs[name] || 0;
-  if (body.rev !== undefined && body.rev !== null && +body.rev !== rev) return { ok: false, v: cur ? cur.v : null, rev };
+  if (body.rev !== undefined && body.rev !== null && +body.rev !== rev && !(+body.rev === 0 && !cur)) return { ok: false, v: cur ? cur.v : null, rev };
   const n = rev + 1; uiRevs[name] = n;
   const ui = { ...state.ui };
   if (body.v === null || body.v === undefined) delete ui[name]; else ui[name] = { v: body.v, rev: n };

@@ -71,7 +71,7 @@ export function Modal({ title, children, actions, onClose, wide, dismissable = t
   closeRef.current = onClose;
   useEffect(() => {
     const prev = document.activeElement;
-    ref.current?.querySelector("[data-autofocus]")?.focus();
+    ref.current?.querySelector("[data-autofocus]")?.focus({ preventScroll: true });
     return () => { prev && prev.focus && prev.focus(); };
   }, []);
   useEffect(() => {

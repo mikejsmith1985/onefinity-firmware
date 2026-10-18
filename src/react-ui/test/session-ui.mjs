@@ -44,6 +44,18 @@ check("both screens reach Done", await until(async () => (await visible(A.p, "pu
 await B.p.getByRole("button", { name: "Done" }).click();
 check("Done on B closes the dialog on A", await until(async () => !(await visible(A.p, "Probing Z"))));
 
+// 2b. A tool closed and opened again (1.28.1: the second open did nothing on the real controller)
+for (let i = 0; i < 3; i++) {
+  await A.p.getByRole("button", { name: "Probe Z" }).click();
+  check(`probe Z opens again (${i + 1})`, await until(() => visible(B.p, "Probing Z")));
+  await B.p.getByRole("button", { name: "Cancel" }).click();
+  check(`cancel closes it (${i + 1})`, await until(async () => !(await visible(A.p, "Probing Z"))));
+}
+await A.p.getByRole("button", { name: "Probe XYZ" }).click();
+check("probe XYZ opens after", await until(() => visible(B.p, "Probing XYZ") .then(async (v) => v || visible(B.p, "Probe XYZ"))));
+await A.p.getByRole("button", { name: "Cancel" }).click();
+await until(async () => !(await A.p.locator(".modal").isVisible().catch(() => false)));
+
 // 3. Shared settings: jog step chosen on A shows on B
 const radio = (p) => p.getByRole("radio", { name: /Large/ }).first();
 await radio(A.p).click();

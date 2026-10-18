@@ -39,6 +39,17 @@ check('stale write after clear refused', not stale[0] and stale[1]['v'] is None 
 reopen = ss.put('probe', {'step': 'CheckProbe'}, rev=3)
 check('reopen from the cleared revision', reopen[0] and reopen[1]['rev'] == 4)
 
+# 3b. Open, close, open again from what a screen reads (1.28.1: the second open was refused)
+for i in range(3):
+    g = ss.get('tool')
+    oko, cur = ss.put('tool', {'kind': 'z', 'id': i}, rev=g['rev'])
+    okc, _ = ss.put('tool', None)
+    check('open %d accepted after close' % (i + 1), oko and okc, (g, cur))
+check('read of a cleared entry carries its revision', ss.get('tool')['rev'] == 6)
+check('rev 0 opens an empty entry', ss.put('tool', {'kind': 'z'}, rev=0)[0])
+check('rev 0 refused while open', not ss.put('tool', {'kind': 'xyz'}, rev=0)[0])
+ss.put('tool', None)
+
 # 4. The published value is a new dict each time (the state only sends changes)
 before = c.state.vars['ui']; ss.put('jog', {'step': 1}); check('new dict on change', c.state.vars['ui'] is not before and 'jog' in c.state.vars['ui'])
 

@@ -3,6 +3,7 @@ import { Modal } from "./ui.jsx";
 import { computeAxis, fmtLen } from "./axis.js";
 import { status_to_string } from "./modbus.js";
 import { stockChecks, probeChecks } from "./setup.js";
+import SheetView from "./SheetView.jsx";
 
 import { getPref, setPref } from "./shared.js";
 // "Don't show this check again" is a shared setting (it was per browser before 1.28).
@@ -47,17 +48,7 @@ export function buildChecks(state, config, metric, file, setup = null, probeRec 
 const ICON = { ok: "✓", warn: "!", stop: "✕" };
 
 // The setup sheet written into the program when it was exported
-export function SheetView({ setup }) {
-  if (!setup?.fields?.length) return null;
-  return (
-    <section className="sheet" aria-label="Setup sheet">
-      <h3>Setup sheet</h3>
-      <dl>
-        {setup.fields.map((f) => <div key={f.key}><dt>{f.label}</dt><dd>{f.text}</dd></div>)}
-      </dl>
-    </section>
-  );
-}
+export { default as SheetView } from "./SheetView.jsx";
 
 export default function Checklist({ checks, setup, onRun, onCancel, ack, never, onAck, onNever }) {
   const setAck = onAck, setNever = onNever;
@@ -66,7 +57,7 @@ export default function Checklist({ checks, setup, onRun, onCancel, ack, never, 
   const warns = checks.some((c) => c.level === "warn");
   const go = () => { if (never && !stops) setPref("checklist.skip", "1"); onRun(); };
   return (
-    <Modal title={stops ? "Stop. Do not run yet" : "Ready to run?"} onClose={onCancel} actions={<>
+    <Modal title={stops ? "Stop. Do not run yet" : "Ready to run?"} wide onClose={onCancel} actions={<>
       <button data-autofocus className={stops ? "primary" : ""} onClick={onCancel}>{stops ? "Cancel and fix it" : "Cancel"}</button>
       <button className={stops || warns ? "danger" : "primary"} disabled={stops && !ack} onClick={go}>{stops ? "Run anyway" : warns ? "Run anyway" : "Run"}</button>
     </>}>

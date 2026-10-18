@@ -189,7 +189,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         // Only the screen whose Run the controller takes first starts the job.
         onRun={async () => { const r = await uiCas("runcheck", null, checkUi.rev).catch(() => null); if (r && r.ok) start(); }} />}
       {sheet && (
-        <Modal title="Setup sheet" onClose={() => setSheet(null)} actions={<button data-autofocus onClick={() => setSheet(null)}>Close</button>}>
+        <Modal title="Setup sheet" wide onClose={() => setSheet(null)} actions={<button data-autofocus onClick={() => setSheet(null)}>Close</button>}>
           {sheet.setup ? <SheetView setup={sheet.setup} /> : <p>This program has no setup sheet.</p>}
           {sheet.checks.length > 0 && (
             <ul className="checks">{sheet.checks.map((c, i) => <li key={i} className={c.level}><span className="mark" aria-label={c.level}>{c.level === "ok" ? "✓" : c.level === "warn" ? "!" : "✕"}</span><b>{c.name}</b><span>{c.text}</span></li>)}</ul>

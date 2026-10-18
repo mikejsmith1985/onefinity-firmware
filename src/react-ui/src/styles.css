@@ -355,11 +355,34 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
 .dry-err{background:#8b1a1a;color:#fff;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0}
 button.go.dry{background:#b07400}
 
-.sheet{margin:0 0 1rem;padding:.75rem 1rem;border:1px solid var(--line,#3a4150);border-radius:8px}
-.sheet h3{margin:0 0 .5rem;font-size:1rem}
-.sheet dl{margin:0;display:grid;gap:.4rem}
+.sheet{margin:0 0 1rem}
+.sheet-top{display:grid;grid-template-columns:1.2fr .8fr 1.3fr;gap:10px}
+.sheet .tile{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:12px 14px;border:1px solid var(--rule);border-radius:10px;background:var(--steel2);min-width:0}
+.sheet .cap{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.sheet .huge{font:700 56px/1 var(--num);color:var(--yellow);margin:4px 0 2px}
+.sheet .tile.dial .huge{font-size:72px}
+.sheet .name{font-weight:600;line-height:1.2;overflow-wrap:anywhere}
+.sheet .sub{font-size:14px;color:var(--dim)}
+.zero-pic{width:100%;max-width:200px;height:auto;margin:2px 0}
+.zero-pic .plate{fill:#2c3846;stroke:#5b6b7e;stroke-width:1.5}
+.zero-pic .lbl{fill:var(--dim);font:600 10px var(--ui);text-anchor:middle;letter-spacing:.05em}
+.zero-pic .lbl.l{text-anchor:start}
+.zero-pic .halo{fill:rgba(245,197,24,.22);stroke:var(--yellow);stroke-width:2}
+.zero-pic .dot{fill:var(--yellow)} .zero-pic .dot.kept{fill:var(--dim)}
+.zero-pic .cross{stroke:var(--yellow);stroke-width:1.5}
+.zero-pic .arrow{stroke:var(--yellow);stroke-width:4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.zero-pic .big{fill:var(--yellow);font:700 22px var(--num)}
+.sheet-before{margin-top:10px;padding:12px 14px;border-left:4px solid var(--yellow);border-radius:6px;background:rgba(245,197,24,.08)}
+.sheet-before b{display:block;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--yellow)}
+.sheet-before p{margin:4px 0 0;font-size:18px;line-height:1.4}
+.sheet-more{margin-top:10px}
+.sheet-more summary::before{content:"▸";margin-right:8px;transition:transform .15s}
+.sheet-more[open] summary::before{transform:rotate(90deg)}
+@media (max-width:640px){.sheet-top{grid-template-columns:1fr 1fr}.sheet .tile.zero{grid-column:1 / -1;align-items:center}}
+.sheet-more summary{cursor:pointer;color:var(--dim);min-height:36px;display:flex;align-items:center}
+.sheet dl{margin:.25rem 0 0;display:grid;gap:.4rem}
 .sheet dl>div{display:grid;grid-template-columns:9rem 1fr;gap:.75rem}
-.sheet dt{opacity:.7}
+.sheet dt{color:var(--dim)}
 .sheet dd{margin:0}
 .sheet-note{opacity:.7;font-size:.9rem}
 button.linkish{background:none;border:0;padding:0;margin-left:.75rem;text-decoration:underline;cursor:pointer;color:inherit;opacity:.85}
