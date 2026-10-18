@@ -103,6 +103,7 @@ function run(dryLift = 0) {
   }, 400);
 }
 const mdiLog = [];
+let probeStop = false;
 // Shared screen session (Session.py): {name: {v, rev}} with compare-and-set writes.
 state.ui = {}; state.store_rev = {}; state.last_error = null; state.fo = 1000; state.so = 1000;
 const uiRevs = {}; let errId = 0, starts = 0;
@@ -123,10 +124,14 @@ function mdi(text) {
     broadcast({ xx: "RUNNING", cycle: "mdi" });
     setTimeout(() => {
       if (process.env.MOCK_PROBE_FAIL) { broadcast({ xx: "ESTOPPED", cycle: "idle", er: "Switch not found" }); return; }
-      broadcast({ xx: "READY", cycle: "idle", offset_z: -57.35, offset_x: text.includes("X") ? 163.142 : state.offset_x, ofprobe_ok: 1, ofprobe_dz: 0.02 });
+      // The program sets #<_ofprobe_done> to its token just before M2 (1.29.0). A stopped one does not.
+      const tok = [...text.matchAll(/#<_ofprobe_done>\s*=\s*(\d+)/g)].map((m) => +m[1]).filter(Boolean).pop() ?? 0;
+      if (probeStop) { probeStop = false; broadcast({ xx: "READY", cycle: "idle", ofprobe_done: 0, ofprobe_fail: 0 }); return; }
+      broadcast({ xx: "READY", cycle: "idle", offset_z: -57.35, offset_x: text.includes("X") ? 163.142 : state.offset_x, ofprobe_ok: 1, ofprobe_dz: 0.02, ofprobe_done: tok, ofprobe_fail: 0 });
     }, 1200);
     return;
   }
+  if (text === "mock:probe-stop") { probeStop = true; return; } // the next probe ends without reaching M2
   // Probe input: pt 1 = normally open (touched reads 0), 2 = normally closed (touched reads 1)
   const rest = state.pt === 2 ? 0 : 1;
   if (text === "mock:touch") { broadcast({ pw: 1 - rest }); setTimeout(() => broadcast({ pw: rest }), 300); return; }
@@ -217,6 +222,11 @@ const server = http.createServer((req, res) => {
   if (p.startsWith("/api/path/")) {
     return json(res, { progress: 1, time: 600, bounds: { min: { x: 0, y: 0, z: -15 }, max: { x: 150, y: 90, z: 15 } } });
   }
+  // Pre-run G-code check (Lint.py, 1.29.0). MOCK_LINT_ERROR=1 reports one error.
+  if (p.startsWith("/api/lint/")) {
+    const issues = process.env.MOCK_LINT_ERROR ? [{ key: "g83", level: "error", msg: "G83 (peck drill) runs as a plain G81 drill: one plunge to full depth, no pecking, which can snap a small bit.", lines: [12], count: 1 }] : [];
+    return json(res, { lines: 16, errors: issues.length, warnings: 0, issues, stock_top: null });
+  }
   if (p.startsWith("/api/file/")) {
     if (req.method === "GET" && process.env.MOCK_PROGRAM) { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end(fs.readFileSync(process.env.MOCK_PROGRAM)); }
     if (req.method === "GET") { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end("G21\nG90\nG0 Z15\nM3 S17000\nG1 X10 Y10 F300\nG1 Z-5\nG1 X140 F1500\nG1 Y80\nG1 X10\nG1 Y10\nT2 M6\nG1 X20\nM5\nT3\nM6\nM30\n"); }
@@ -264,8 +274,9 @@ const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (c) => { body += c; });
     req.on("end", () => {
-      let lift = 0;
-      try { lift = +JSON.parse(body || "{}").dry_lift || 0; } catch { /* no body */ }
+      let lift = 0, ack = false;
+      try { const b = JSON.parse(body || "{}") || {}; lift = +b.dry_lift || 0; ack = !!b.ack; } catch { /* no body */ }
+      if (process.env.MOCK_LINT_ERROR && !ack) { res.writeHead(409, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ message: "Not started. G-code check: G83 (peck drill) runs as a plain G81 drill (line 12)", code: 409 })); }
       starts++;
       run(lift);
       json(res, "ok");

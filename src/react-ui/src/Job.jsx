@@ -4,8 +4,8 @@ import { fmtTime } from "./axis.js";
 import { useNote } from "./notes.js";
 import { markStopped } from "./history.js";
 import ParkDialog from "./ParkDialog.jsx";
-import Checklist, { buildChecks, skipChecklist, SheetView } from "./Checklist.jsx";
-import { readSetup, stockChecks, probeChecks } from "./setup.js";
+import Checklist, { buildChecks, skipChecklist, SheetView, lintChecks } from "./Checklist.jsx";
+import { readSetup, stockChecks, probeChecks, sheetLineChecks } from "./setup.js";
 import { remoteGet } from "./store.js";
 import { getSetter } from "./ToolSetter.jsx";
 import { setterChecks } from "./setter.js";
@@ -47,9 +47,12 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
   const liftMm = Math.min(100, Math.max(5, Math.round((+lift || 30) / 5) * 5));
   const [err, setErr] = useState("");
   const note = useNote(state.selected).split("\n")[0];
-  const start = () => {
+  // ack: the operator ticked "run anyway" on a checklist with red items. Without it the controller runs
+  // its own check (1.29.0) and refuses a program with G-code errors or the wrong zero corner.
+  const start = (ack = false) => {
     setErr("");
-    return api.put("start", dry ? { dry_lift: liftMm } : undefined)
+    const body = { ...(dry ? { dry_lift: liftMm } : {}), ...(ack ? { ack: true } : {}) };
+    return api.put("start", Object.keys(body).length ? body : undefined)
       .then(() => setDry(false))
       .catch((e) => setErr(String(e.message || e).replace(/^\{"message":"|","code":\d+\}$/g, "")));
   };
@@ -82,7 +85,10 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         const setter = await getSetter();
         const sc = path?.positions ? setterChecks(path, setter, state, setup?.toolD, metric) : [];
         const rec = setup?.corner ? await remoteGet("probe") : null;
-        const bad = [...probeChecks(setup, rec, state), ...stockChecks(setup, metric), ...sc].filter((c) => c.level !== "ok");
+        let lint = [];
+        try { lint = lintChecks(await api.get(`lint/${encodeURIComponent(state.selected)}`)).filter((c) => c.level === "stop"); } catch { /* checked again at Run */ }
+        const nested = lint.some((c) => c.key === "comment-nested");
+        const bad = [...probeChecks(setup, rec, state), ...stockChecks(setup, metric), ...(nested ? [] : sheetLineChecks(setup)), ...lint, ...sc].filter((c) => c.level !== "ok");
         if (!gone) setLive(bad);
       } catch { if (!gone) setLive([]); }
     })();
@@ -93,12 +99,20 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
   const [sheetBusy, setSheetBusy] = useState(false);
   const tryStart = async () => {
     setErr("");
-    let setup = null;
-    try { setup = await readSetup(state.selected); } catch { /* run without a sheet */ }
-    const rec = setup?.corner ? await remoteGet("probe") : null;
+    // Every read the checks need must work, or the job does not start (1.29.0: a failed read used to
+    // skip the setup sheet checks and run anyway).
+    const file = state.selected;
+    let setup = null, rec = null, lint = null;
+    try { setup = await readSetup(file); }
+    catch (e) { setErr(`Not started: the setup sheet at the top of ${file} could not be read (${e.message || e}). Check the connection and press Run again.`); return; }
+    try { rec = setup?.corner ? await remoteGet("probe") : null; }
+    catch (e) { setErr(`Not started: the record of the last probe could not be read (${e.message || e}), so the zero corner cannot be checked. Press Run again.`); return; }
+    try { lint = await api.get(`lint/${encodeURIComponent(file)}`); }
+    catch (e) { setErr(`Not started: the controller could not check ${file} (${String(e.message || e).replace(/^\{"message":"|","code":\d+\}$/g, "")}). Press Run again.`); return; }
     let extra = [];
     try { extra = setterChecks(path, await getSetter(), state, setup?.toolD, metric); } catch { /* no setter saved */ }
-    const checks = buildChecks(state, config, metric, state.selected, setup, rec, extra);
+    extra = [...lintChecks(lint), ...extra];
+    const checks = buildChecks(state, config, metric, file, setup, rec, extra);
     // A program with a setup sheet always shows it. A move outside the plate is never skipped.
     const stopped = checks.some((c) => c.level === "stop");
     // A dry run only interrupts for a red item (wrong zero corner, move outside the plate); a normal run always shows the sheet.
@@ -113,7 +127,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       const rec = setup?.corner ? await remoteGet("probe") : null;
       let sc = [];
       try { sc = setterChecks(path, await getSetter(), state, setup?.toolD, metric); } catch { /* no setter saved */ }
-      setSheet(setup ? { setup, checks: [...probeChecks(setup, rec, state), ...stockChecks(setup, metric), ...sc] } : { setup: null, checks: sc });
+      setSheet(setup ? { setup, checks: [...probeChecks(setup, rec, state), ...stockChecks(setup, metric), ...sheetLineChecks(setup), ...sc] } : { setup: null, checks: sc });
     } catch (e) { setErr(String(e.message || e)); }
     setSheetBusy(false);
   };
@@ -182,12 +196,12 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       </dl>
       <Override label="Feed" kind="feed" hint="Feed rate override" value={state.fo} />
       <Override label="Speed" kind="speed" hint="Spindle speed override" value={state.so} />
-      {(parkAsk || state.park) && <ParkDialog state={state} active={active} onClose={() => setParkAsk(false)} />}
+      {(parkAsk || state.park) && <ParkDialog state={state} config={config} active={active} onClose={() => setParkAsk(false)} />}
       {check && <Checklist checks={check.checks} setup={check.setup} ack={!!check.ack} never={!!check.never}
         onAck={(on) => uiPatch("runcheck", { ack: on })} onNever={(on) => uiPatch("runcheck", { never: on })}
         onCancel={() => setCheck(null)}
         // Only the screen whose Run the controller takes first starts the job.
-        onRun={async () => { const r = await uiCas("runcheck", null, checkUi.rev).catch(() => null); if (r && r.ok) start(); }} />}
+        onRun={async () => { const acked = !!check.ack && check.checks.some((c) => c.level === "stop"); const r = await uiCas("runcheck", null, checkUi.rev).catch(() => null); if (r && r.ok) start(acked); }} />}
       {sheet && (
         <Modal title="Setup sheet" wide onClose={() => setSheet(null)} actions={<button data-autofocus onClick={() => setSheet(null)}>Close</button>}>
           {sheet.setup ? <SheetView setup={sheet.setup} /> : <p>This program has no setup sheet.</p>}

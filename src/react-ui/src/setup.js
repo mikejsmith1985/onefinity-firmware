@@ -11,6 +11,8 @@
 //                                            for a V-bit or chamfer mill, the included angle
 // Comments are ignored by the planner, so a program with a sheet runs exactly like any other.
 
+import { commentIssues, CORNERS, normCorner } from "./gcodetext.js";
+
 const LINE = /^\s*\(\s*SETUP\s+([A-Za-z0-9-]+)\s*:\s*(.*?)\s*\)\s*$/;
 const LABELS = {
   job: "Job", zero: "Work zero", plate: "Plate", probe: "Probe", part: "Part position", tool: "Tool", router: "Router",
@@ -42,8 +44,16 @@ export function parseToolGeom(text) {
 export function parseSetup(text) {
   const fields = [];
   const raw = {};
-  for (const line of text.split(/\r?\n/)) {
+  const bad = []; // SETUP lines the planner reads differently from how they look (1.29.0)
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const m = LINE.exec(line);
+    if (m || /^\s*\(\s*SETUP\b/i.test(line)) {
+      // "(SETUP tool: T1 (6.35mm))": the comment ends at the first ")", and the planner stops on the rest
+      const { issues } = commentIssues(line);
+      if (issues.length) bad.push({ line: i + 1, text: line.trim(), issues });
+    }
     if (m) { raw[m[1].toLowerCase()] = m[2]; continue; }
     // The sheet ends at the first line of real code
     if (/^\s*N?\d*\s*[GMTXYZ]/i.test(line) && !/^\s*\(/.test(line)) break;
@@ -51,10 +61,16 @@ export function parseSetup(text) {
   if (!Object.keys(raw).length) return null;
   for (const k of Object.keys(raw)) if (!HIDDEN.has(k) && k !== "sheet") fields.push({ key: k, label: LABELS[k] || k.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase()), text: raw[k] });
   const stock = raw.stock ? { x: parseRange(raw.stock, "x"), y: parseRange(raw.stock, "y") } : null;
+  const stockOk = !!(stock && stock.x && stock.y);
+  const corner = raw["probe-corner"] ? normCorner(raw["probe-corner"]) : null;
   return {
-    fields, stock: stock && stock.x && stock.y ? stock : null, toolD: raw["tool-d"] ? num(raw["tool-d"]) : null,
-    corner: raw["probe-corner"] ? raw["probe-corner"].toLowerCase().trim() : null,
+    fields, stock: stockOk ? stock : null, toolD: raw["tool-d"] ? num(raw["tool-d"]) : null,
+    // A stock line that can't be read is reported, not silently skipped (1.29.0)
+    stockBad: raw.stock !== undefined && !stockOk ? raw.stock : null,
+    corner: corner && CORNERS.includes(corner) ? corner : null,
+    cornerBad: corner && !CORNERS.includes(corner) ? raw["probe-corner"] : null,
     toolGeom: parseToolGeom(raw["tool-geom"]),
+    bad,
   };
 }
 
@@ -140,6 +156,7 @@ const mm = (v, metric) => (metric ? `${v.toFixed(1)} mm` : `${(v / 25.4).toFixed
 
 // Checks the program against the stock area in the sheet. Y+ is the back of the machine.
 export function stockChecks(setup, metric = true) {
+  if (setup?.stockBad != null) return [{ level: "warn", name: "Stock", text: `The setup sheet's stock line could not be read ("${setup.stockBad}"; it should look like x=0..300 y=0..200 z=-19..0), so this program was NOT checked against the plate.` }];
   if (!setup?.stock) return [];
   const { x, y } = setup.stock;
   const e = setup.ext;
@@ -168,13 +185,14 @@ const cornerName = (c) => CORNER_NAMES[c] || c;
 // Compares the last probe the controller remembers with the corner the sheet needs.
 // rec: {loc, time, off:{x,y,z}} saved by the probe dialog, state: live controller state.
 export function probeChecks(setup, rec, state) {
+  if (setup?.cornerBad) return [{ level: "warn", name: "Zero", text: `The setup sheet asks for zero on "${setup.cornerBad}", which is not a corner this controller knows (front-left, front-right, back-left, back-right, center, center-x). The zero was not checked: confirm it by eye before you run.` }];
   if (!setup?.corner) return [];
   const want = setup.corner;
   const WANT = cornerName(want).toUpperCase();
   if (!rec || !rec.loc) {
     return [{ level: "warn", name: "Zero", text: `This program needs zero on the ${WANT}. The controller has no record of a corner probe, so it cannot confirm that. Check it by eye before you run.` }];
   }
-  if (rec.loc !== want) {
+  if (normCorner(rec.loc) !== want) {
     return [{ level: "stop", name: "WRONG ZERO", text: `This program was written for zero on the ${WANT}. Your last probe was on the ${cornerName(rec.loc).toUpperCase()}. Every cut would land in the wrong place. Probe XYZ on the ${cornerName(want)}, then run again.` }];
   }
   const moved = ["x", "y"].filter((a) => rec.off && rec.off[a] != null && state && state[`offset_${a}`] != null && Math.abs(state[`offset_${a}`] - rec.off[a]) > 0.05);
@@ -183,6 +201,13 @@ export function probeChecks(setup, rec, state) {
     return [{ level: "warn", name: "Zero", text: `The ${cornerName(want)} was probed (${when}), but ${moved.map((a) => a.toUpperCase()).join(" and ")} zero has been changed since. Confirm zero is still on that corner.` }];
   }
   return [{ level: "ok", name: "Zero", text: `Probed on the ${cornerName(want)} (${when}), and zero has not been changed since.` }];
+}
+
+// SETUP lines with brackets inside the comment: the planner stops on them (1.29.0)
+export function sheetLineChecks(setup) {
+  if (!setup?.bad?.length) return [];
+  const list = setup.bad.slice(0, 3).map((b) => `line ${b.line}: ${b.text}`).join("; ");
+  return [{ level: "stop", name: "Setup sheet", key: "comment-nested", text: `${setup.bad.length === 1 ? "A setup sheet line has" : `${setup.bad.length} setup sheet lines have`} brackets inside the comment (${list}). The planner ends a comment at the first ")" and stops with an error on the rest. Write the inner brackets as [ ] in the post processor and export again.` }];
 }
 
 // ---- quick-read summary of a sheet (1.28.1) ----

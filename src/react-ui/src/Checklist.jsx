@@ -2,8 +2,10 @@ import React from "react";
 import { Modal } from "./ui.jsx";
 import { computeAxis, fmtLen } from "./axis.js";
 import { status_to_string } from "./modbus.js";
-import { stockChecks, probeChecks } from "./setup.js";
+import { stockChecks, probeChecks, sheetLineChecks } from "./setup.js";
 import SheetView from "./SheetView.jsx";
+import { lintChecks } from "./lint-checks.js";
+export { lintChecks };
 
 import { getPref, setPref } from "./shared.js";
 // "Don't show this check again" is a shared setting (it was per browser before 1.28).
@@ -29,6 +31,8 @@ export function buildChecks(state, config, metric, file, setup = null, probeRec 
   // Setup sheet in the program: check the moves against the plate it describes
   out.push(...probeChecks(setup, probeRec, state));
   out.push(...stockChecks(setup, metric));
+  // Bad SETUP lines are already in the G-code check when it ran; only add them when it did not
+  if (!extra.some((c) => c.key === "comment-nested")) out.push(...sheetLineChecks(setup));
   out.push(...extra);
 
   const zero = cs.map((c) => `${c.axis.toUpperCase()} ${fmtLen(c.off, metric)}`).join("   ");
