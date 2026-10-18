@@ -96,6 +96,7 @@ G91 G38.2 ${axis}${n(dir * 2)} F${o.slow}`;
 
   add(`(Measure stock, ${o.calibrate ? "calibration" : "sets work zero"})
 G21
+M5
 #<_ofm_ok> = 0
 #<_ofm_fail> = 0
 #<_ofm_w> = 0

@@ -97,8 +97,11 @@ export function useController() {
     return () => { closed = true; clearTimeout(timer); clearInterval(watch); ws.current && ws.current.close(); };
   }, []);
 
+  // true when the command went to the controller, false when it could not be sent (1.29.0: before, a
+  // command typed or sent while the connection was down was dropped without a word).
   const send = useCallback((gcode) => {
-    if (ws.current && ws.current.readyState === 1) ws.current.send(gcode);
+    if (!ws.current || ws.current.readyState !== 1) return false;
+    try { ws.current.send(gcode); return true; } catch { return false; }
   }, []);
   const subscribe = useCallback((fn) => { listeners.current.add(fn); return () => listeners.current.delete(fn); }, []);
   return { state, online, send, subscribe, logs, clearLogs: () => setLogs([]), lastError, clearError: () => setLastError(null) };

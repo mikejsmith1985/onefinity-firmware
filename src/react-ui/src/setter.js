@@ -45,6 +45,7 @@ export function setterProgram(o) {
   const lines = [
     `(Tool setter: ${o.mode === "ref" ? "reference" : "measure tool"})`,
     "G21",
+    "M5", // never probe with the spindle on (the controller refuses it too)
     "#<_ofs_ok> = 0",
     "#<_ofs_fail> = 0",
     `G90 G53 G0 Z${n(o.top)}`,

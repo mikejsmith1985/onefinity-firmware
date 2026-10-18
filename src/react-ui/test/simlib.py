@@ -33,7 +33,7 @@ class Sim:
             if k not in s.vars: raise Exception('unset var '+k)
             return '(%r)' % s.vars[k]
         e = re.sub(r'#<([^>]+)>|#(\d+)', var, e)
-        e = e.replace('ABS','abs').replace('[','(').replace(']',')').replace(' EQ ','==').replace(' GT ','>')
+        e = e.replace('ABS','abs').replace('[','(').replace(']',')').replace(' EQ ','==').replace(' GT ','>').replace(' NE ','!=').replace(' LT ','<')
         return float(eval(e))
     def words(s, line):
         out=[]; i=0
@@ -67,17 +67,19 @@ class Sim:
         return False
     def run(s, prog):
         lines = [l.split('(')[0].strip() for l in prog.splitlines()]
-        stack=[]; skip=0
+        stack=[]; active=True   # o-word if / else / endif (else added in 1.29.0)
         for line in lines:
             if not line: continue
             m = re.match(r'o\d+\s+(if|endif|else)\s*(.*)', line)
             if m:
                 if m.group(1)=='if':
-                    if skip: skip+=1
-                    elif not s.ev(m.group(2)): skip=1
-                elif m.group(1)=='endif' and skip: skip-=1
+                    cond = bool(s.ev(m.group(2))) if active else False
+                    stack.append((active, cond)); active = active and cond
+                elif m.group(1)=='else':
+                    parent, taken = stack[-1]; active = parent and not taken
+                else: active = stack.pop()[0]
                 continue
-            if skip: continue
+            if not active: continue
             m = re.match(r'#<([^>]+)>\s*=\s*(.*)', line)
             if m: s.vars[m.group(1)] = s.ev(m.group(2)); continue
             ws = s.words(line); g=[v for k,v in ws if k=='G']; ax={k:v for k,v in ws if k in 'XYZ'}
@@ -98,7 +100,10 @@ class Sim:
             kind = mv[-1]
             if kind in (38.2,38.3):
                 hit = s.move(tgt, 'G38.2' if kind==38.2 else 'G38.3')
-                w = s.work(); s.vars['5061'],s.vars['5062'],s.vars['5063'] = w; s.vars['5070'] = 1.0 if hit else 0.0
+                # #5061-#5063: work coordinates by default.  probe_frame = 'machine' models the reading
+                # of the CAMotics source (machine coordinates); see the 1.29.0 release notes, item 2.
+                w = s.P[:] if getattr(s, 'probe_frame', 'work') == 'machine' else s.work()
+                s.vars['5061'],s.vars['5062'],s.vars['5063'] = w; s.vars['5070'] = 1.0 if hit else 0.0
             else: s.move(tgt)
         return s
 

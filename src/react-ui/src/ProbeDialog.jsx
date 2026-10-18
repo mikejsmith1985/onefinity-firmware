@@ -1,6 +1,7 @@
 import { remotePut } from "./store.js";
 import { ME, useUi, useDriver, uiGet, uiCas, uiUpdate, uiPatch, uiClose, loadPrefs, getPref, setPref } from "./shared.js";
 import { probeActive } from "./setter.js";
+import { parseDia, normDia, probeProgram, centerSecondProgram, newToken, failText } from "./probe.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./controller.js";
 import { Modal, SharedText } from "./ui.jsx";
@@ -20,27 +21,6 @@ const LABELS = {
 };
 const PRESET_BITS = ["1/8 in", "1/4 in"];
 
-// ---- cutter diameter parsing (same rules as the original dialog) ----
-const RX = /^\s*(?:(\d+)\s*\/\s*(\d+)|(\d*\.\d+)|(\d+(?:\.\d+)?))\s*("|in|inch|inches|mm|millimeters)\s*$/;
-const FRACS = [[0.75, "3/4"], [0.625, "5/8"], [0.5, "1/2"], [0.375, "3/8"], [0.25, "1/4"], [0.1875, "3/16"], [0.125, "1/8"], [0.09375, "3/32"], [0.0625, "1/16"], [0.03125, "1/32"]];
-function parseDia(str) {
-  const m = (str || "").match(RX); if (!m) return undefined;
-  const [, n, d, d1, d2, unit] = m;
-  const metric = (unit || "").includes("m");
-  let value;
-  if (n && d) value = Number(n) / Number(d);
-  else if (d1 && Number(d1) !== 0) value = Number(d1);
-  else if (d2 && Number(d2) !== 0) value = Number(d2);
-  else return undefined;
-  return { value, metric, mm: metric ? value : value * 25.4 };
-}
-function normDia(str) {
-  const p = parseDia(str); if (!p) return "";
-  if (p.metric) return `${p.value} mm`;
-  const f = FRACS.find(([v]) => v === p.value);
-  return `${f ? f[1] : p.value} in`;
-}
-
 const LOCATIONS = [
   ["front-left", "Front-left corner (standard)"], ["front-right", "Front-right corner"], ["back-left", "Back-left corner"], ["back-right", "Back-right corner"],
   ["center", "Side A: center of stock (sets X, Y and Z)"], ["center-x", "Side B, after an end-for-end flip (sets X and Z, keeps Y)"],
@@ -48,146 +28,11 @@ const LOCATIONS = [
 const isCenterLoc = (l) => l === "center" || l === "center-x";
 
 
-// One probe sequence for every corner (shared by both center placements).
-function cornerProbeSequence(o) {
-  const keep = (name, param) => (o.remember ? `#<_ofprobe_${name}> = ${param}` : "");
-  return `
-                G38.2 Z -25 F${o.fastSeek}
-                G91 G1 Z 1
-                G38.2 Z -2 F${o.slowSeek}
-                ${keep("zt", "#5063")}
-                ${keep("ok", "-1")}
-                ${o.afterZ}
-
-                G91 G0 Z ${o.zLift}
-                G91 G0 X ${20 * o.sx}
-                G91 G0 Z ${-o.plunge}
-                G38.2 X ${-20 * o.sx} F${o.fastSeek}
-                G91 G1 X ${1 * o.sx}
-                G38.2 X ${-2 * o.sx} F${o.slowSeek}
-                ${keep("xa", "#5061")}
-                ${o.afterX}
-
-${o.probeY === false ? `
-                G91 G0 X ${1 * o.sx}
-` : `                G91 G0 X ${1 * o.sx}
-                G91 G0 Y ${20 * o.sy}
-                G91 G0 X ${-20 * o.sx}
-                G38.2 Y ${-20 * o.sy} F${o.fastSeek}
-                G91 G1 Y ${1 * o.sy}
-                G38.2 Y ${-2 * o.sy} F${o.slowSeek}
-                ${keep("ya", "#5062")}
-                ${o.afterY}
-
-                G91 G0 Y ${3 * o.sy}
-`}                G91 G0 Z 25
-`;
-}
-
-function executeProbe({ config, rotary, type, loc, dia: d, send }) {
-    const cfg = rotary ? config["probe-rotary"] : config.probe;
-    const w = cfg["probe-xdim"], l = cfg["probe-ydim"], zOffset = cfg["probe-zdim"], slow = cfg["probe-slow-seek"], fast = cfg["probe-fast-seek"];
-    const cutterLength = 12.7, zLift = 1, cd = d.mm;
-    const xOffset = w + cd / 2, yOffset = l + cd / 2;
-    const S = send;
-    if (type === "z") {
-      S(`
-                G21
-                G92 Z0
-
-                G38.2 Z -25.4 F${fast}
-                G91 G1 Z 1
-                G38.2 Z -2 F${slow}
-                G92 Z ${zOffset}
-
-                G91 G0 Z 25
-
-                M2
-            `);
-      return;
-    }
-    const plunge = Math.min(cutterLength, zOffset * 0.9) + zLift;
-    if (rotary) {
-      S(`
-                  G21
-                  G92 X0 Y0 Z0
-
-                  G38.2 Z -25 F${fast}
-                  G91 G1 Z 1
-                  G38.2 Z -2 F${slow}
-                  G92 Z ${zOffset}
-
-                  G91 G0 Z ${zLift}
-                  G91 G0 X 20
-                  G91 G0 Z ${-plunge}
-                  G38.2 X -20 F${fast}
-                  G91 G1 X 1
-                  G38.2 X -2 F${slow}
-                  G92 X ${xOffset}
-
-                  G91 G0 X 1
-                  G91 G0 Y 20
-                  G91 G0 X -20
-                  G38.2 Y -20 F${fast}
-                  G91 G1 Y 1
-                  G38.2 Y -2 F${slow}
-                  G92 Y ${yOffset}
-
-                  G91 G0 Y 3
-                  G91 G0 Z 25
-
-                  M2
-              `);
-      return;
-    }
-    const sx = loc === "front-right" || loc === "back-right" ? -1 : 1;
-    const sy = loc === "back-left" || loc === "back-right" ? -1 : 1;
-    const rotated90 = loc === "front-right" || loc === "back-left";
-    const xOff = rotated90 ? yOffset : xOffset, yOff = rotated90 ? xOffset : yOffset;
-    const keepY = loc === "center-x";
-    S(`
-                G21
-                ${keepY ? "G92 X0 Z0" : "G92 X0 Y0 Z0"}
-${cornerProbeSequence({ sx, sy, plunge, zLift, fastSeek: fast, slowSeek: slow, afterZ: `G92 Z ${zOffset}`, afterX: `G92 X ${sx * xOff}`, afterY: `G92 Y ${sy * yOff}`, remember: loc === "center" || keepY, probeY: !keepY })}
-                M2
-            `);
-  }
-
-  // Second placement for center probing: mirror of the first, then take the midpoints.
-function executeCenterSecondProbe({ config, loc, dia: d, send }) {
-    const cfg = config.probe;
-    const h = cfg["probe-zdim"], slow = cfg["probe-slow-seek"], fast = cfg["probe-fast-seek"];
-    const zLift = 1, plunge = Math.min(12.7, h * 0.9) + zLift, r = d.mm / 2;
-    const keepY = loc === "center-x";
-    const leftDim = cfg["probe-xdim"], rightDim = keepY ? cfg["probe-ydim"] : cfg["probe-xdim"], frontDim = cfg["probe-ydim"], backDim = cfg["probe-ydim"];
-    const halfX = `[[#5061 - #<_ofprobe_xa> + ${leftDim} + ${rightDim}] / 2 + ${r}]`;
-    const halfY = `[[#5062 - #<_ofprobe_ya> + ${frontDim} + ${backDim}] / 2 + ${r}]`;
-    const rest = cornerProbeSequence({
-      sx: -1, sy: -1, plunge, zLift, fastSeek: fast, slowSeek: slow, afterZ: "",
-      afterX: `#<_ofprobe_hx> = ${halfX}
-                G92 X [[#5061 - #<_ofprobe_xa> + ${leftDim} - ${rightDim}] / 2]`,
-      afterY: `#<_ofprobe_hy> = ${halfY}
-                G92 Y [[#5062 - #<_ofprobe_ya>] / 2]`,
-      probeY: !keepY,
-    }).replace(/^\s*G38\.2 Z -25 F\S+\n\s*G91 G1 Z 1\n\s*G38\.2 Z -2 F\S+\n/, "");
-    send(`
-            G21
-            G38.2 Z -25 F${fast}
-            G91 G1 Z 1
-            G38.2 Z -2 F${slow}
-            #<_ofprobe_dz> = [#5063 - #<_ofprobe_zt>]
-            o100 if [ABS[#<_ofprobe_dz>] GT 0.5]
-                G91 G0 Z 25
-                #<_ofprobe_ok> = 0
-            o100 else
-${rest}
-                #<_ofprobe_ok> = 1
-            o100 endif
-            G90
-
-            M2
-        `);
-  }
+// The probe programs are in probe.js (1.29.0). A step only completes when the program reached its end:
+// ofprobe_done must be the token written into the dialog when the step was entered.
+// Spindle turning: the drive reports a speed and the last programmed speed is not 0 (a drive that reports
+// a speed while stopped, or a programmed speed left over after a stop, alone does not block probing).
+const spinning = (st) => !!st && Number(st.s) > 0.5 && Number(st.speed || 0) !== 0;
 
 // ---- The wizard as a shared state machine (1.28.0) ----
 // Its whole state lives in the shared session under "probe", so the touchscreen, the PC and the phone show
@@ -212,7 +57,10 @@ export function probeTransition(d, ev) {
   if (ev.step && ev.step !== d.step) return null; // pressed on a step another screen already left
   const fx = [];
   let n = { ...d };
-  const goTo = (s) => { n.step = s; n.started = false; n.sent = s === "Probe" || s === "Probe2" ? s : null; if (n.sent) fx.push(s === "Probe" ? "probe1" : "probe2"); };
+  const goTo = (s) => {
+    n.step = s; n.started = false; n.sent = s === "Probe" || s === "Probe2" ? s : null;
+    if (n.sent) { n.token = ev.token || newToken(); n.sentAt = Date.now(); fx.push(s === "Probe" ? "probe1" : "probe2"); }
+  };
   switch (ev.name) {
     case "cancel":
       if ((d.step === "Probe" || d.step === "Probe2") && d.sent) fx.push("stop");
@@ -222,8 +70,12 @@ export function probeTransition(d, ev) {
       goTo(nextIn(d.steps, "CheckProbe")); break;
     case "fail":
       if (d.step !== "Probe" && d.step !== "Probe2") return null;
-      n.failed = true; goTo("Done"); break;
+      n.failed = true; n.failReason = ev.reason || "stopped"; n.failCode = ev.code ?? null; n.failMsg = ev.msg || "";
+      if (n.failReason === "nostart") fx.push("stop"); // in case it starts late
+      goTo("Done"); break;
     case "complete":
+      // Only a program that reached its end, for this very step (1.29.0)
+      if (!d.token || ev.done !== d.token) return null;
       if (d.step === "Probe") goTo(nextIn(d.steps, "Probe"));
       else if (d.step === "Probe2") { n.centerOk = ev.ofprobe?.ok ?? null; n.centerDz = ev.ofprobe?.dz ?? null; goTo("Done"); }
       else return null;
@@ -298,8 +150,12 @@ export default function ProbeDialog({ type, config, state, send, subscribe, rota
     const before = R.current.D || {}, d = out.d || before;
     const ctx = { config: R.current.config, rotary: d.rotary, type: d.type, loc: d.loc, dia: parseDia(d.rotary ? d.diaRot : d.dia), send: R.current.send };
     for (const f of out.fx) {
-      if (f === "probe1") executeProbe(ctx);
-      if (f === "probe2") executeCenterSecondProbe(ctx);
+      if (f === "probe1" || f === "probe2") {
+        const step = f === "probe1" ? "Probe" : "Probe2";
+        if (spinning(R.current.state)) { actRef.current({ name: "fail", step, reason: "spindle" }); continue; }
+        const prog = f === "probe1" ? probeProgram({ ...ctx, token: d.token }) : centerSecondProgram({ ...ctx, token: d.token });
+        if (R.current.send(prog) === false) actRef.current({ name: "fail", step, reason: "send" });
+      }
       if (f === "stop") api.put("stop").catch(() => {});
       if (f === "saveDia") setPref(d.rotary ? "probe.diaRot" : "probe.dia", normDia(d.rotary ? d.diaRot : d.dia));
       if (f === "saveLoc") setPref(locKey, d.loc);
@@ -321,25 +177,52 @@ export default function ProbeDialog({ type, config, state, send, subscribe, rota
   // Probe contact moves "Check probe" on.
   const touched = probeActive(state);
   useEffect(() => { if (isDriver && step === "CheckProbe" && touched) actRef.current({ name: "contact", step }); }, [isDriver, step, touched]);
-  // A probing program: started once the controller leaves idle, complete when it is idle again.
+  // A probing program: started once the controller leaves idle, finished when it is idle again. It only
+  // counts as complete if it set ofprobe_done to this step's token just before M2 (1.29.0). A Stop, an
+  // E-stop, "Switch not found" or a guarded move that touched something never gets there.
   const running = step === "Probe" || step === "Probe2";
+  const settle = (then) => {
+    // The token arrives with the state update that ends the program; give it a moment, then decide.
+    let t2 = null;
+    const t1 = setTimeout(() => {
+      const s = R.current.state, Dn = R.current.D;
+      if (!Dn || Dn.step !== step) return;
+      if (s.ofprobe_done === Dn.token) return then(true);
+      t2 = setTimeout(() => { const s2 = R.current.state, D2 = R.current.D; if (D2 && D2.step === step) then(s2.ofprobe_done === D2.token); }, 1200);
+    }, 300);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  };
+  const finishOrFail = (done) => {
+    const s = R.current.state, Dn = R.current.D;
+    if (done) { actRef.current({ name: "complete", step, done: Dn.token, ofprobe: { ok: s.ofprobe_ok, dz: s.ofprobe_dz } }); return; }
+    const code = Number(s.ofprobe_fail) || 0;
+    actRef.current({ name: "fail", step, reason: s.xx === "ESTOPPED" ? "estop" : code ? "guard" : "stopped", code });
+  };
   useEffect(() => {
     if (!isDriver || !running || !D) return;
-    if (state.xx === "ESTOPPED") { actRef.current({ name: "fail", step }); return; }
+    if (state.xx === "ESTOPPED") { actRef.current({ name: "fail", step, reason: "estop" }); return; }
     if (state.cycle && state.cycle !== "idle") { if (!D.started) uiPatch("probe", (cur) => (cur.step === step ? { started: true } : {})).catch(() => {}); return; }
-    if (state.cycle === "idle" && D.started) {
-      const t = setTimeout(() => actRef.current({ name: "complete", step, ofprobe: { ok: R.current.state.ofprobe_ok, dz: R.current.state.ofprobe_dz } }), 300);
-      return () => clearTimeout(t);
-    }
+    if (state.cycle === "idle" && D.started) return settle(finishOrFail);
   }, [isDriver, running, step, state.cycle, state.xx, D && D.started]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Taken over from a screen that went away while the probe ran: if it has finished, carry on.
+  // Never seen running: either the program never started (refused, lost), or this screen took over from one
+  // that went away after it had finished. Only the token tells them apart; without it this is a failure.
   useEffect(() => {
     if (!isDriver || !running || !D || D.started) return;
-    const t = setTimeout(() => { const s = R.current.state; if (s.cycle === "idle" && s.xx !== "ESTOPPED" && R.current.D?.step === step && !R.current.D.started) actRef.current({ name: "complete", step, ofprobe: { ok: s.ofprobe_ok, dz: s.ofprobe_dz } }); }, 8000);
+    const t = setTimeout(() => {
+      const s = R.current.state, Dn = R.current.D;
+      if (!Dn || Dn.step !== step || Dn.started || s.cycle !== "idle") return;
+      if (s.ofprobe_done === Dn.token) finishOrFail(true);
+      else actRef.current({ name: "fail", step, reason: s.xx === "ESTOPPED" ? "estop" : Number(s.ofprobe_fail) ? "guard" : "nostart", code: Number(s.ofprobe_fail) || 0 });
+    }, 8000);
     return () => clearTimeout(t);
   }, [isDriver, running, step, D && D.started]); // eslint-disable-line react-hooks/exhaustive-deps
-  // "Switch not found" in the log while probing.
-  useEffect(() => subscribe((m) => { if (m.log?.msg === "Switch not found" && R.current.D && (R.current.D.step === "Probe" || R.current.D.step === "Probe2") && R.current.D.driver === ME) actRef.current({ name: "fail", step: R.current.D.step }); }), [subscribe]);
+  // From the log while probing: "Switch not found", or the controller refusing the program.
+  useEffect(() => subscribe((m) => {
+    const Dn = R.current.D, msg = m.log?.msg || "";
+    if (!Dn || (Dn.step !== "Probe" && Dn.step !== "Probe2") || Dn.driver !== ME) return;
+    if (msg === "Switch not found") actRef.current({ name: "fail", step: Dn.step, reason: "notfound" });
+    else if (/^(Command refused|Probing refused)/.test(msg) && (m.log.level === "error" || m.log.level === "critical")) actRef.current({ name: "fail", step: Dn.step, reason: "refused", msg });
+  }), [subscribe]);
 
   const dia = D?.dia ?? "", diaRot = D?.diaRot ?? "", diaMode = D?.diaMode || "preset", loc = D?.loc || locations[0][0];
   const jogStep = D?.jogStep || 10, failed = !!D?.failed, centerOk = D?.centerOk ?? null, centerDz = D?.centerDz ?? null;
@@ -416,7 +299,7 @@ export default function ProbeDialog({ type, config, state, send, subscribe, rota
           {step === "PlaceProbeBlock" && <>
             <p>{placeText()}</p>
             {!rotary && (!usesLocation || loc === "front-left" || loc === "center" || loc === "center-x") && <Svg data={isXYZ ? PlaceXYZ : PlaceZ} w={304} />}
-            <p>The probing procedure will begin as soon as you click Next.</p>
+            <p>The router or spindle must be off. The probing procedure will begin as soon as you click Next.</p>
           </>}
           {step === "Probe" && <><p>Probing in progress…</p><div className="indet" /></>}
           {step === "MoveProbeBlock" && <>
@@ -435,10 +318,10 @@ export default function ProbeDialog({ type, config, state, send, subscribe, rota
             <p>{isCenterX ? "Click Next to probe: Z on the block top, then the left face only. Y is not changed." : "Click Next to probe: Z on the block top, then the left and front faces."}</p>
           </>}
           {step === "Probe2" && <><p>Probing the second corner…</p><div className="indet" /></>}
-          {step === "Done" && (failed ? <>
-            <h3>Emergency stop</h3><p>Could not find the probe block during probing.</p>
-            <p>Make sure the tip of the bit is less than {metric ? "25 mm" : "1 in"} above the probe block, and try again.</p>
-          </> : <>
+          {step === "Done" && (failed ? (() => {
+            const [h, t] = failText(D.failReason, D.failCode);
+            return <><h3>{h}</h3><p>{t}</p>{D.failMsg && <p className="dim">{D.failMsg}</p>}</>;
+          })() : <>
             <p>{rotary ? "Probing complete." : "Don't forget to put away the probe!"}</p>
             {!rotary && <Svg data={isXYZ ? PutAwayXYZ : PutAwayZ} w={329} />}
             {isXYZ && (rotary ? <p>The machine will now move to the Y origin.</p> : <p>
