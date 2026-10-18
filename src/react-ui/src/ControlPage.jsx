@@ -12,6 +12,7 @@ import MeasureStock from "./MeasureStock.jsx";
 import ToolSetter from "./ToolSetter.jsx";
 import { axisEnabled, computeAxis } from "./axis.js";
 import { Modal } from "./ui.jsx";
+import { useUi, uiOpen, uiClose, uiSet, ME } from "./shared.js";
 
 const PROBE_NAMES = { xyz: "Probe XYZ", z: "Probe Z", center: "Probe center", measure: "Measure stock", setter: "Tool setter" };
 
@@ -19,8 +20,11 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
   const { state, send, subscribe, logs, clearLogs } = ctl;
   const [path, setPath] = useState(null);
   const [pathBusy, setPathBusy] = useState(false);
-  const [probe, setProbe] = useState(null);
-
+  // Which probing tool is open is part of the shared session: every screen shows the same one.
+  // "tool" holds {kind}; each tool keeps its own steps under its own name ("probe", "measure", "setter").
+  const toolUi = useUi(state, "tool").v;
+  const probe = toolUi?.kind || null, openId = toolUi?.id || null;
+  const setProbe = (k) => (k ? uiOpen("tool", { kind: k, id: `${Date.now()}-${ME}` }) : uiClose("tool"));
   useEffect(() => {
     const f = state.selected;
     setPath(null);
@@ -46,14 +50,15 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
   const axes = cfg.config ? ["x", "y", "z"].filter((a) => axisEnabled(state, cfg.config, a)) : [];
   const homed = !!cfg.config && axes.length > 0 && axes.every((a) => computeAxis(state, cfg.config, a, metric).homed);
   const unhomed = cfg.config ? axes.filter((a) => !computeAxis(state, cfg.config, a, metric).homed) : [];
-  const [homeFirst, setHomeFirst] = useState(null);
+  const homeFirst = useUi(state, "home-first").v?.kind || null;
+  const setHomeFirst = (k) => (k ? uiSet("home-first", { kind: k }) : uiClose("home-first"));
   const [homeErr, setHomeErr] = useState("");
   const requestProbe = (t) => {
     if (!t) { setProbe(null); return; }
     if (homed) setProbe(t); else { setHomeErr(""); setHomeFirst(t); }
   };
   useEffect(() => {
-    if (homeFirst && homed && mach !== "HOMING") { setProbe(homeFirst); setHomeFirst(null); }
+    if (homeFirst && homed && mach !== "HOMING") { setHomeFirst(null); setProbe(homeFirst); }
   }, [homeFirst, homed, mach]);
   const homing = mach === "HOMING";
 
@@ -84,13 +89,13 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
         </Modal>
       )}
       {probe === "measure" && cfg.config && (
-        <MeasureStock config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
+        <MeasureStock openId={openId} config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
       )}
       {probe === "setter" && cfg.config && (
-        <ToolSetter config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
+        <ToolSetter openId={openId} config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
       )}
       {probe && probe !== "measure" && probe !== "setter" && cfg.config && (
-        <ProbeDialog type={probe} config={cfg.config} state={state} send={send} subscribe={subscribe} rotary={rotary} metric={metric} onClose={() => setProbe(null)} />
+        <ProbeDialog openId={openId} type={probe} config={cfg.config} state={state} send={send} subscribe={subscribe} rotary={rotary} metric={metric} onClose={() => setProbe(null)} />
       )}
     </main>
     </>

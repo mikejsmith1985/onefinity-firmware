@@ -47,6 +47,21 @@ export function NumInput({ value, onChange, onEnter, digits, min, max, int, ...r
   );
 }
 
+// A text box whose value is shared with every screen. Typing stays local and smooth; the text is sent
+// a moment after each keystroke, and a change made on another screen shows here unless this box has focus.
+export function SharedText({ value, onChange, delay = 250, ...rest }) {
+  const [draft, setDraft] = useState(value ?? "");
+  const ref = useRef(null), timer = useRef(null), sent = useRef(value ?? "");
+  useEffect(() => {
+    if (document.activeElement !== ref.current && (value ?? "") !== draft) setDraft(value ?? "");
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const flush = (s) => { clearTimeout(timer.current); if (s !== sent.current) { sent.current = s; onChange(s); } };
+  return <input type="text" autoComplete="off" spellCheck="false" {...rest} ref={ref} value={draft}
+    onChange={(e) => { const s = e.target.value; setDraft(s); clearTimeout(timer.current); timer.current = setTimeout(() => flush(s), delay); }}
+    onBlur={(e) => { flush(draft); rest.onBlur && rest.onBlur(e); }} />;
+}
+
 export function Modal({ title, children, actions, onClose, wide, dismissable = true }) {
   const ref = useRef(null);
   // Callers pass a new onClose on every render. Keep it in a ref so the focus

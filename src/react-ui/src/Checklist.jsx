@@ -1,11 +1,12 @@
-import React, { useState } from "react";
+import React from "react";
 import { Modal } from "./ui.jsx";
 import { computeAxis, fmtLen } from "./axis.js";
 import { status_to_string } from "./modbus.js";
 import { stockChecks, probeChecks } from "./setup.js";
 
-const KEY = "next-skip-checklist";
-export const skipChecklist = () => { try { return localStorage.getItem(KEY) === "1"; } catch { return false; } };
+import { getPref, setPref } from "./shared.js";
+// "Don't show this check again" is a shared setting (it was per browser before 1.28).
+export const skipChecklist = () => String(getPref("checklist.skip", "")) === "1";
 
 // Builds the list of checks. level: ok | warn | stop
 export function buildChecks(state, config, metric, file, setup = null, probeRec = null, extra = []) {
@@ -58,13 +59,12 @@ export function SheetView({ setup }) {
   );
 }
 
-export default function Checklist({ checks, setup, onRun, onCancel }) {
-  const [never, setNever] = useState(false);
-  const [ack, setAck] = useState(false);
+export default function Checklist({ checks, setup, onRun, onCancel, ack, never, onAck, onNever }) {
+  const setAck = onAck, setNever = onNever;
   const stopItems = checks.filter((c) => c.level === "stop");
   const stops = stopItems.length > 0;
   const warns = checks.some((c) => c.level === "warn");
-  const go = () => { if (never && !stops) { try { localStorage.setItem(KEY, "1"); } catch {} } onRun(); };
+  const go = () => { if (never && !stops) setPref("checklist.skip", "1"); onRun(); };
   return (
     <Modal title={stops ? "Stop. Do not run yet" : "Ready to run?"} onClose={onCancel} actions={<>
       <button data-autofocus className={stops ? "primary" : ""} onClick={onCancel}>{stops ? "Cancel and fix it" : "Cancel"}</button>
@@ -83,7 +83,7 @@ export default function Checklist({ checks, setup, onRun, onCancel }) {
       </ul>
       {stops
         ? <label className="check ack"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} /> I know this is wrong for this program and want to run it anyway</label>
-        : <label className="check"><input type="checkbox" checked={never} onChange={(e) => setNever(e.target.checked)} /> Don't show this check again on this device</label>}
+        : <label className="check"><input type="checkbox" checked={never} onChange={(e) => setNever(e.target.checked)} /> Don't show this check again</label>}
     </Modal>
   );
 }

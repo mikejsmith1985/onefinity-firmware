@@ -59,6 +59,7 @@ state.macros = macros; state.macros_list = macros.map((m) => m.file_name); state
 // Same shape as the real controller's config: folders with {file_name} entries. tap_holes.nc is in no folder
 // (as when a program is uploaded straight to /api/file) and must still show in the default folder.
 state.gcode_list = [{ name: "default", type: "folder", files: [{ file_name: "fuel_filter_outline.nc" }] }, { name: "Jobs", type: "folder", files: [{ file_name: "alternator_arm.nc" }] }];
+config.gcode_list = JSON.parse(JSON.stringify(state.gcode_list)); config.non_macros_list = state.files.map((f) => ({ file_name: f }));
 state.messages = [];
 state.log = [];
 
@@ -102,8 +103,30 @@ function run(dryLift = 0) {
   }, 400);
 }
 const mdiLog = [];
+// Shared screen session (Session.py): {name: {v, rev}} with compare-and-set writes.
+state.ui = {}; state.store_rev = {}; state.last_error = null; state.fo = 1000; state.so = 1000;
+const uiRevs = {}; let errId = 0, starts = 0;
+function uiPut(name, body) {
+  const cur = state.ui[name], rev = cur ? cur.rev : uiRevs[name] || 0;
+  if (body.rev !== undefined && body.rev !== null && +body.rev !== rev) return { ok: false, v: cur ? cur.v : null, rev };
+  const n = rev + 1; uiRevs[name] = n;
+  const ui = { ...state.ui };
+  if (body.v === null || body.v === undefined) delete ui[name]; else ui[name] = { v: body.v, rev: n };
+  broadcast({ ui });
+  return { ok: true, v: body.v ?? null, rev: n };
+}
+const storeChanged = (name) => broadcast({ store_rev: { ...state.store_rev, [name]: (state.store_rev[name] || 0) + 1 } });
 function mdi(text) {
   mdiLog.push(text);
+  // Probing (Probe XYZ / Z): run for a second, then set an offset
+  if (/G38\.2/.test(text) && !text.includes("#<_ofm_ok>") && !text.includes("#<_ofs_ok>")) {
+    broadcast({ xx: "RUNNING", cycle: "mdi" });
+    setTimeout(() => {
+      if (process.env.MOCK_PROBE_FAIL) { broadcast({ xx: "ESTOPPED", cycle: "idle", er: "Switch not found" }); return; }
+      broadcast({ xx: "READY", cycle: "idle", offset_z: -57.35, offset_x: text.includes("X") ? 163.142 : state.offset_x, ofprobe_ok: 1, ofprobe_dz: 0.02 });
+    }, 1200);
+    return;
+  }
   // Probe input: pt 1 = normally open (touched reads 0), 2 = normally closed (touched reads 1)
   const rest = state.pt === 2 ? 0 : 1;
   if (text === "mock:touch") { broadcast({ pw: 1 - rest }); setTimeout(() => broadcast({ pw: rest }), 300); return; }
@@ -158,7 +181,13 @@ const server = http.createServer((req, res) => {
   if (p === "/config-template.json" || /^\/onefinity.*\.json$/.test(p)) { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(fs.readFileSync(path_.join(R, p.slice(1)))); }
   if (p === "/mock/set") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { const d = JSON.parse(b); Object.assign(state, d); broadcast(d); } catch {} json(res, "ok"); }); return; }
   if (p === "/api/config/load") return json(res, config);
-  if (p === "/api/config/save") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { Object.assign(config, JSON.parse(b)); } catch {} json(res, "ok"); }); return; }
+  if (p === "/api/config/save") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { const c = JSON.parse(b); Object.assign(config, c); const d = {}; for (const k of ["gcode_list", "non_macros_list"]) if (c[k]) d[k] = c[k]; if (Object.keys(d).length) broadcast(d); } catch {} storeChanged("config"); json(res, "ok"); }); return; }
+  if (p.startsWith("/api/ui/")) {
+    const name = p.slice(8);
+    if (req.method === "GET") { const e = state.ui[name]; return json(res, e ? e : { v: null, rev: uiRevs[name] || 0 }); }
+    let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { let body = {}; try { body = JSON.parse(b); } catch {} json(res, uiPut(name, body)); }); return;
+  }
+  if (p === "/mock/error") { errId++; broadcast({ last_error: { id: errId, msg: url.searchParams.get("msg") || "Invalid character: ','", at: Date.now() / 1000 } }); return json(res, "ok"); }
   if (p === "/api/hostname") return json(res, "onefinity");
   if (p === "/api/network") return json(res, { ipAddresses: ["192.168.1.42"], hostname: "onefinity", wifi: { enabled: true, ssid: "Shop-WiFi", networks: [{ Name: "Shop-WiFi", Quality: 78 }, { Name: "Neighbor", Quality: 34 }, { Name: "Guest", Quality: 55 }] } });
   if (p === "/api/time") return json(res, { timeinfo: "Local time: Fri 2026-10-09 10:15:00\nTime zone: America/New_York (EDT)", timezones: "America/New_York\nAmerica/Chicago\nUTC" });
@@ -223,18 +252,21 @@ const server = http.createServer((req, res) => {
   }
   if (p.startsWith("/api/next-store/")) {
     const n = p.split("/").pop();
-    if (req.method === "PUT") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { store[n] = JSON.parse(b); json(res, "ok"); }); return; }
+    if (req.method === "PUT") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { store[n] = JSON.parse(b); storeChanged(n); json(res, "ok"); }); return; }
     return json(res, store[n] ?? null);
   }
+  if (p.startsWith("/api/override/")) { const [, , , kind, v] = p.split("/"); broadcast({ [kind === "feed" ? "fo" : "so"]: Math.round(parseFloat(v) * 1000) }); return json(res, "ok"); }
   if (p === "/api/jog") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { jogLog.push(b); json(res, "ok"); }); return; }
   if (p === "/api/jogs") return json(res, jogLog);
   if (p === "/api/mdis") return json(res, mdiLog);
+  if (p === "/api/starts") return json(res, starts);
   if (p === "/api/start") {
     let body = "";
     req.on("data", (c) => { body += c; });
     req.on("end", () => {
       let lift = 0;
       try { lift = +JSON.parse(body || "{}").dry_lift || 0; } catch { /* no body */ }
+      starts++;
       run(lift);
       json(res, "ok");
     });

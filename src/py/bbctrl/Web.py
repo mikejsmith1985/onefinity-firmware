@@ -82,6 +82,26 @@ class HomePromptHandler(bbctrl.APIHandler):
         self.get_ctrl().state.set('home_prompt', 'done')
 
 
+class SessionHandler(bbctrl.APIHandler):
+    # The shared screen session (see Session.py).  PUT {"v": value} sets a
+    # value; with "rev" it is only set if nobody changed it since that
+    # revision.  The answer is {"ok", "v", "rev"}: on a refused write, the
+    # value another screen set first.
+    def get(self, name):
+        if not bbctrl.Session.valid_name(name): raise HTTPError(404)
+        self.write_json(self.get_ctrl().session.get(name))
+
+
+    def put(self, name):
+        if not bbctrl.Session.valid_name(name): raise HTTPError(404)
+        if not isinstance(self.json, dict): raise HTTPError(400, 'Expected {"v": ...}')
+        try:
+            ok, cur = self.get_ctrl().session.put(name, self.json.get('v'),
+                                                  self.json.get('rev'))
+        except ValueError as e: raise HTTPError(400, str(e))
+        self.write_json(dict(ok = ok, v = cur['v'], rev = cur['rev']))
+
+
 class MessageAckHandler(bbctrl.APIHandler):
     def put_ok(self, id):
         self.get_ctrl().state.ack_message(int(id))
@@ -373,7 +393,11 @@ class ConfigRestoreHandler(bbctrl.APIHandler):
 
 
 class ConfigSaveHandler(bbctrl.APIHandler):
-    def put_ok(self): self.get_ctrl().config.save(self.json)
+    def put_ok(self):
+        self.get_ctrl().config.save(self.json)
+        # Other screens re-read the saved settings.
+        session = getattr(self.get_ctrl(), 'session', None)
+        if session: session.store_changed('config')
 
 
 class ConfigResetHandler(bbctrl.APIHandler):
@@ -526,7 +550,7 @@ class NextStoreHandler(bbctrl.APIHandler):
     # Small JSON documents for the new UI (run history, file notes), kept on
     # the controller so every browser sees the same data.  Only whitelisted
     # names are accepted and each document is capped in size.
-    NAMES = ('runs', 'notes', 'prefs', 'checkpoint', 'probe')
+    NAMES = ('runs', 'notes', 'prefs', 'checkpoint', 'probe', 'uiprefs')
     MAX_BYTES = 1000000
 
     def _path(self, name):
@@ -565,6 +589,10 @@ class NextStoreHandler(bbctrl.APIHandler):
         tmp = path + '.tmp'
         with open(tmp, 'w', encoding = 'utf-8') as f: json.dump(self.json, f)
         os.replace(tmp, path)
+
+        # Every open screen re-reads it straight away.
+        session = getattr(self.get_ctrl(), 'session', None)
+        if session: session.store_changed(name)
 
         if name == 'prefs':
             cp = getattr(self.get_ctrl(), 'checkpoint', None)
@@ -1037,7 +1065,8 @@ class Web(tornado.web.Application):
 
         handlers = [
             (r'/websocket', WSConnection),
-            (r'/api/next-store/(runs|notes|prefs|checkpoint|probe)', NextStoreHandler),
+            (r'/api/next-store/(runs|notes|prefs|checkpoint|probe|uiprefs)', NextStoreHandler),
+            (r'/api/ui/([a-z0-9._-]+)', SessionHandler),
             (r'/api/next-resume', ResumeHandler),
             (r'/api/next-align', AlignHandler),
             (r'/api/camera', CameraHandler),

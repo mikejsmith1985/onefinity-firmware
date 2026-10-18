@@ -68,6 +68,8 @@ class Plan(object):
 
         # Copy planner state
         self.state = ctrl.state.snapshot()
+        # The screen session is UI only; keep it out of the planner's command line.
+        for name in ('ui', 'store_rev', 'last_error'): self.state.pop(name, None)
         self.config = ctrl.mach.planner.get_config(False, False)
         del self.config['default-units']
 

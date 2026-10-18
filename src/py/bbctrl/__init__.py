@@ -50,6 +50,7 @@ from bbctrl.I2C import I2C
 from bbctrl.Planner import Planner
 from bbctrl.Preplanner import Preplanner
 from bbctrl.State import State
+from bbctrl.Session import Session
 from bbctrl.Checkpoint import Checkpoint
 from bbctrl.Resume import Resume
 from bbctrl.Align import Align, AlignError

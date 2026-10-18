@@ -1,8 +1,9 @@
 import { remotePut } from "./store.js";
+import { ME, useUi, useDriver, uiGet, uiCas, uiUpdate, uiPatch, uiClose, loadPrefs, getPref, setPref } from "./shared.js";
 import { probeActive } from "./setter.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./controller.js";
-import { Modal } from "./ui.jsx";
+import { Modal, SharedText } from "./ui.jsx";
 import BitDiameter from "./svgs/probe-bit-diameter.svg?raw";
 import CheckXYZ from "./svgs/probe-check-xyz.svg?raw";
 import CheckZ from "./svgs/probe-check-z.svg?raw";
@@ -46,8 +47,6 @@ const LOCATIONS = [
 ];
 const isCenterLoc = (l) => l === "center" || l === "center-x";
 
-const ls = (k, d = "") => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
-const lset = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 
 // One probe sequence for every corner (shared by both center placements).
 function cornerProbeSequence(o) {
@@ -85,65 +84,12 @@ ${o.probeY === false ? `
 `;
 }
 
-export default function ProbeDialog({ type, config, state, send, subscribe, rotary, metric, onClose }) {
-  const isXYZ = type === "xyz" || type === "center";
-  const isCenterButton = type === "center";
-  const usesLocation = isXYZ && !rotary;
-  const locations = LOCATIONS.filter(([v]) => (isCenterButton ? isCenterLoc(v) : !isCenterLoc(v)));
-  const locKey = isCenterButton ? "probeCenterSide" : "probeLocation";
-
-  const [step, setStep] = useState("None");
-  const [steps, setSteps] = useState([]);
-  const [dia, setDia] = useState(() => ls("cutterDiameter") || PRESET_BITS[0]);
-  const [diaRot, setDiaRot] = useState(() => ls("cutterDiameterRotary") || PRESET_BITS[0]);
-  // "preset": pick 1/8 or 1/4 in. "custom": type a size.
-  const [diaMode, setDiaMode] = useState(() => { const v = normDia(ls("cutterDiameter")); return !v || PRESET_BITS.includes(v) ? "preset" : "custom"; });
-  const customRef = useRef(null);
-  useEffect(() => { if (diaMode === "custom") customRef.current?.focus(); }, [diaMode]);
-  const [loc, setLoc] = useState(() => { const s = ls(locKey); return locations.some(([v]) => v === s) ? s : locations[0][0]; });
-  const [jogStep, setJogStep] = useState(10);
-  const [failed, setFailed] = useState(false);
-  const [centerOk, setCenterOk] = useState(null);
-  const [centerDz, setCenterDz] = useState(null);
-
-  // Everything the async flow needs lives in one ref so it can read the latest values.
-  const R = useRef({});
-  R.current.dia = parseDia(rotary ? diaRot : dia);
-  R.current.loc = loc; R.current.config = config; R.current.rotary = rotary; R.current.type = type; R.current.send = send; R.current.state = state;
-  R.current.state = state; R.current.centerOk = centerOk;
-
-  const f = useRef({ active: false, contacted: false, started: false, failed: false, complete: false, ack: false, cancelled: false }).current;
-  const waiters = useRef(new Set()).current;
-  const notify = () => waiters.forEach((w) => w());
-  const waitFor = (...preds) => new Promise((resolve) => {
-    const check = () => { if (preds.some((p) => p())) { waiters.delete(check); resolve(); } };
-    waiters.add(check); check();
-  });
-  const clearFlags = () => { f.cancelled = false; f.contacted = false; f.started = false; f.complete = false; f.ack = false; };
-
-  // controller -> flags
-  useEffect(() => subscribe((d) => {
-    if ("ofprobe_ok" in d) { setCenterOk(d.ofprobe_ok); R.current.centerOk = d.ofprobe_ok; }
-    if ("ofprobe_dz" in d) setCenterDz(d.ofprobe_dz);
-    if (f.active) {
-      if ("pw" in d && probeActive({ ...R.current.state, ...d })) f.contacted = true;
-      if (d.log?.msg === "Switch not found") { f.failed = true; setFailed(true); }
-      if (d.cycle !== undefined) {
-        if (d.cycle !== "idle") f.started = true;
-        else if (f.started) { f.started = false; f.complete = true; }
-      }
-    }
-    notify();
-  }), [subscribe]);
-  useEffect(() => { if (probeActive(state) && f.active) { f.contacted = true; notify(); } }, [state.pw, state.pt]);
-
-  const executeProbe = () => {
-    const { config, rotary, type, loc, dia: d } = R.current;
+function executeProbe({ config, rotary, type, loc, dia: d, send }) {
     const cfg = rotary ? config["probe-rotary"] : config.probe;
     const w = cfg["probe-xdim"], l = cfg["probe-ydim"], zOffset = cfg["probe-zdim"], slow = cfg["probe-slow-seek"], fast = cfg["probe-fast-seek"];
     const cutterLength = 12.7, zLift = 1, cd = d.mm;
     const xOffset = w + cd / 2, yOffset = l + cd / 2;
-    const S = R.current.send;
+    const S = send;
     if (type === "z") {
       S(`
                 G21
@@ -205,11 +151,10 @@ export default function ProbeDialog({ type, config, state, send, subscribe, rota
 ${cornerProbeSequence({ sx, sy, plunge, zLift, fastSeek: fast, slowSeek: slow, afterZ: `G92 Z ${zOffset}`, afterX: `G92 X ${sx * xOff}`, afterY: `G92 Y ${sy * yOff}`, remember: loc === "center" || keepY, probeY: !keepY })}
                 M2
             `);
-  };
+  }
 
   // Second placement for center probing: mirror of the first, then take the midpoints.
-  const executeCenterSecondProbe = () => {
-    const { config, loc, dia: d } = R.current;
+function executeCenterSecondProbe({ config, loc, dia: d, send }) {
     const cfg = config.probe;
     const h = cfg["probe-zdim"], slow = cfg["probe-slow-seek"], fast = cfg["probe-fast-seek"];
     const zLift = 1, plunge = Math.min(12.7, h * 0.9) + zLift, r = d.mm / 2;
@@ -225,7 +170,7 @@ ${cornerProbeSequence({ sx, sy, plunge, zLift, fastSeek: fast, slowSeek: slow, a
                 G92 Y [[#5062 - #<_ofprobe_ya>] / 2]`,
       probeY: !keepY,
     }).replace(/^\s*G38\.2 Z -25 F\S+\n\s*G91 G1 Z 1\n\s*G38\.2 Z -2 F\S+\n/, "");
-    R.current.send(`
+    send(`
             G21
             G38.2 Z -25 F${fast}
             G91 G1 Z 1
@@ -242,68 +187,170 @@ ${rest}
 
             M2
         `);
-  };
+  }
 
-  // The whole probing procedure, step by step.
-  useEffect(() => {
-    let dead = false;
-    const stepDone = async (name, list, ...preds) => {
-      if (dead) throw new Error("cancelled");
-      setStep(name);
-      if (!list.includes(name)) return;
-      clearFlags();
-      if (name === "Probe") executeProbe();
-      if (name === "Probe2") executeCenterSecondProbe();
-      await waitFor(...preds, () => f.cancelled);
-      if (f.cancelled) throw new Error("cancelled");
-    };
-    (async () => {
-      try {
-        f.active = true; f.failed = false; setFailed(false);
-        const safety = config.settings["probing-prompts"];
-        const locationStep = isXYZ && !rotary;
-        let list = [
-          safety && !rotary ? "CheckProbe" : null, isXYZ ? "BitDimensions" : null, locationStep ? "ProbeLocation" : null,
-          safety ? "PlaceProbeBlock" : null, "Probe", locationStep ? "MoveProbeBlock" : null, locationStep ? "Probe2" : null, "Done",
-        ].filter(Boolean);
-        setSteps(list);
-        const ack = () => f.ack, contacted = () => f.contacted, complete = () => f.complete, fail = () => f.failed;
-        if (!rotary) await stepDone("CheckProbe", list, contacted);
-        if (isXYZ) {
-          await stepDone("BitDimensions", list, ack);
-          lset(rotary ? "cutterDiameterRotary" : "cutterDiameter", normDia(rotary ? R.current.diaRotStr : R.current.diaStr));
-        }
-        if (locationStep) {
-          await stepDone("ProbeLocation", list, ack);
-          lset(locKey, R.current.loc);
-          if (isCenterLoc(R.current.loc)) { setCenterOk(null); setCenterDz(null); R.current.centerOk = null; }
-          else { list = list.filter((s) => s !== "MoveProbeBlock" && s !== "Probe2"); setSteps(list); }
-        }
-        await stepDone("PlaceProbeBlock", list, ack);
-        await stepDone("Probe", list, complete, fail);
-        if (f.failed) { await stepDone("Done", list, ack); return; }
-        await stepDone("MoveProbeBlock", list, ack);
-        await stepDone("Probe2", list, complete, fail);
-        await stepDone("Done", list, ack);
-        if (usesLocation && isCenterLoc(R.current.loc) && R.current.centerOk === 0) return;
-        // Remember where zero was set so the Run check can compare it with the program's setup sheet
-        if (usesLocation) {
-          const st = R.current.state || {};
-          remotePut("probe", { loc: R.current.loc, time: Date.now(), off: { x: st.offset_x ?? null, y: st.offset_y ?? null, z: st.offset_z ?? null } });
-        }
-        if (isXYZ) R.current.send(rotary ? "G90\nG0 Y0" : "G90\nG0 X0Y0");
-      } catch (e) {
-        if (e.message !== "cancelled") console.error("Error during probing:", e);
-      } finally {
-        f.active = false; setStep("None");
-        if (f.started) api.put("stop").catch(() => {});
-        clearFlags(); onClose();
+// ---- The wizard as a shared state machine (1.28.0) ----
+// Its whole state lives in the shared session under "probe", so the touchscreen, the PC and the phone show
+// the same step. Any screen can press Next or Cancel. A step that moves the machine is only taken by the
+// screen whose write the controller accepted first (compare-and-set), and that screen sends the G-code and
+// becomes the dialog's driver: it watches for the probe touch and for the program to finish. If the driver
+// goes quiet (a phone that went to sleep), another screen takes over from the same step.
+const nextIn = (list, s) => list[list.indexOf(s) + 1] || "Done";
+
+export function buildSteps({ type, rotary, safety }) {
+  const isXYZ = type === "xyz" || type === "center";
+  const locationStep = isXYZ && !rotary;
+  return [
+    safety && !rotary ? "CheckProbe" : null, isXYZ ? "BitDimensions" : null, locationStep ? "ProbeLocation" : null,
+    safety ? "PlaceProbeBlock" : null, "Probe", locationStep ? "MoveProbeBlock" : null, locationStep ? "Probe2" : null, "Done",
+  ].filter(Boolean);
+}
+
+// d: the shared dialog; ev: {name, step?, ofprobe?}. Returns {d, fx} (new state and side effects) or null to ignore.
+export function probeTransition(d, ev) {
+  if (!d) return null;
+  if (ev.step && ev.step !== d.step) return null; // pressed on a step another screen already left
+  const fx = [];
+  let n = { ...d };
+  const goTo = (s) => { n.step = s; n.started = false; n.sent = s === "Probe" || s === "Probe2" ? s : null; if (n.sent) fx.push(s === "Probe" ? "probe1" : "probe2"); };
+  switch (ev.name) {
+    case "cancel":
+      if ((d.step === "Probe" || d.step === "Probe2") && d.sent) fx.push("stop");
+      fx.push("close"); return { d: null, fx };
+    case "contact":
+      if (d.step !== "CheckProbe") return null;
+      goTo(nextIn(d.steps, "CheckProbe")); break;
+    case "fail":
+      if (d.step !== "Probe" && d.step !== "Probe2") return null;
+      n.failed = true; goTo("Done"); break;
+    case "complete":
+      if (d.step === "Probe") goTo(nextIn(d.steps, "Probe"));
+      else if (d.step === "Probe2") { n.centerOk = ev.ofprobe?.ok ?? null; n.centerDz = ev.ofprobe?.dz ?? null; goTo("Done"); }
+      else return null;
+      break;
+    case "next":
+      switch (d.step) {
+        case "CheckProbe": case "Probe": case "Probe2": return null; // these move on by themselves
+        case "BitDimensions":
+          if (!parseDia(d.rotary ? d.diaRot : d.dia)) return null;
+          fx.push("saveDia"); goTo(nextIn(d.steps, "BitDimensions")); break;
+        case "ProbeLocation":
+          fx.push("saveLoc");
+          if (isCenterLoc(d.loc)) { n.centerOk = null; n.centerDz = null; }
+          else n.steps = d.steps.filter((s) => s !== "MoveProbeBlock" && s !== "Probe2");
+          goTo(nextIn(n.steps, "ProbeLocation")); break;
+        case "Done":
+          if (!d.failed) fx.push("finish");
+          fx.push("close"); return { d: null, fx };
+        default: goTo(nextIn(d.steps, d.step));
       }
-    })();
-    return () => { dead = true; f.cancelled = true; notify(); };
-  }, []);
+      break;
+    default: return null;
+  }
+  return { d: n, fx };
+}
 
-  R.current.diaStr = dia; R.current.diaRotStr = diaRot;
+export default function ProbeDialog({ type, config, state, send, subscribe, rotary, metric, onClose, openId }) {
+  const isXYZ = type === "xyz" || type === "center";
+  const isCenterButton = type === "center";
+  const usesLocation = isXYZ && !rotary;
+  const locations = LOCATIONS.filter(([v]) => (isCenterButton ? isCenterLoc(v) : !isCenterLoc(v)));
+  const locKey = isCenterButton ? "probe.centerSide" : "probe.loc";
+
+  const ui = useUi(state, "probe");
+  const D = ui.v && ui.v.id === openId ? ui.v : null;
+  const isDriver = useDriver(state, "probe", D);
+  const customRef = useRef(null);
+  const R = useRef({}); R.current = { D, rev: ui.rev, state, config, rotary, type, send };
+
+  // Open: the first screen to get here writes the starting state; the others show it.
+  useEffect(() => {
+    if (D) return;
+    (async () => {
+      await loadPrefs();
+      const savedLoc = String(getPref(locKey, ""));
+      const dia = String(getPref("probe.dia", "") || PRESET_BITS[0]), diaRot = String(getPref("probe.diaRot", "") || PRESET_BITS[0]);
+      const nd = normDia(dia);
+      const init = {
+        id: openId, type, rotary: !!rotary, driver: ME,
+        steps: buildSteps({ type, rotary, safety: config.settings["probing-prompts"] }),
+        dia, diaRot, diaMode: !nd || PRESET_BITS.includes(nd) ? "preset" : "custom",
+        loc: locations.some(([v]) => v === savedLoc) ? savedLoc : locations[0][0],
+        jogStep: 10, failed: false, centerOk: null, centerDz: null, sent: null, started: false,
+      };
+      init.step = init.steps[0];
+      const cur = await uiGet("probe");
+      if (cur.v && cur.v.id === openId) return; // another screen was quicker
+      await uiCas("probe", init, cur.rev);
+    })().catch(() => {});
+  }, [openId, !!D]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Run a transition. Only the screen whose write is accepted performs its side effects.
+  const act = async (ev) => {
+    let out = null;
+    const r = await uiUpdate("probe", (cur) => {
+      if (!cur || cur.id !== openId) return undefined;
+      out = probeTransition(cur, ev);
+      if (!out) return undefined;
+      return out.d ? { ...out.d, driver: ME } : null;
+    }).catch(() => ({ ok: false }));
+    if (!r.ok || !out) return;
+    const before = R.current.D || {}, d = out.d || before;
+    const ctx = { config: R.current.config, rotary: d.rotary, type: d.type, loc: d.loc, dia: parseDia(d.rotary ? d.diaRot : d.dia), send: R.current.send };
+    for (const f of out.fx) {
+      if (f === "probe1") executeProbe(ctx);
+      if (f === "probe2") executeCenterSecondProbe(ctx);
+      if (f === "stop") api.put("stop").catch(() => {});
+      if (f === "saveDia") setPref(d.rotary ? "probe.diaRot" : "probe.dia", normDia(d.rotary ? d.diaRot : d.dia));
+      if (f === "saveLoc") setPref(locKey, d.loc);
+      if (f === "finish") {
+        // Remember where zero was set so the Run check can compare it with the program's setup sheet
+        if (!(usesLocation && isCenterLoc(before.loc) && before.centerOk === 0)) {
+          const st = R.current.state || {};
+          if (usesLocation) remotePut("probe", { loc: before.loc, time: Date.now(), off: { x: st.offset_x ?? null, y: st.offset_y ?? null, z: st.offset_z ?? null } });
+          if (isXYZ) R.current.send(before.rotary ? "G90\nG0 Y0" : "G90\nG0 X0Y0");
+        }
+      }
+      if (f === "close") { uiClose("tool"); onClose && onClose(); }
+    }
+  };
+  const actRef = useRef(act); actRef.current = act;
+
+  // ---- watchers, on the driving screen only ----
+  const step = D?.step || "None";
+  // Probe contact moves "Check probe" on.
+  const touched = probeActive(state);
+  useEffect(() => { if (isDriver && step === "CheckProbe" && touched) actRef.current({ name: "contact", step }); }, [isDriver, step, touched]);
+  // A probing program: started once the controller leaves idle, complete when it is idle again.
+  const running = step === "Probe" || step === "Probe2";
+  useEffect(() => {
+    if (!isDriver || !running || !D) return;
+    if (state.xx === "ESTOPPED") { actRef.current({ name: "fail", step }); return; }
+    if (state.cycle && state.cycle !== "idle") { if (!D.started) uiPatch("probe", (cur) => (cur.step === step ? { started: true } : {})).catch(() => {}); return; }
+    if (state.cycle === "idle" && D.started) {
+      const t = setTimeout(() => actRef.current({ name: "complete", step, ofprobe: { ok: R.current.state.ofprobe_ok, dz: R.current.state.ofprobe_dz } }), 300);
+      return () => clearTimeout(t);
+    }
+  }, [isDriver, running, step, state.cycle, state.xx, D && D.started]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Taken over from a screen that went away while the probe ran: if it has finished, carry on.
+  useEffect(() => {
+    if (!isDriver || !running || !D || D.started) return;
+    const t = setTimeout(() => { const s = R.current.state; if (s.cycle === "idle" && s.xx !== "ESTOPPED" && R.current.D?.step === step && !R.current.D.started) actRef.current({ name: "complete", step, ofprobe: { ok: s.ofprobe_ok, dz: s.ofprobe_dz } }); }, 8000);
+    return () => clearTimeout(t);
+  }, [isDriver, running, step, D && D.started]); // eslint-disable-line react-hooks/exhaustive-deps
+  // "Switch not found" in the log while probing.
+  useEffect(() => subscribe((m) => { if (m.log?.msg === "Switch not found" && R.current.D && (R.current.D.step === "Probe" || R.current.D.step === "Probe2") && R.current.D.driver === ME) actRef.current({ name: "fail", step: R.current.D.step }); }), [subscribe]);
+
+  const dia = D?.dia ?? "", diaRot = D?.diaRot ?? "", diaMode = D?.diaMode || "preset", loc = D?.loc || locations[0][0];
+  const jogStep = D?.jogStep || 10, failed = !!D?.failed, centerOk = D?.centerOk ?? null, centerDz = D?.centerDz ?? null;
+  const steps = D?.steps || [];
+  const setDia = (v) => uiPatch("probe", { dia: v }).catch(() => {});
+  const setDiaRot = (v) => uiPatch("probe", { diaRot: v }).catch(() => {});
+  const setDiaMode = (v) => uiPatch("probe", { diaMode: v }).catch(() => {});
+  const setLoc = (v) => uiPatch("probe", { loc: v }).catch(() => {});
+  const setJogStep = (v) => uiPatch("probe", { jogStep: v }).catch(() => {});
+  useEffect(() => { if (diaMode === "custom") customRef.current?.focus(); }, [diaMode]);
+  if (!D) return null;
 
   const curDia = rotary ? parseDia(diaRot) : parseDia(dia);
   const nextDisabled = step === "CheckProbe" || step === "Probe" || step === "Probe2" || (step === "BitDimensions" && !curDia) || step === "None";
@@ -326,10 +373,10 @@ ${rest}
   const title = isCenterButton ? "Probing center" : `Probing ${type.toUpperCase()}${rotary ? " (rotary)" : ""}`;
   const showCancel = step !== "Done";
   return (
-    <Modal title={title} wide dismissable={false} onClose={() => { f.cancelled = true; notify(); }}
+    <Modal title={title} wide dismissable={false} onClose={() => act({ name: "cancel" })}
       actions={<>
-        {showCancel && <button onClick={() => { f.cancelled = true; notify(); }}>Cancel</button>}
-        <button data-autofocus className="primary" disabled={nextDisabled} onClick={() => { if (step === "Done") { f.ack = true; notify(); } else { f.ack = true; notify(); } }}>{step === "Done" ? "Done" : "Next"}</button>
+        {showCancel && <button onClick={() => act({ name: "cancel" })}>Cancel</button>}
+        <button data-autofocus className="primary" disabled={nextDisabled} onClick={() => act({ name: "next", step })}>{step === "Done" ? "Done" : "Next"}</button>
       </>}>
       <div className="probe">
         <ol className="probe-steps" aria-label="Probing steps">
@@ -343,8 +390,8 @@ ${rest}
               <label className="stack">Cutter diameter
                 <select data-autofocus value={diaMode === "custom" ? "custom" : normDia(rotary ? diaRot : dia) || PRESET_BITS[0]}
                   onChange={(e) => {
-                    const v = e.target.value; const set = rotary ? setDiaRot : setDia;
-                    if (v === "custom") { set(""); setDiaMode("custom"); } else { set(v); setDiaMode("preset"); }
+                    const v = e.target.value; const k = rotary ? "diaRot" : "dia";
+                    uiPatch("probe", v === "custom" ? { [k]: "", diaMode: "custom" } : { [k]: v, diaMode: "preset" }).catch(() => {});
                   }}>
                   {PRESET_BITS.map((b) => <option key={b} value={b}>{b}</option>)}
                   <option value="custom">Other size (type it in)</option>
@@ -352,8 +399,8 @@ ${rest}
               </label>
               {diaMode === "custom" && (
                 <label className="stack">Size
-                  <input ref={customRef} spellCheck="false" autoComplete="off" placeholder="for example 6 mm or 0.2 in" value={rotary ? diaRot : dia} aria-invalid={!curDia}
-                    onChange={(e) => (rotary ? setDiaRot(e.target.value) : setDia(e.target.value))} />
+                  <SharedText autoFocus placeholder="for example 6 mm or 0.2 in" value={rotary ? diaRot : dia} aria-invalid={!curDia}
+                    onChange={(v) => (rotary ? setDiaRot(v) : setDia(v))} />
                   <small>Examples: 3/16", 6 mm, 0.25 in</small>
                 </label>
               )}

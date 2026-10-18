@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { NumInput } from "./ui.jsx";
 import { makeGrid, makeTool, run } from "./sim.js";
 import { readSetupHeader } from "./setup.js";
+import { loadPrefs, getPref, setPref, usePref } from "./shared.js";
 
 const SNAPSHOTS = 12, FRAME_MS = 40, PLAY_SECONDS = 20;
 const STOPS = [[253,231,37],[186,222,40],[122,209,81],[68,191,112],[34,168,132],[32,144,140],[42,120,142],[65,68,135],[68,1,84]];
@@ -14,8 +15,17 @@ const LUT = (() => {
   return l;
 })();
 
-const load = (k, d) => { try { return localStorage.getItem("next-" + k) ?? d; } catch { return d; } };
-const save = (k, v) => { try { localStorage.setItem("next-" + k, v); } catch {} };
+// The tool and stock top typed here are shared settings (every screen uses them), kept per program file.
+const load = (k, d) => getPref("depth." + k, d);
+const save = (k, v) => { if (String(getPref("depth." + k, "")) !== String(v)) setPref("depth." + k, v); };
+const fileEntry = (f) => (getPref("depth.files", {}) || {})[f] || null;
+const saveEntry = (f, v) => {
+  const all = { ...(getPref("depth.files", {}) || {}) };
+  if (JSON.stringify(all[f]) === JSON.stringify(v)) return;
+  delete all[f]; all[f] = v;
+  const keys = Object.keys(all); for (const k of keys.slice(0, Math.max(0, keys.length - 60))) delete all[k]; // keep the last 60 files
+  setPref("depth.files", all);
+};
 
 export default function DepthView({ path, busy: pathBusy, file }) {
   const [dia, setDia] = useState(parseFloat(load("dia", "3.175")) || 3.175);
@@ -31,8 +41,9 @@ export default function DepthView({ path, busy: pathBusy, file }) {
   useEffect(() => {
     let cancelled = false;
     setReady(null);
-    let v = null; try { v = JSON.parse(localStorage.getItem("next-depth:" + file) || "null"); } catch {}
     (async () => {
+      await loadPrefs();
+      const v = file ? fileEntry(file) : null;
       let geom = null;
       if (file) { try { geom = (await readSetupHeader(file))?.toolGeom || null; } catch { /* no sheet */ } }
       if (cancelled) return;
@@ -47,8 +58,16 @@ export default function DepthView({ path, busy: pathBusy, file }) {
     })();
     return () => { cancelled = true; };
   }, [file]);
+  // Follow a change made on another screen.
+  const remote = (usePref("depth.files", {}) || {})[file];
   useEffect(() => {
-    if (file && ready === file) { try { localStorage.setItem("next-depth:" + file, JSON.stringify({ dia, type, vAngle, stockTop, manual })); } catch {} }
+    if (!file || ready !== file || !remote) return;
+    const mine = { dia, type, vAngle, stockTop, manual };
+    if (JSON.stringify(remote) === JSON.stringify(mine)) return;
+    setDia(remote.dia); setType(remote.type); setVAngle(remote.vAngle); setStockTop(remote.stockTop); setManual(!!remote.manual);
+  }, [JSON.stringify(remote)]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (file && ready === file) saveEntry(file, { dia, type, vAngle, stockTop, manual });
   }, [ready, file, dia, type, vAngle, stockTop, manual]);
   const edit = (set) => (value) => { setManual(true); set(value); };
   const [pos, setPos] = useState(0);

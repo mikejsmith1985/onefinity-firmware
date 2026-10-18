@@ -45,6 +45,7 @@ class Ctrl(object):
         self.log = bbctrl.log.Log(args, self.ioloop, log_path)
 
         self.state = bbctrl.State(self)
+        self.session = bbctrl.Session(self)
         self.config = bbctrl.Config(self)
 
         self.log.get('Ctrl').info('Starting %s' % self.id)

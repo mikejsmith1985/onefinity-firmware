@@ -1,11 +1,13 @@
-import React, { useState } from "react";
+import React from "react";
+import { useUi, uiOpen, uiClose } from "./shared.js";
 import { isInterrupted } from "./checkpoint.js";
 import ResumeDialog from "./ResumeDialog.jsx";
 
 const WHY = { running: "The controller lost power or restarted during the job.", estop: "The job ended with an E-stop.", stopped: "The job was stopped before it finished.", parked: "The job was parked so the machine could be powered off." };
 
 export default function Interrupted({ cp, busy, onDismiss, state, config, metric }) {
-  const [open, setOpen] = useState(false);
+  const open = !!useUi(state, "resume").v;
+  const setOpen = (on) => (on ? uiOpen("resume", { at: Date.now() }) : uiClose("resume"));
   if (busy || !isInterrupted(cp)) return null;
   const when = new Date(cp.t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   return (

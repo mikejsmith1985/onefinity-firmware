@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from "react";
-import { Modal } from "./ui.jsx";
+import React, { useEffect } from "react";
+import { Modal, SharedText } from "./ui.jsx";
+import { useUi, uiPatch } from "./shared.js";
 import { api } from "./controller.js";
 import { computeAxis } from "./axis.js";
 import { getPrefs, setPrefs, errText } from "./checkpoint.js";
@@ -7,26 +8,25 @@ import { getPrefs, setPrefs, errText } from "./checkpoint.js";
 const Row = ({ k, v }) => <div className="rrow"><dt>{k}</dt><dd>{v}</dd></div>;
 
 // Builds a program that continues the interrupted job and loads it.
+// The dialog lives in the shared session ("resume"): its fields, progress and result are the same on every screen.
 export default function ResumeDialog({ cp, state, config, metric, onClose }) {
-  const [prefs, setP] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [info, setInfo] = useState(null);
-  useEffect(() => { getPrefs().then(setP); }, []);
+  const D = useUi(state, "resume").v || {};
+  const patch = (p) => uiPatch("resume", p).catch(() => {});
+  const { prefs = null, busy = false, err = "", info = null, collet = false, zbusy = "", zmsg = null } = D;
+  const setBusy = (v) => patch({ busy: v }), setErr = (v) => patch({ err: v }), setInfo = (v) => patch({ info: v });
+  const setCollet = (v) => patch({ collet: v }), setZbusy = (v) => patch({ zbusy: v }), setZmsg = (v) => patch({ zmsg: v });
+  useEffect(() => { if (!prefs) getPrefs().then((p) => uiPatch("resume", (d) => (d.prefs ? {} : { prefs: p })).catch(() => {})); }, [!!prefs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const axes = config ? ["x", "y", "z"].map((a) => computeAxis(state, config, a, metric)) : [];
   const homed = axes.length > 0 && axes.every((a) => a.homed);
   const idle = state.cycle === "idle";
-  const edit = (k, v) => setP((p) => ({ ...p, [k]: v }));
+  const edit = (k, v) => uiPatch("resume", (d) => ({ prefs: { ...(d.prefs || {}), [k]: v } })).catch(() => {});
 
   // Work zero: the checkpoint saved where it was when the job stopped. On a homed machine that is valid again,
   // so it can be put back without probing a part that is already half cut.
   const saved = cp.offset || {};
   const tol = 0.05; // mm (offsets are mm in both unit modes)
   const diff = ["x", "y", "z"].filter((a) => typeof saved[a] === "number" && typeof state[`offset_${a}`] === "number" && Math.abs(state[`offset_${a}`] - saved[a]) > tol);
-  const [collet, setCollet] = useState(false);
-  const [zbusy, setZbusy] = useState("");
-  const [zmsg, setZmsg] = useState(null);
   const restore = async (axes, rebuild) => {
     setZbusy(axes); setZmsg(null); setErr("");
     try {
@@ -97,8 +97,8 @@ export default function ResumeDialog({ cp, state, config, metric, onClose }) {
       {zeroMsg}
       {prefs && (
         <div className="rform">
-          <label>Spindle spin-up wait (seconds)<input type="text" inputMode="numeric" autoComplete="off" value={prefs.spinup} onChange={(e) => edit("spinup", e.target.value)} /></label>
-          <label>Plunge speed (mm/min)<input type="text" inputMode="numeric" autoComplete="off" value={prefs.plunge} onChange={(e) => edit("plunge", e.target.value)} /></label>
+          <label>Spindle spin-up wait (seconds)<SharedText inputMode="numeric" value={String(prefs.spinup ?? "")} onChange={(v) => edit("spinup", v)} /></label>
+          <label>Plunge speed (mm/min)<SharedText inputMode="numeric" value={String(prefs.plunge ?? "")} onChange={(v) => edit("plunge", v)} /></label>
           <label className="check"><input type="checkbox" checked={!!prefs.pause} onChange={(e) => edit("pause", e.target.checked)} /> Pause over the start point so I can check it</label>
         </div>
       )}

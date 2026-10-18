@@ -1,10 +1,12 @@
 import React, { useState } from "react";
 import { api } from "./controller.js";
 import { isEnter } from "./vkbd.js";
+import { usePref, setPref } from "./shared.js";
 
 export default function Mdi({ state, send, mach }) {
   const [text, setText] = useState("");
-  const [hist, setHist] = useState(() => { try { return JSON.parse(localStorage.getItem("next-mdi") || "[]"); } catch { return []; } });
+  // Command history is shared by every screen.
+  const hist = usePref("mdi.hist", []);
   const can = state.cycle === "idle" || state.cycle === "mdi";
   const running = mach === "RUNNING", holding = mach === "HOLDING" || mach === "STOPPING";
   // Takes the box's own text: with the touch-screen keyboard the state can be a keystroke behind.
@@ -13,7 +15,7 @@ export default function Mdi({ state, send, mach }) {
     if (!cmd || !can) return;
     send(cmd);
     const h = [cmd, ...hist.filter((x) => x !== cmd)].slice(0, 30);
-    setHist(h); try { localStorage.setItem("next-mdi", JSON.stringify(h)); } catch {}
+    setPref("mdi.hist", h);
     setText("");
   };
   return (

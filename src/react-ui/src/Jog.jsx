@@ -2,30 +2,37 @@ import { probeActive } from "./setter.js";
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./controller.js";
 import { Confirm } from "./ui.jsx";
+import { usePref, setPref, useUi, uiSet, uiCas, uiClose } from "./shared.js";
 
 const STEPS = {
   metric: [["Fine", 0.1], ["Small", 1], ["Medium", 10], ["Large", 100]],
   imperial: [["Fine", 0.005], ["Small", 0.05], ["Medium", 0.5], ["Large", 5]],
 };
 const SPEEDS = [1, 5, 10, 25, 50, 100];
-const read = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 
 export default function Jog({ state, config, send, metric, locked, idle, onProbe, ready }) {
-  const [idx, setIdx] = useState(Number(read("next-jog-idx", 1)));
-  const [mode, setMode] = useState(read("next-jog-mode", "step") === "hold" ? "hold" : "step");
-  const [spd, setSpd] = useState(Math.min(Number(read("next-jog-spd", 2)) || 0, SPEEDS.length - 1));
+  // Step size, mode and speed are shared settings: the same on every screen. Holding a jog button only
+  // ever moves the machine from the screen being touched.
+  const idx = Math.min(Math.max(0, Number(usePref("jog.idx", 1)) || 0), 3);
+  const mode = usePref("jog.mode", "step") === "hold" ? "hold" : "step";
+  const spd = Math.min(Number(usePref("jog.spd", 2)) || 0, SPEEDS.length - 1);
+  const setIdx = (i) => setPref("jog.idx", i), setMode = (m) => setPref("jog.mode", m), setSpd = (i) => setPref("jog.spd", i);
   const held = useRef(null), lastTs = useRef(0);
   const [armed, setArmed] = useState(null);
   const [macroErr, setMacroErr] = useState("");
   const stRef = useRef(state); stRef.current = state;
-  const [ask, setAsk] = useState(null);
+  // "Move to zero?" questions are shared; only the screen whose Yes is accepted first moves the machine.
+  const askUi = useUi(state, "jog-ask");
+  const ask = askUi.v?.what || null;
+  const setAsk = (w) => (w ? uiSet("jog-ask", { what: w }) : uiClose("jog-ask"));
+  const confirmAsk = async () => { const r = await uiCas("jog-ask", null, askUi.rev).catch(() => null); return !!(r && r.ok); };
   const steps = STEPS[metric ? "metric" : "imperial"];
   const amt = steps[idx][1];
   const unit = metric ? "mm" : "in";
   const rotaryOn = state["2an"] === 3;
   const rotaryAvail = state["2an"] === 1 || state["2an"] === 3;
 
-  const pick = (i) => { setIdx(i); try { localStorage.setItem("next-jog-idx", i); } catch {} };
+  const pick = (i) => setIdx(i);
   const jog = (x, y, z, a = 0) => {
     const part = (l, d) => (d ? `${l}${+(d * amt).toFixed(4)}` : "");
     send(`M70\nG91\n${metric ? "G21" : "G20"}\nG0 ${part("X", x)}${part("Y", y)}${part("Z", z)}${part("A", a)}\nM72`);
@@ -58,8 +65,8 @@ export default function Jog({ state, config, send, metric, locked, idle, onProbe
     return () => { stop(); window.removeEventListener("blur", stop); window.removeEventListener("pagehide", stop); document.removeEventListener("visibilitychange", hidden); };
   }, []);
   useEffect(() => { if (locked) stopRef.current(); }, [locked]);
-  const pickMode = (m) => { stopHold(); setMode(m); try { localStorage.setItem("next-jog-mode", m); } catch {} };
-  const pickSpd = (i) => { stopHold(); setSpd(i); try { localStorage.setItem("next-jog-spd", i); } catch {} };
+  const pickMode = (m) => { stopHold(); setMode(m); };
+  const pickSpd = (i) => { stopHold(); setSpd(i); };
 
   const macros = (state.macros || config?.macros || []).filter((m) => m && m.file_name && m.file_name !== "default");
   const runMacro = async (m, i) => {
@@ -156,13 +163,13 @@ export default function Jog({ state, config, send, metric, locked, idle, onProbe
 
       {ask && ask !== "rotary" && (
         <Confirm title={`Move to ${ask === "xy" ? "X0 Y0" : ask === "z" ? "Z0" : "A0"}?`} confirmLabel="Move"
-          onCancel={() => setAsk(null)} onConfirm={() => { send(`G90\nG0 ${ask === "xy" ? "X0Y0" : ask === "z" ? "Z0" : "A0"}`); setAsk(null); }}>
+          onCancel={() => setAsk(null)} onConfirm={async () => { const w = ask; if (await confirmAsk()) send(`G90\nG0 ${w === "xy" ? "X0Y0" : w === "z" ? "Z0" : "A0"}`); }}>
           <p>The machine will move straight there. Check that the tool is clear of clamps and stock.</p>
         </Confirm>
       )}
       {ask === "rotary" && (
         <Confirm title="Switch rotary mode" confirmLabel="Yes"
-          onCancel={() => setAsk(null)} onConfirm={async () => { setAsk(null); try { await api.put("rotary", { status: !rotaryOn }); } catch (e) { alert("Could not switch rotary mode"); } }}>
+          onCancel={() => setAsk(null)} onConfirm={async () => { if (!(await confirmAsk())) return; try { await api.put("rotary", { status: !rotaryOn }); } catch (e) { alert("Could not switch rotary mode"); } }}>
           <p>{rotaryOn ? "Turn off the rotary box?" : "Turn on the rotary box?"}</p>
         </Confirm>
       )}

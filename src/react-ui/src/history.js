@@ -1,4 +1,4 @@
-// Run history, kept in this browser. A run starts when a program starts and ends when the machine goes idle or E-stops.
+// Run history, kept on the controller (and cached in this browser). A run starts when a program starts and ends when the machine goes idle or E-stops.
 import { useEffect, useRef, useState } from "react";
 
 import { remoteGet, remotePut } from "./store.js";
@@ -33,6 +33,8 @@ export async function syncRuns() {
 }
 syncRuns();
 if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => { if (!document.hidden) syncRuns(); });
+// Another screen added a run or cleared the history.
+if (typeof window !== "undefined") window.addEventListener("next-store:runs", () => syncRuns());
 
 export const clearRuns = () => { data = { clearedAt: Date.now(), runs: [] }; save(); syncRuns(); };
 let stopFlag = false;

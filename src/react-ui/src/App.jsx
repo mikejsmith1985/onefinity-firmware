@@ -8,6 +8,7 @@ import { Settings, IO, Tool, Motors } from "./pages1.jsx";
 import { Macros, Admin, useLatestVersion } from "./pages2.jsx";
 import { CheatSheet, Help } from "./pages3.jsx";
 import { computeAxis } from "./axis.js";
+import { useUi, uiSet, uiOpen, uiClose, loadPrefs } from "./shared.js";
 
 export function machState(state) {
   const { cycle, xx } = state;
@@ -40,9 +41,15 @@ export default function App() {
   useRunTracker(state);
   const cfg = useConfig(state);
   const [route, setRoute] = useState(parseHash());
-  const [power, setPower] = useState(false);
-  const [errSeen, setErrSeen] = useState(0);
+  // The power question and the error popup belong to the session: answering on one screen closes them on all.
+  const power = !!useUi(state, "power").v;
+  const setPower = (on) => (on ? uiOpen("power", { at: Date.now() }) : uiClose("power"));
+  const lastErr = state.last_error;
+  const errAck = useUi(state, "err-ack").v || 0;
+  const showErr = !!lastErr && lastErr.id > errAck;
+  const ackErr = () => uiSet("err-ack", lastErr ? lastErr.id : 0).catch(() => {});
   const ver = useLatestVersion(cfg);
+  useEffect(() => { loadPrefs(); }, []);
 
   useEffect(() => { const f = () => setRoute(parseHash()); window.addEventListener("hashchange", f); return () => window.removeEventListener("hashchange", f); }, []);
   const go = useCallback((h) => { location.hash = h; }, []);
@@ -122,10 +129,10 @@ export default function App() {
           {popups.some((m) => /tool/i.test(m.text)) && <div className="why"><b>Install tool {state.tool || 0}.</b><p>This is the tool the program selected. Check the tool number before you continue, and re-probe Z if your tool change does that.</p></div>}
         </Modal>
       )}
-      {ctl.lastError && ctl.lastError.at !== errSeen && (
-        <Modal title="Error" onClose={() => setErrSeen(ctl.lastError.at)} actions={<button data-autofocus className="primary" onClick={() => setErrSeen(ctl.lastError.at)}>OK</button>}>
-          <p className="big">{ctl.lastError.msg}</p>
-          {explain(ctl.lastError.msg) && <div className="why"><b>{explain(ctl.lastError.msg).what}</b><p>{explain(ctl.lastError.msg).advice}</p></div>}
+      {showErr && (
+        <Modal title="Error" onClose={ackErr} actions={<button data-autofocus className="primary" onClick={ackErr}>OK</button>}>
+          <p className="big">{lastErr.msg}</p>
+          {explain(lastErr.msg) && <div className="why"><b>{explain(lastErr.msg).what}</b><p>{explain(lastErr.msg).advice}</p></div>}
           <p className="dim">Earlier messages are in the Messages tab on Control.</p>
         </Modal>
       )}

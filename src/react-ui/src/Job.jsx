@@ -10,10 +10,14 @@ import { remoteGet } from "./store.js";
 import { getSetter } from "./ToolSetter.jsx";
 import { setterChecks } from "./setter.js";
 import { Modal } from "./ui.jsx";
+import { useUi, uiSet, uiCas, uiOpen, uiClose, uiPatch, usePref, setPref, getPref } from "./shared.js";
 
-function Override({ label, kind, hint }) {
-  const [v, setV] = useState(100);
-  const commit = (x) => api.put(`override/${kind}/${(x / 100).toFixed(2)}`).catch(() => {});
+function Override({ label, kind, hint, value }) {
+  // Shows the controller's override (the same on every screen) except while this slider is being dragged.
+  const [drag, setDrag] = useState(null);
+  const v = drag ?? (Number.isFinite(value) ? Math.round(value / 10) : 100);
+  const setV = setDrag;
+  const commit = (x) => { setDrag(null); api.put(`override/${kind}/${(x / 100).toFixed(2)}`).catch(() => {}); };
   return (
     <label className="ov" title={hint}>
       <span>{label}</span>
@@ -27,19 +31,24 @@ function Override({ label, kind, hint }) {
 const Stat = ({ k, v, title }) => <div className="stat" title={title}><dt>{k}</dt><dd>{v}</dd></div>;
 
 export default function Job({ state, mach, path, metric, config, changes = [] }) {
-  const [check, setCheck] = useState(null);
-  const [parkAsk, setParkAsk] = useState(false);
+  // The run checklist, the park question and the setup sheet are shared: open on one screen, open on all.
+  const checkUi = useUi(state, "runcheck");
+  const check = checkUi.v;
+  const setCheck = (c) => (c ? uiSet("runcheck", c) : uiClose("runcheck"));
+  const parkAsk = !!useUi(state, "park-ask").v;
+  const setParkAsk = (on) => (on ? uiOpen("park-ask", { at: Date.now() }) : uiClose("park-ask"));
   // Dry run: the controller sends the same program 30 mm (or the chosen lift) higher with the router,
   // mist and probing blocked. It lasts for one run only, so it can never be left on.
-  const [dry, setDry] = useState(false);
-  const [lift, setLift] = useState(() => { try { return +localStorage.getItem("dryLift") || 30; } catch { return 30; } });
+  const dry = !!useUi(state, "dry").v;
+  const setDry = (on) => uiSet("dry", on ? true : null).catch(() => {});
+  const lift = usePref("dry.lift", 30);
+  const setLift = (v) => setPref("dry.lift", +v);
   // Set with buttons in 5 mm steps (5 to 100 mm), so it needs no keyboard on the controller's touch screen.
   const liftMm = Math.min(100, Math.max(5, Math.round((+lift || 30) / 5) * 5));
   const [err, setErr] = useState("");
   const note = useNote(state.selected).split("\n")[0];
   const start = () => {
     setErr("");
-    if (dry) { try { localStorage.setItem("dryLift", String(liftMm)); } catch { /* storage unavailable */ } }
     return api.put("start", dry ? { dry_lift: liftMm } : undefined)
       .then(() => setDry(false))
       .catch((e) => setErr(String(e.message || e).replace(/^\{"message":"|","code":\d+\}$/g, "")));
@@ -79,7 +88,8 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
     })();
     return () => { gone = true; };
   }, [state.selected, state.selected_time, state.offset_x, state.offset_y, state.offset_z, metric, probeTick, path]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [sheet, setSheet] = useState(null);
+  const sheet = useUi(state, "sheet").v;
+  const setSheet = (v) => (v ? uiSet("sheet", v) : uiClose("sheet"));
   const [sheetBusy, setSheetBusy] = useState(false);
   const tryStart = async () => {
     setErr("");
@@ -170,10 +180,14 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         {changes.length > 0 && <Stat k="Next change" v={nextChange ? `T${nextChange.tool} · L${nextChange.line} · ${changes.indexOf(nextChange) + 1}/${changes.length}` : `none left (${changes.length} total)`} title="Tool changes (M6) in this program" />}
         <Stat k="Loads" v={`1:${state["1oa"] ? "On" : "Off"}  2:${state["2oa"] ? "On" : "Off"}`} title="Load switch states" />
       </dl>
-      <Override label="Feed" kind="feed" hint="Feed rate override" />
-      <Override label="Speed" kind="speed" hint="Spindle speed override" />
+      <Override label="Feed" kind="feed" hint="Feed rate override" value={state.fo} />
+      <Override label="Speed" kind="speed" hint="Spindle speed override" value={state.so} />
       {(parkAsk || state.park) && <ParkDialog state={state} active={active} onClose={() => setParkAsk(false)} />}
-      {check && <Checklist checks={check.checks} setup={check.setup} onCancel={() => setCheck(null)} onRun={() => { setCheck(null); start(); }} />}
+      {check && <Checklist checks={check.checks} setup={check.setup} ack={!!check.ack} never={!!check.never}
+        onAck={(on) => uiPatch("runcheck", { ack: on })} onNever={(on) => uiPatch("runcheck", { never: on })}
+        onCancel={() => setCheck(null)}
+        // Only the screen whose Run the controller takes first starts the job.
+        onRun={async () => { const r = await uiCas("runcheck", null, checkUi.rev).catch(() => null); if (r && r.ok) start(); }} />}
       {sheet && (
         <Modal title="Setup sheet" onClose={() => setSheet(null)} actions={<button data-autofocus onClick={() => setSheet(null)}>Close</button>}>
           {sheet.setup ? <SheetView setup={sheet.setup} /> : <p>This program has no setup sheet.</p>}

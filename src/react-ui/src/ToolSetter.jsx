@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { NumInput, Modal } from "./ui.jsx";
+import { ME, useUi, useDriver, uiGet, uiCas, uiUpdate, uiPatch, uiClose } from "./shared.js";
 import { api } from "./controller.js";
 import { computeAxis } from "./axis.js";
 import { getPrefs, setPrefs } from "./checkpoint.js";
@@ -42,13 +43,37 @@ export function setterArgs(state, config, setter, mode, ref) {
   };
 }
 
-export default function ToolSetter({ config, state, send, subscribe, metric, onClose }) {
+export default function ToolSetter({ config, state, send, subscribe, metric, onClose, openId }) {
   const [s, setS] = useState(null);
-  const [busy, setBusy] = useState("");
-  const [msg, setMsg] = useState(null);       // {ok, text}
-  const [adv, setAdv] = useState(false);
+  // What the dialog shows (busy, the last message, advanced open) is shared, key "setter".
+  // The setter's position and reference are saved in prefs, which every screen re-reads when it changes.
+  const ui = useUi(state, "setter");
+  const D = ui.v && ui.v.id === openId ? ui.v : null;
+  const isDriver = useDriver(state, "setter", D);
+  const busy = D?.busy || "", msg = D?.msg || null, adv = !!D?.adv;
+  const setMsg = (m) => uiPatch("setter", { msg: m }).catch(() => {});
+  const setAdv = (fn) => uiPatch("setter", (d) => ({ adv: typeof fn === "function" ? fn(!!d.adv) : fn })).catch(() => {});
   const run = useProgramRunner(state, subscribe, send);
-  useEffect(() => { getSetter().then(setS); }, []);
+  const local = useRef(false); // a setter program started on this screen is running
+  useEffect(() => {
+    getSetter().then(setS);
+    const f = () => getSetter().then(setS);
+    window.addEventListener("next-store:prefs", f);
+    return () => window.removeEventListener("next-store:prefs", f);
+  }, []);
+  useEffect(() => {
+    if (D) return;
+    (async () => { const cur = await uiGet("setter"); if (cur.v && cur.v.id === openId) return; await uiCas("setter", { id: openId, driver: ME, busy: "", msg: null, adv: false }, cur.rev); })().catch(() => {});
+  }, [openId, !!D]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Took this dialog over from a screen that went away in the middle of a measurement.
+  useEffect(() => {
+    if (!isDriver || !busy || local.current) return undefined;
+    const t = setTimeout(() => {
+      if (state.cycle === "idle") uiPatch("setter", { busy: "", msg: { ok: false, text: "The screen that started this measurement went away before it finished. Check Z zero before cutting, or measure again." } }).catch(() => {});
+    }, 8000);
+    return () => clearTimeout(t);
+  }, [isDriver, busy, state.cycle]);
+  const close = () => { uiClose("setter"); uiClose("tool"); onClose && onClose(); };
 
   const u = metric ? 1 : 25.4, unit = metric ? "mm" : "in";
   const fmt = (mm) => (mm / u).toFixed(metric ? 3 : 4);
@@ -71,9 +96,13 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
   };
 
   const go = async (mode) => {
-    setMsg(null); setBusy(mode);
+    // Only one screen runs it: the one whose press the controller accepted first.
+    const r = await uiUpdate("setter", (d) => (d && d.id === openId && !d.busy ? { ...d, busy: mode, msg: null, driver: ME } : undefined)).catch(() => ({ ok: false }));
+    if (!r.ok) return;
+    local.current = true;
     const res = await run(setterProgram(setterArgs(state, config, s, mode === "calib" ? "ref" : mode, s.ref?.ref)));
-    setBusy("");
+    local.current = false;
+    await uiPatch("setter", { busy: "" }).catch(() => {});
     if (res.notFound) { setMsg({ ok: false, text: "The tool didn't reach the setter. The controller stopped with an emergency stop. Check the setter position and its cable, clear the E-stop and try again." }); return; }
     if (res.ofs_ok !== 1) { setMsg({ ok: false, text: SETTER_FAILS[res.ofs_fail] || "The setter routine didn't finish. Z zero was not changed." }); return; }
     if (mode === "calib") {
@@ -103,7 +132,7 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
     : "No reference yet.";
 
   return (
-    <Modal title="Tool setter" wide onClose={onClose} actions={<button data-autofocus onClick={onClose}>Close</button>}>
+    <Modal title="Tool setter" wide onClose={close} actions={<button data-autofocus onClick={close}>Close</button>}>
       {!s ? <p>Loading…</p> : <div className="setter">
         <p className={ref.ok ? "" : "dim"}>{status}</p>
 
