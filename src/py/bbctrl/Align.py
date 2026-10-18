@@ -2,6 +2,8 @@ import os
 import re
 import math
 
+from bbctrl import GCodeText
+
 # Camera alignment: rotate a program in the XY plane so it lines up with a
 # part that sits at an angle on the table.
 #
@@ -39,7 +41,9 @@ def fmt(v, places):
 
 
 def _split(line):
-    """Code part of a line and its comments (kept verbatim, moved to the end)."""
+    """Code part of a line and its comments (kept verbatim, moved to the end).
+    Only for lines GCodeText.split() found nothing wrong with, where this
+    simple pattern reads comments the same way the planner does."""
     comments = [m.group(0) for m in COMMENT.finditer(line)]
     code = COMMENT.sub(' ', line)
     return code, comments
@@ -76,6 +80,11 @@ def transform(lines, angle_deg, source = '', max_angle = MAX_ANGLE):
         def fail(msg):
             raise AlignError('Line %d: %s\n    %s' % (n, msg, raw.strip()))
 
+        issues = GCodeText.split(raw)[2]
+        if issues:
+            why = GCodeText.problem_text(issues)
+            fail('%s. Fix the comment (write brackets inside a comment as '
+                 '[ ]) and upload the program again.' % (why[:1].upper() + why[1:]))
         code, comments = _split(raw)
         stripped = code.strip()
         if not stripped or stripped.startswith('%'):
@@ -114,8 +123,8 @@ def transform(lines, angle_deg, source = '', max_angle = MAX_ANGLE):
             elif g == 21: inch = False
             elif g == 53: machine_coords = True
             elif g in (28, 30): home_move = True
-            elif g in (0, 1, 2, 3) or 73 <= g <= 89: motion = g
             elif g == 80: motion = None
+            elif g in (0, 1, 2, 3) or 73 <= g <= 89: motion = g
 
         places = 5 if inch else 4
 
@@ -192,7 +201,7 @@ def transform(lines, angle_deg, source = '', max_angle = MAX_ANGLE):
         moved += 1
 
     header = ['(Aligned copy of %s, rotated %s degrees about X0 Y0)'
-              % (source or 'program', fmt(angle_deg, 3)),
+              % (GCodeText.safe_comment(source or 'program'), fmt(angle_deg, 3)),
               '(Set X/Y zero on the part\'s reference point before running)']
     text = '\n'.join(header + out) + '\n'
     return text, {'angle': angle_deg, 'lines': moved}

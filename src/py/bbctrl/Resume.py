@@ -3,6 +3,8 @@ import re
 import time
 import hashlib
 
+from bbctrl import GCodeText
+
 # Builds a G-code program that continues an interrupted job, and parks the
 # machine so the job can be continued after the power is switched off.
 #
@@ -49,8 +51,27 @@ def clean_opts(opts):
 
 
 def strip(line):
-    line = re.sub(r'\([^)]*\)', ' ', line)
-    return line.split(';', 1)[0].strip()
+    # Code part of one line, read the way the planner reads it (GCodeText)
+    return GCodeText.code_of(line).strip()
+
+
+def _lines(lines, upto = None):
+    # (1-based number, raw line, code) for each line, following comments left
+    # open across lines like the planner does.  A line whose comment the
+    # planner would read differently from how it looks is refused: guessing
+    # could turn comment text into a move.
+    open_comment = False
+    for n, raw in enumerate(lines, 1):
+        if upto is not None and n > upto: break
+        code, _, issues, open_comment = GCodeText.split(raw, open_comment)
+        if issues:
+            raise ResumeError('Line %d: %s. Resume cannot work out the start '
+                              'position safely. Fix the comment in the program '
+                              '(brackets inside a comment can be written as '
+                              '[ ]), upload it again and start the job from a '
+                              'line you choose.'
+                              % (n, GCodeText.problem_text(issues)))
+        yield n, raw, code.strip()
 
 
 def fmt(v):
@@ -77,8 +98,8 @@ class Modal(object):
 def scan(lines, upto):
     # Applies lines[0:upto] and returns the resulting Modal state.
     m = Modal()
-    for n in range(upto):
-        text = strip(lines[n])
+    for n1, _, text in _lines(lines, upto):
+        n = n1 - 1
         if not text or text.startswith('%'): continue
         if '#' in text or '[' in text:
             raise ResumeError('Line %d uses variables or expressions, so the '
@@ -144,13 +165,17 @@ def locate(lines, pos, floor, tol = 0.1):
     try: target = [float(pos[a]) for a in 'xyz']
     except (TypeError, ValueError, KeyError): return None
 
+    try: return _locate(lines, target, floor, tol)
+    except ResumeError: return None   # a comment the planner reads differently
+
+
+def _locate(lines, target, floor, tol):
     cur = [None, None, None]
     metric = True
     motion = None
     dist = 90
     wcs = None
-    for n, raw in enumerate(lines, 1):
-        text = strip(raw)
+    for n, raw, text in _lines(lines):
         if not text or text.startswith('%'): continue
         if '#' in text or '[' in text: return None
         words = [(c.upper(), float(v)) for c, v in WORD.findall(text)]
@@ -191,18 +216,41 @@ def _seg_dist(a, b, p):
     return sum((a[i] + t * ab[i] - p[i]) ** 2 for i in range(3)) ** 0.5
 
 
-def build(lines, line_no, name, opts, top_mm, source_hint = ''):
+def build(lines, line_no, name, opts, top_mm, source_hint = '',
+          manual = False, router = ''):
     # lines: the original program (list of strings, no newlines)
     # line_no: 1-based number of the line that was running
     # top_mm: machine Z used for "top of travel" (millimetres, already
     #         backed off from the limit)
+    # manual: the spindle is a router the controller can't switch (no VFD or
+    #         PWM spindle), so the operator must switch it on before the plunge
+    # router: the setup sheet's router line (for example the dial setting)
     o = clean_opts(opts)
     if not (1 <= line_no <= len(lines)):
         raise ResumeError('The saved line %d is not inside the program (%d lines).'
                           % (line_no, len(lines)))
 
+    # The resume line itself must read the same way to the planner as it looks
+    for _ in _lines(lines, line_no): pass
     m = scan(lines, line_no - 1)
     warnings = []
+
+    # Comments later in the program that the planner will stop on
+    later = []
+    open_comment = False
+    for n, raw in enumerate(lines, 1):
+        _, _, issues, open_comment = GCodeText.split(raw, open_comment)
+        if n > line_no and issues: later.append(n)
+    if later:
+        warnings.append('Line%s %s later in the program ha%s a comment the '
+                        'planner will read differently from how it looks '
+                        '(brackets inside a comment, or one left open). The '
+                        'job may stop with an error there. Fix the program '
+                        'before resuming if you can.'
+                        % ('s' if len(later) > 1 else '',
+                           ', '.join(str(x) for x in later[:5]) +
+                           (' and more' if len(later) > 5 else ''),
+                           've' if len(later) > 1 else 's'))
     metric = m.units == 'G21'
     k = 1.0 if metric else 1.0 / MM        # millimetres -> file units
     start = line_no - 1
@@ -224,8 +272,9 @@ def build(lines, line_no, name, opts, top_mm, source_hint = ''):
 
     out = []
     w = out.append
-    w('(RESUME of %s at line %d)' % (name.replace('(', '[').replace(')', ']'), line_no))
-    shown = strip(lines[start])[:60].replace('(', '[').replace(')', ']')
+    safe = GCodeText.safe_comment
+    w('(RESUME of %s at line %d)' % (safe(name), line_no))
+    shown = safe(strip(lines[start])[:60])
     w('(Line %d: %s)' % (line_no, shown))
     if m.tool is not None: w('(Tool in spindle must be T%d)' % m.tool)
     w('(Check that Z0 is the top of the stock)')
@@ -242,7 +291,14 @@ def build(lines, line_no, name, opts, top_mm, source_hint = ''):
         if m.pos[a] is not None: xy += ' %s%s' % (a, fmt(m.pos[a]))
     w(xy)
 
-    if o['pause']:
+    if manual:
+        # The controller can't start this router, so never plunge until the
+        # operator has switched it on, whatever the pause setting says
+        dial = (' at %s' % safe(router).strip()) if router and router.strip() else ''
+        w('(MSG, Check the tool is over the restart point. Switch the router ON%s '
+          'and let it reach speed. Press Start to continue.)' % dial)
+        w('M0')
+    elif o['pause']:
         w('(MSG, Check the tool is over the restart point. Press Start to continue.)')
         w('M0')
 
@@ -288,7 +344,9 @@ def build(lines, line_no, name, opts, top_mm, source_hint = ''):
         'units': 'mm' if metric else 'in',
         'wcs': m.wcs,
         'pos': dict((a.lower(), m.pos[a]) for a in AXES if m.pos[a] is not None),
-        'spinup': o['spinup'], 'plunge': o['plunge'], 'pause': o['pause'],
+        'spinup': o['spinup'], 'plunge': o['plunge'],
+        'pause': o['pause'] or bool(manual),
+        'manual_spindle': bool(manual),
         'warnings': warnings,
     }
     return '\n'.join(out) + '\n', info
@@ -309,6 +367,17 @@ def output_name(source):
     # Never overwrite the file being resumed from: alternate between two names
     if name == source: name = 'resume-' + root + '-b' + ext
     return name
+
+
+def manual_spindle(config):
+    '''True when the controller can't switch the spindle itself: a router
+    with its own switch and speed dial (tool type Disabled, or the Router
+    tool), so M3 and M5 do nothing.'''
+    try:
+        tool_type = str(config.get('tool-type', 'Disabled') or 'Disabled')
+        selected = str(config.get('selected-tool', '') or '')
+    except Exception: return True
+    return tool_type.lower() == 'disabled' or selected.lower() in ('router', 'disabled')
 
 
 class Resume(object):
@@ -387,7 +456,10 @@ class Resume(object):
             notes.append('%s was changed after the job was interrupted. The restart point '
                          'was found from where the tool is, not from the saved line.' % src)
 
-        text, info = build(lines, line, src, opts, self._top_mm())
+        manual = manual_spindle(self.ctrl.config)
+        router = GCodeText.setup_fields(lines[:400]).get('router', '')
+        text, info = build(lines, line, src, opts, self._top_mm(),
+                           manual = manual, router = router)
         info['saved_line'] = saved
         info['located'] = bool(found)
         info['warnings'] = notes + info['warnings']
@@ -459,6 +531,7 @@ class Resume(object):
         top = self._top_mm()
 
         self.parking = True
+        s.set('park_manual', manual_spindle(ctrl.config))
         s.set('park', 'parking')
         ctrl.mach.stop()
         self._wait(lambda: s.get('cycle') == 'idle' and s.get('xx') == 'READY',
