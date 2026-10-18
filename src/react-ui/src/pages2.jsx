@@ -265,6 +265,9 @@ function General({ cfg, ver, state }) {
         <Group title="Power-loss recovery">
           <Recovery state={state} />
         </Group>
+        <Group title="Mist">
+          <MistPref />
+        </Group>
         <Group title="Connection">
           <Drops />
         </Group>
@@ -400,6 +403,20 @@ function Drops() {
           <div className="btnrow"><button onClick={clearDrops}>Clear log</button></div>
         </>
       )}
+    </>
+  );
+}
+
+// Mist only while cutting (1.29.0, off by default). Saved with the other shared prefs on the controller,
+// which reads it when a program is loaded (Planner.py).
+function MistPref() {
+  const [prefs, setP] = useState(null);
+  useEffect(() => { getPrefs().then(setP); }, []);
+  const save = (v) => { setP((p) => ({ ...p, mistCutting: v })); setPrefs({ mistCutting: v }); };
+  return (
+    <>
+      <label className="check"><input type="checkbox" className="switch" checked={!!prefs?.mistCutting} disabled={!prefs} onChange={(e) => save(e.target.checked)} /> Mist only while cutting</label>
+      <p className="note">Off (the normal way): M7 turns the mist (Load 1) on and M9 turns it off. On: after M7 the mist only runs during cutting moves (G1, G2, G3) and goes off during rapids (G0) and probing, so it does not spray while the router travels. M9 and the end of the program still turn it off. Applies to programs started after the change, not to MDI commands or dry runs. Not yet tested on a real machine.</p>
     </>
   );
 }

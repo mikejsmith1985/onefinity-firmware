@@ -20,7 +20,7 @@ export function useCheckpoint(state) {
   return { cp, refresh, dismiss };
 }
 
-export const PREF_DEFAULTS = { progress: true, spinup: 10, plunge: 300, pause: true, gcodeColors: false };
+export const PREF_DEFAULTS = { progress: true, spinup: 10, plunge: 300, pause: true, gcodeColors: false, mistCutting: false };
 export const getPrefs = () => remoteGet("prefs").then((p) => ({ ...PREF_DEFAULTS, ...(p || {}) }));
 export const errText = (e) => { try { return JSON.parse(e.message).message || e.message; } catch { return e.message || String(e); } };
 // Prefs are saved as one document, so merge into what is stored.

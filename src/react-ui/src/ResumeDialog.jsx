@@ -72,7 +72,7 @@ export default function ResumeDialog({ cp, state, config, metric, onClose }) {
           <Row k="Start point" v={["x", "y", "z"].filter((a) => p[a] !== undefined).map((a) => `${a.toUpperCase()} ${p[a]}`).join("   ") + ` ${u}`} />
           <Row k="Tool" v={info.tool !== null && info.tool !== undefined ? `T${info.tool} must be in the spindle` : "not set by the program"} />
           <Row k="Spindle" v={info.spindle === "off" ? "off at this point" : `${info.spindle} ${Math.round(info.speed || 0)} rpm, ${info.spinup} s to reach speed`} />
-          <Row k="Before cutting" v={info.pause ? "Z lifts to the top, the tool moves over the start point and the job pauses so you can check it" : "Z lifts to the top and the tool moves over the start point"} />
+          <Row k="Before cutting" v={info.manual_spindle ? "Z lifts to the top, the tool moves over the start point and the job pauses: switch the router ON at its own switch, let it reach speed, then press Start. The tool only goes down after that." : info.pause ? "Z lifts to the top, the tool moves over the start point and the job pauses so you can check it" : "Z lifts to the top and the tool moves over the start point"} />
         </dl>
         {!info.offset_ok && (diff.length ? zeroBox(true) : <p className="warnbox">Your work zero is not where it was when the job was interrupted ({Object.entries(info.offset_delta).map(([a, d]) => `${a.toUpperCase()} off by ${d}`).join(", ")}). Set the zero again before running, or the cut will be in the wrong place.</p>)}
         {zeroMsg}
