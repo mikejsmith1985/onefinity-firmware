@@ -181,13 +181,22 @@ class Mach(Comm):
             state = self.ctrl.state
             if self._get_cycle() != 'idle': return
             vals = {}
+            seen = getattr(self, '_zero_seen', None)
+            if seen is None: seen = self._zero_seen = set()
             for axis in 'xyz':
-                if not state.is_axis_homed(axis): continue
+                if not state.is_axis_homed(axis):
+                    seen.discard(axis)
+                    continue
                 off = state.get('offset_' + axis)
-                # 0 means "no zero set" to the restore after homing (it only
-                # restores onto 0), and is what every axis reads just after a
-                # restart, before that restore has run.  Never store it.
-                if off is None or abs(float(off)) < 1e-9: continue
+                if off is None: continue
+                # 0 is what every axis reads just after a restart, before the
+                # restore after homing has run, so a 0 is only stored once
+                # this axis has had a real zero since it was homed: then a 0
+                # is a zero deliberately set exactly on machine 0 (1.29.0).
+                if abs(float(off)) < 1e-9:
+                    if axis not in seen: continue
+                    off = 0.0
+                else: seen.add(axis)
                 cur = self.ctrl.config.get('offset_' + axis)
                 if cur is None or abs(float(cur) - float(off)) > 0.0005:
                     vals['offset_' + axis] = float(off)
@@ -320,8 +329,10 @@ class Mach(Comm):
                 self.planner.mdi(cmd, with_limits)
                 super().resume()
         except BaseException as err:
-            self.mlog.info("Exception during MDI: %s" % err)
-            pass
+            # Every screen shows it (1.29.0).  Before, a refused command was
+            # only logged, so a probe sent while the machine was busy looked
+            # as if it had been accepted.
+            self.mlog.error('Command refused: %s' % err)
 
     def set(self, code, value):
         super().queue_command('${}={}'.format(code, value))

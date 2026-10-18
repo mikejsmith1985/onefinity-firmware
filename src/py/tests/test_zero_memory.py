@@ -61,6 +61,16 @@ check('unhomed Z left alone', cfg.values['offset_z'] == -58.989 and cfg.values['
 cfg2 = Config({}); m = mach(State({'offset_x': 1, 'offset_y': 2, 'offset_z': -3}), cfg2, cycle='running'); m._remember_offsets()
 check('not idle: nothing stored', cfg2.saved == [])
 
+# 5b. (1.29.0) A zero set exactly on machine 0 after a real one is remembered;
+#     a 0 read straight after a restart (no real zero seen yet) still is not
+cfg3 = Config({'offset_x': 12.5, 'offset_y': 7.0, 'offset_z': -40.0})
+st3 = State({'offset_x': 12.5, 'offset_y': 7.0, 'offset_z': -40.0}); m = mach(st3, cfg3); m._remember_offsets()
+st3.v['offset_x'] = 0.0; m._remember_offsets()
+check('exact 0 after a real zero is stored', cfg3.values['offset_x'] == 0.0, cfg3.saved)
+st3.homed = 'yz'; m._remember_offsets(); st3.homed = 'xyz'; st3.v['offset_x'] = 0.0
+cfg3.values['offset_x'] = 12.5; m._remember_offsets()
+check('after the axis was unhomed, 0 is not stored again', cfg3.values['offset_x'] == 12.5)
+
 # 6. Restore the interrupted job's zero: G92 so that the offsets equal the saved ones
 class CP:
     def __init__(s, r): s.r = r
