@@ -490,8 +490,32 @@ class HomeHandler(bbctrl.APIHandler):
 
 class StartHandler(bbctrl.APIHandler):
     def put_ok(self):
-        # {"dry_lift": mm} runs the selected program as a dry run
-        self.get_ctrl().mach.start(self.json.get('dry_lift', 0))
+        # {"dry_lift": mm} runs the selected program as a dry run.
+        # {"ack": true} is the operator's "Run anyway" on the checklist.
+        # Without it the controller checks the program itself (1.29.0), so
+        # a screen that could not read the program cannot start it blind.
+        ctrl = self.get_ctrl()
+        body = self.json if isinstance(self.json, dict) else {}
+        if not body.get('ack'):
+            filename = ctrl.state.get('selected', '')
+            if filename:
+                stops = bbctrl.Lint.start_stops(ctrl, filename)
+                if stops:
+                    msg = ' '.join(s['msg'] for s in stops)
+                    ctrl.log.get('Web').info('Start refused: %s' % msg)
+                    raise HTTPError(409, '%s', 'Not started. ' + msg)
+        ctrl.mach.start(body.get('dry_lift', 0))
+
+
+class LintHandler(bbctrl.APIHandler):
+    # The pre-run G-code check for an uploaded program (1.29.0)
+    def get(self, filename):
+        filename = url_unescape(filename)
+        if not filename or '/' in filename or filename.startswith('.'):
+            raise HTTPError(400, 'Bad file name')
+        path = self.get_upload(filename)
+        if not os.path.isfile(path): raise HTTPError(404, 'No such file')
+        self.write_json(bbctrl.Lint.lint_file(path))
 
 
 class EStopHandler(bbctrl.APIHandler):
@@ -1092,6 +1116,7 @@ class Web(tornado.web.Application):
             (r'/api/path/([^/]+)((/positions)|(/speeds))?', PathHandler),
             (r'/api/home(/[xyzabcXYZABC]((/set)|(/clear))?)?', HomeHandler),
             (r'/api/start', StartHandler),
+            (r'/api/lint/([^/]+)', LintHandler),
             (r'/api/estop', EStopHandler),
             (r'/api/clear', ClearHandler),
             (r'/api/stop', StopHandler),
