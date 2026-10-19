@@ -258,7 +258,7 @@ class Mach(Comm):
         op = self.ctrl.state.get('optional_pause', False)
         pr = self._get_pause_reason()
         if ((state_changed or 'pr' in update) and self._is_holding() and
-            (pr in ('Switch found', 'User stop') or
+            (pr in ('Switch found', 'Switch no error', 'User stop') or
              (pr == 'Optional pause' and not op))):
             self._unpause()
 
@@ -271,7 +271,12 @@ class Mach(Comm):
             self.planner.stop()
             self.ctrl.state.set('line', 0)
 
-        else: self.planner.restart()
+        else:
+            # A probing move that ended without contact, from an AVR that
+            # holds for it (upstream Buildbotics firmware): #5070 = 0.  The
+            # firmware here doesn't, see Planner._check_seek_end() (1.31.1)
+            if pause_reason == 'Switch no error': self.planner.seek_result(0)
+            self.planner.restart()
 
         super().i2c_command(Cmd.UNPAUSE)
         self.unpausing = True

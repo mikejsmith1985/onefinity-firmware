@@ -33,7 +33,7 @@ import os
 from collections import deque
 import camotics.gplan as gplan # pylint: disable=no-name-in-module,import-error
 import bbctrl.Cmd as Cmd
-from bbctrl.CommandQueue import CommandQueue
+from bbctrl.CommandQueue import CommandQueue, id_less
 
 
 reLogLine = re.compile(
@@ -55,6 +55,9 @@ def log_json(o): return json.dumps(log_floats(o))
 
 
 class Planner():
+    seek_line = None     # the last probing move sent (1.31.1)
+    seek_error = True    # error flag of the last seek command
+
     def __init__(self, ctrl):
         self.ctrl = ctrl
         self.log = ctrl.log.get('Planner')
@@ -236,6 +239,56 @@ class Planner():
             self.planner.set_active(id) # Release planner commands
             self.cmdq.release(id)       # Synchronize planner variables
 
+        self._check_seek_end()
+
+
+    # Probing move that ends without contact (1.31.1) -----------------------
+    # After a probing move (G38.2 to G38.5) the G-code interpreter waits: it
+    # can't go on until it knows whether the switch was found and where the
+    # machine stopped (#5070, #5061 to #5063).  The planner is told by
+    # restart(), which Mach calls when the AVR holds with "Switch found".
+    # When the move reaches its end without contact the AVR doesn't hold: it
+    # ends the seek (seek_end() in src/avr/src/exec.c, at the end of the
+    # line) and, with nothing more queued, goes READY.  For G38.2/G38.4 it
+    # also reports "Switch not found", and Mach E-stops.  For G38.3/G38.5
+    # (no error) nothing at all told the planner, so it waited for ever and
+    # the program stopped after the move (found on a machine with 1.31.0:
+    # Probe XYZ hung after the guarded move beside the block).
+    #
+    # Upstream Buildbotics fixed this in the AVR (a "Switch no error" hold,
+    # then planner.synchronize(0) and a restart).  This does the same from
+    # here, without new AVR firmware: once the AVR has executed the probing
+    # move (its id), is READY and stands at the move's target, the probe
+    # result is 0 (synchronize) and planning restarts from the real position,
+    # exactly as after "Switch found".
+    def _check_seek_end(self):
+        seek = self.seek_line
+        if seek is None or seek['error']: return
+        state = self.ctrl.state
+        if state.get('xx', '') != 'READY': return
+        id = state.get('id', 0)
+        if id is None or id_less(id, seek['id']): return
+        if not self.planner.is_synchronizing(): return
+        for axis, v in seek['target'].items():
+            p = state.get(axis + 'p', None)
+            if p is None or 0.05 < abs(p - v): return
+
+        self.log.info('Probe move %d ended without contact' % seek['id'])
+        if self.seek_result(0): self.restart()
+
+
+    def seek_result(self, result):
+        # Give the waiting interpreter the probe result: #5070 = result and
+        # #5061 to #5063 = where the planner is (the target, without contact)
+        self.seek_line = None
+        try:
+            if self.planner.is_synchronizing(): self.planner.synchronize(result)
+            return True
+        except Exception:
+            self.log.exception('Internal error: Planner synchronize')
+            self.stop()
+            return False
+
 
     def _get_var_cb(self, name, units):
         value = 0
@@ -291,6 +344,9 @@ class Planner():
 
 
     def _report_time(self):
+        # Also catches a probing move whose last update came before it ended
+        try: self._check_seek_end()
+        except Exception: self.log.exception('Internal error: seek check')
         state = self.ctrl.state.get('xx', '')
 
         if state in ('STOPPING', 'RUNNING') and self.move_start:
@@ -343,6 +399,7 @@ class Planner():
             for _, sp in block.get('speeds', []) or []:
                 try: self.spindle = float(sp)
                 except (TypeError, ValueError): pass
+            if block.get('seeking', False): self._note_seek(block)
             if self.is_dry():
                 return Cmd.line(self._dry_target(block['target']),
                                 block['exit-vel'], block['max-accel'],
@@ -417,12 +474,24 @@ class Planner():
                     'touch plate or the probe. Turn it off with M5 first.'
                     % self.spindle)
             if self.is_dry(): return # No probing in the air
+            self.seek_error = bool(block['error'])
             sw = self.ctrl.state.get_switch_id(block['switch'])
             return Cmd.seek(sw, block['active'], block['error'])
 
         if type == 'end': return '' # Sends id
 
         raise Exception('Unknown planner command "%s"' % type)
+
+
+    def _note_seek(self, block):
+        target = block['target']
+        if self.is_dry(): target = self._dry_target(target)
+        # In a dry run there is no seek command: the move just ends, so it
+        # is always handled as a move without contact
+        self.seek_line = {
+            'id': block['id'], 'error': self.seek_error and not self.is_dry(),
+            'target': dict((k.lower(), float(v)) for k, v in target.items())}
+        self.seek_error = True
 
 
     def _encode(self, block):
@@ -458,6 +527,7 @@ class Planner():
         # TODO logger is global and will not work correctly in demo mode
         self.planner.set_logger(self._log_cb, 1, 'LinePlanner:3')
         self._position_dirty = True
+        self.seek_line = None
         self.cmdq.clear()
         self.reset_times()
 
@@ -492,6 +562,7 @@ class Planner():
     def stop(self):
         try:
             self.end_dry()
+            self.seek_line = None
             self.planner.stop()
             self.cmdq.clear()
 
@@ -508,6 +579,7 @@ class Planner():
                 position['z'] -= self.dry_lift # Planner frame, see begin_dry()
 
             self.log.info('Planner restart: %d %s' % (id, log_json(position)))
+            self.seek_line = None
 
             self.cmdq.clear()
             self.cmdq.release(id)
