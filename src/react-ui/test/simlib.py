@@ -7,6 +7,12 @@ def gen(opts, mod='measure.js', fn='measureProgram'):
     return subprocess.run(['node', S+'/gen.mjs', mod, fn, json.dumps({**base, **opts})], capture_output=True, text=True, check=True).stdout
 
 class Crash(Exception): pass
+_H = []
+def _harness():
+    if not _H:
+        sys.path.insert(0, os.path.join(S, '..', '..', 'py', 'tests'))
+        import seekharness; _H.append(seekharness)
+    return _H[0]
 class NotFound(Exception): pass
 
 def box_dist(c, b):  # distance from point c to axis-aligned box b=(x0,x1,y0,y1,z0,z1)
@@ -67,6 +73,27 @@ class Sim:
         if probe == 'G38.2': raise NotFound('Switch not found')
         return False
     def run(s, prog):
+        # 1.31.1: by default every program runs through the controller's real
+        # Planner/Mach/Comm code with a CAMotics-like interpreter and an
+        # AVR-like executor (src/py/tests/seekharness.py), so a probing move
+        # must end, contact or not, through the same restart path as on the
+        # machine.  A regression there hangs the run (seekharness.Hang).
+        # SIM_DIRECT=1 interprets the G-code directly (the old behaviour).
+        if not os.environ.get('SIM_DIRECT') and not getattr(s, 'direct', False):
+            return _harness().run(s, prog)
+        return s.run_direct(prog)
+    def run_direct(s, prog):
+        g = s.steps(prog); r = None
+        while True:
+            try: ev = g.send(r)
+            except StopIteration: return s
+            r = None
+            if ev[0] == 'line': s.move(ev[1])
+            elif ev[0] == 'probe': r = s.move(ev[1], 'G38.2' if ev[2] == 38.2 else 'G38.3')
+    def steps(s, prog):
+        # The interpreter.  Yields ('line', target), ('probe', target, 38.2|38.3)
+        # (sent back: True on contact; s.P is where the machine stopped) and
+        # ('set', name, value) for #<_name> globals.  Targets are machine coordinates.
         lines = [l.split('(')[0].strip() for l in prog.splitlines()]
         stack=[]; active=True   # o-word if / else / endif (else added in 1.29.0)
         for line in lines:
@@ -82,7 +109,10 @@ class Sim:
                 continue
             if not active: continue
             m = re.match(r'#<([^>]+)>\s*=\s*(.*)', line)
-            if m: s.vars[m.group(1)] = s.ev(m.group(2)); continue
+            if m:
+                s.vars[m.group(1)] = s.ev(m.group(2))
+                if m.group(1).startswith('_'): yield ('set', m.group(1), s.vars[m.group(1)])
+                continue
             ws = s.words(line); g=[v for k,v in ws if k=='G']; ax={k:v for k,v in ws if k in 'XYZ'}
             for v in g:
                 if v==91: s.inc=True
@@ -100,13 +130,12 @@ class Sim:
                 else: tgt[i] = (s.P[i]+v) if s.inc else (v+s.off[i])
             kind = mv[-1]
             if kind in (38.2,38.3):
-                hit = s.move(tgt, 'G38.2' if kind==38.2 else 'G38.3')
+                hit = yield ('probe', tgt, kind)
                 # #5061-#5063: work coordinates by default.  probe_frame = 'machine' models the reading
                 # of the CAMotics source (machine coordinates); see the 1.29.0 release notes, item 2.
                 w = s.P[:] if getattr(s, 'probe_frame', 'work') == 'machine' else s.work()
                 # 1.31.0: optional reading noise on the reported touch (s.noise: std dev, mm)
                 if getattr(s, 'noise', 0): w = [v + s.rng.gauss(0, s.noise) for v in w]
                 s.vars['5061'],s.vars['5062'],s.vars['5063'] = w; s.vars['5070'] = 1.0 if hit else 0.0
-            else: s.move(tgt)
-        return s
+            else: yield ('line', tgt)
 

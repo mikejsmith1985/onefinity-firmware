@@ -20,7 +20,7 @@ const probeZ = async () => {
   await until(() => visible(p, "Probing Z"));
   await mock("mock:touch");
   await until(() => visible(p, "Place the probe block face down"));
-  await p.getByRole("button", { name: "Next" }).click();
+  await p.getByRole("button", { name: "Start probing" }).click();
 };
 await mock("mock:probe-stop");
 await probeZ();

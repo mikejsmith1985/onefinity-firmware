@@ -12,6 +12,8 @@
 //     too far from the edge), the move stops, #<_ofprobe_fail> says which one, the rest is skipped
 //     and the bit lifts 25 mm.
 // The #5061 to #5063 values are used exactly as before (see the 1.29.0 release notes, item 2).
+// 1.31.1: every move is marked with #<_of_step> (progress.js) so the dialog shows which one is running.
+import { marker, STEP_RESET } from "./progress.js";
 
 export const FAILS = {
   1: "The bit touched the probe block while going down beside it, so it was too far from the edge to clear it. Start with the bit over the block, less than 20 mm in from the edges it probes.",
@@ -50,7 +52,8 @@ export function normDia(str) {
 const begin = (token) => `G21
 M5
 #<_ofprobe_done> = 0
-#<_ofprobe_fail> = 0`;
+#<_ofprobe_fail> = 0
+${STEP_RESET}`;
 const end = (token, id = 990) => `G90
 o${id} if [#<_ofprobe_fail> EQ 0]
 #<_ofprobe_done> = ${token}
@@ -62,9 +65,11 @@ M2
 const guardFeed = (fast) => n(Math.min(Math.max(Number(fast) || 0, 300), 1000));
 
 // One corner: Z on the block top, then the X face and (unless probeY is false) the Y face.
-// o: {sx, sy, plunge, zLift, fastSeek, slowSeek, afterZ, afterX, afterY, remember, probeY, skipZ, base}
+// o: {sx, sy, plunge, zLift, fastSeek, slowSeek, afterZ, afterX, afterY, remember, probeY, skipZ, base, mark, noLift}
 export function cornerProbeSequence(o) {
   let id = o.base || 100;
+  const mark = o.mark || marker();
+  const fx = o.sx > 0 ? "left" : "right", fy = o.sy > 0 ? "front" : "back";
   const keep = (name, param) => (o.remember ? `#<_ofprobe_${name}> = ${param}\n` : "");
   const gf = guardFeed(o.fastSeek);
   const out = [];
@@ -77,30 +82,34 @@ export function cornerProbeSequence(o) {
   };
 
   if (!o.skipZ) {
-    add(`G91 G38.2 Z-25 F${o.fastSeek}
+    add(`${mark("Touch the block top")}
+G91 G38.2 Z-25 F${o.fastSeek}
 G91 G1 Z1
 G91 G38.2 Z-2 F${o.slowSeek}
 ${keep("zt", "#5063")}${keep("ok", "-1")}${o.afterZ || ""}`);
   }
-  add(`G91 G0 Z${n(o.zLift)}
+  add(`${mark("Move out past the " + fx + " face")}
+G91 G0 Z${n(o.zLift)}
 G91 G0 X${n(20 * o.sx)}`);
-  add(guarded("Z", -o.plunge, 1));
-  guard(`G91 G38.2 X${n(-20 * o.sx)} F${o.fastSeek}
+  add(`${mark("Go down beside the block, guarded")}\n${guarded("Z", -o.plunge, 1)}`);
+  guard(`${mark("Touch the " + fx + " face")}
+G91 G38.2 X${n(-20 * o.sx)} F${o.fastSeek}
 G91 G1 X${n(o.sx)}
 G91 G38.2 X${n(-2 * o.sx)} F${o.slowSeek}
 ${keep("xa", "#5061")}${o.afterX || ""}
 G91 G0 X${n(o.sx)}`);
   if (o.probeY !== false) {
-    guard(guarded("Y", 20 * o.sy, 2));
-    guard(guarded("X", -20 * o.sx, 3));
-    guard(`G91 G38.2 Y${n(-20 * o.sy)} F${o.fastSeek}
+    guard(`${mark("Move along the " + fx + " face, guarded")}\n${guarded("Y", 20 * o.sy, 2)}`);
+    guard(`${mark("Move round to the " + fy + " face, guarded")}\n${guarded("X", -20 * o.sx, 3)}`);
+    guard(`${mark("Touch the " + fy + " face")}
+G91 G38.2 Y${n(-20 * o.sy)} F${o.fastSeek}
 G91 G1 Y${n(o.sy)}
 G91 G38.2 Y${n(-2 * o.sy)} F${o.slowSeek}
 ${keep("ya", "#5062")}${o.afterY || ""}
 G91 G0 Y${n(3 * o.sy)}`);
   }
   // Always lift, whatever happened above
-  add("G91 G0 Z25");
+  if (!o.noLift) add(`${mark("Lift clear")}\nG91 G0 Z25`);
   return out.filter(Boolean).join("\n").replace(/\n{2,}/g, "\n");
 }
 
@@ -111,12 +120,15 @@ export function probeProgram({ config, rotary, type, loc, dia: d, token }) {
   const cutterLength = 12.7, zLift = 1, cd = d ? d.mm : 0;
   const xOffset = w + cd / 2, yOffset = l + cd / 2;
   if (type === "z") {
+    const mark = marker();
     return `${begin(token)}
 G92 Z0
+${mark("Touch the block top")}
 G91 G38.2 Z-25.4 F${fast}
 G91 G1 Z1
 G91 G38.2 Z-2 F${slow}
 G92 Z${n(zOffset)}
+${mark("Lift clear")}
 G91 G0 Z25
 ${end(token)}`;
   }
@@ -148,14 +160,18 @@ export function centerSecondProgram({ config, loc, dia: d, token }) {
   const leftDim = cfg["probe-xdim"], rightDim = keepY ? cfg["probe-ydim"] : cfg["probe-xdim"], frontDim = cfg["probe-ydim"], backDim = cfg["probe-ydim"];
   const halfX = `[[#5061 - #<_ofprobe_xa> + ${leftDim} + ${rightDim}] / 2 + ${n(r)}]`;
   const halfY = `[[#5062 - #<_ofprobe_ya> + ${frontDim} + ${backDim}] / 2 + ${n(r)}]`;
+  const mark = marker();
+  const top = mark("Touch the block top");
   const rest = cornerProbeSequence({
-    sx: -1, sy: -1, plunge, zLift, fastSeek: fast, slowSeek: slow, skipZ: true, base: 120,
+    mark, sx: -1, sy: -1, plunge, zLift, fastSeek: fast, slowSeek: slow, skipZ: true, base: 120,
     afterX: `#<_ofprobe_hx> = ${halfX}\nG92 X[[#5061 - #<_ofprobe_xa> + ${leftDim} - ${rightDim}] / 2]`,
     afterY: `#<_ofprobe_hy> = ${halfY}\nG92 Y[[#5062 - #<_ofprobe_ya>] / 2]`,
     probeY: !keepY,
-  }).replace(/\nG91 G0 Z25$/, ""); // lifted below, on every path
+    noLift: true, // lifted below, on every path
+  });
   return `${begin(token)}
 #<_ofprobe_ok> = 0
+${top}
 G91 G38.2 Z-25 F${fast}
 G91 G1 Z1
 G91 G38.2 Z-2 F${slow}
@@ -167,6 +183,7 @@ o110 endif
 o111 if [#<_ofprobe_ok> EQ 1]
 ${rest}
 o111 endif
+${mark("Lift clear")}
 G91 G0 Z25
 ${end(token)}`;
 }

@@ -1,3 +1,4 @@
+import { marker, STEP_RESET } from "./progress.js";
 // Tool setter: a switch bolted to the table that every tool touches, so Z
 // can be set for a new tool without putting a touch plate on the stock.
 //
@@ -42,6 +43,7 @@ export function setterProgram(o) {
   const start = Math.min(o.top, z + o.clear);
   const descend = o.top - start;
   const search = start - z + 25;   // down to 25 mm below the saved height
+  const mark = marker(); // which move is running, for the screen (1.31.1)
   const lines = [
     `(Tool setter: ${o.mode === "ref" ? "reference" : "measure tool"})`,
     "G21",
@@ -49,14 +51,18 @@ export function setterProgram(o) {
     "#<_ofs_ok> = 0",
     "#<_ofs_fail> = 0",
     ...(o.token ? ["#<_ofs_done> = 0"] : []),
+    STEP_RESET,
+    mark("Go up to travel height"),
     `G90 G53 G0 Z${n(o.top)}`,
+    mark("Move over the setter"),
     `G53 G0 X${n(x)} Y${n(y)}`,
   ];
   if (descend > 0.01) {
-    lines.push(`G91 G38.3 Z${n(-descend)} F${o.travel}`,
+    lines.push(mark("Go down towards the setter, guarded"), `G91 G38.3 Z${n(-descend)} F${o.travel}`,
       "o300 if [#5070 EQ 1]", "#<_ofs_fail> = 1", "o300 endif");
   }
   lines.push("o301 if [#<_ofs_fail> EQ 0]",
+    mark("Touch the setter"),
     `G91 G38.2 Z${n(-search)} F${o.fast}`,
     "G91 G1 Z1",
     `G91 G38.2 Z-2 F${o.slow}`,
@@ -64,6 +70,7 @@ export function setterProgram(o) {
     o.mode === "ref" ? "#<_ofs_ref> = #5063" : `G92 Z${n(o.ref)}`,
     "#<_ofs_ok> = 1",
     "o301 endif",
+    mark("Lift and move back"),
     `G90 G53 G0 Z${n(o.top)}`);
   if (o.back) lines.push(`G53 G0 X${n(o.back.x)} Y${n(o.back.y)}`);
   // 1.31.0: the wizard only counts a touch as done when this run's token is set at the end
@@ -181,6 +188,7 @@ export function setterTouchProgram(o) {
   const start = Math.min(o.top, z + o.clear);
   const descend = o.top - start;
   const search = start - z + 25;
+  const mark = marker();
   const lines = [
     "(Tool setter: touch for the Start job wizard)",
     "G21",
@@ -188,14 +196,18 @@ export function setterTouchProgram(o) {
     "#<_ofs_ok> = 0",
     "#<_ofs_fail> = 0",
     "#<_ofs_done> = 0",
+    STEP_RESET,
+    mark("Go up to travel height"),
     `G90 G53 G0 Z${n(o.top)}`,
+    mark("Move over the setter"),
     `G53 G0 X${n(x)} Y${n(y)}`,
   ];
   if (descend > 0.01) {
-    lines.push(`G91 G38.3 Z${n(-descend)} F${o.travel}`,
+    lines.push(mark("Go down towards the setter, guarded"), `G91 G38.3 Z${n(-descend)} F${o.travel}`,
       "o310 if [#5070 EQ 1]", "#<_ofs_fail> = 1", "G90 G53 G0 Z" + n(o.top), "o310 endif");
   }
   lines.push("o311 if [#<_ofs_fail> EQ 0]",
+    mark("Touch the setter"),
     `G91 G38.2 Z${n(-search)} F${o.fast}`,
     "G91 G1 Z1",
     `G91 G38.2 Z-2 F${o.slow}`,

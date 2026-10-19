@@ -1,3 +1,4 @@
+import { marker, STEP_RESET } from "./progress.js";
 // Bore centre with the 3D probe (1.31.0), for lining up side B on reference bores.
 //
 // The stylus goes over the bore at travel height, then down into it, both as guarded moves (G38.3):
@@ -53,6 +54,7 @@ export function boreProgram(o) {
   let id = 500;
   const out = [];
   const add = (s) => out.push(s);
+  const mark = marker(); // which move is running, for the screen (1.31.1)
   const guard = (body) => { const k = id++; add(`o${k} if [#<_ofb_fail> EQ 0]\n${body}\no${k} endif`); };
   const onHit = (code, after) => { const k = id++; return `o${k} if [#5070 EQ 1]\n#<_ofb_fail> = ${code}\n${after}\no${k} endif`; };
 
@@ -64,9 +66,10 @@ M5
 #<_ofb_done> = 0
 #<_ofb_in> = 0
 #<_ofb_miss> = 0
+${STEP_RESET}
 G90`);
   // Only ever rapid up. Every move across or down is guarded.
-  if (o.fromZ < o.clear - 0.01) add(`G0 Z${n(o.clear)}`);
+  if (o.fromZ < o.clear - 0.01) add(`${mark("Go up to travel height")}\nG0 Z${n(o.clear)}`);
   const spots = o.targets && o.targets.length ? o.targets : [null];
   // On contact while travelling, back 1 mm off the way it came before lifting
   let from = typeof o.fromX === "number" && typeof o.fromY === "number" ? { x: o.fromX, y: o.fromY } : null;
@@ -78,11 +81,13 @@ G90`);
   spots.forEach((t, j) => {
     const k1 = id++, k2 = id++;
     let body = "";
-    if (t) { body += `G38.3 X${n(t.x)} Y${n(t.y)} F${o.travel}\n${onHit(1, backOff(t))}\n`; from = t; }
-    if (j === 0 && o.fromZ > o.clear + 0.01) { const k = id++; body += `o${k} if [#<_ofb_fail> EQ 0]\nG38.3 Z${n(o.clear)} F${o.travel}\n${onHit(1, "G91 G0 Z3\nG90")}\no${k} endif\n`; }
+    const sp = spots.length > 1 ? ` ${j + 1} of ${spots.length}` : "";
+    if (t) { body += `${mark(`Move over the bore, spot${sp}, guarded`)}\nG38.3 X${n(t.x)} Y${n(t.y)} F${o.travel}\n${onHit(1, backOff(t))}\n`; from = t; }
+    if (j === 0 && o.fromZ > o.clear + 0.01) { const k = id++; body += `o${k} if [#<_ofb_fail> EQ 0]\n${mark("Go down to travel height, guarded")}\nG38.3 Z${n(o.clear)} F${o.travel}\n${onHit(1, "G91 G0 Z3\nG90")}\no${k} endif\n`; }
     // Down: into the bore, or onto solid stock (then lift and try the next spot)
     const k3 = id++, k4 = id++;
     body += `o${k3} if [#<_ofb_fail> EQ 0]
+${mark(`Go down into the bore${sp}, guarded`)}
 G38.3 Z${n(-o.depth)} F${o.fast}
 o${k4} if [#5070 EQ 1]
 #<_ofb_miss> = [#<_ofb_miss> + 1]
@@ -99,7 +104,8 @@ o${k3} endif`;
   const P = { X: "#5061", Y: "#5062" };
   const round = (A, i) => {
     const a = A.toLowerCase(), p = P[A];
-    guard(`G91 G38.2 ${A}${S} F${o.fast}
+    guard(`${mark(`Touch the ${A} walls, round ${i}`)}
+G91 G38.2 ${A}${S} F${o.fast}
 G91 G1 ${A}-1 F${o.fast}
 G91 G38.2 ${A}2 F${o.slow}
 #<_ofb_${a}p${i}> = ${p}
@@ -118,7 +124,7 @@ G90`);
 #<_ofb_sy> = [[#<_ofb_yp2> + #<_ofb_ym2>] / 2 - [#<_ofb_yp1> + #<_ofb_ym1>] / 2]
 #<_ofb_ok> = 1`);
   // Straight up out of the middle of the bore, whatever happened
-  add(`G90 G0 Z${n(o.clear)}`);
+  add(`${mark("Lift out of the bore")}\nG90 G0 Z${n(o.clear)}`);
   add(`o${id} if [#<_ofb_ok> EQ 1]\n#<_ofb_done> = ${o.token || 1}\no${id} endif`);
   add("M2");
   return out.join("\n") + "\n";

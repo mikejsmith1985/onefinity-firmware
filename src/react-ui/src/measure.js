@@ -1,3 +1,4 @@
+import { marker, STEP_RESET } from "./progress.js";
 // Measure stock with a 3D touch probe (a stylus probe held in the collet).
 //
 // The operator puts the stylus roughly over the middle of the stock, a few mm
@@ -72,6 +73,7 @@ export function measureProgram(o) {
   let oid = 200;
   const out = [];
   const add = (s) => out.push(s.replace(/^\n/, ""));
+  const mark = marker(); // which move is running, for the screen (1.31.1)
 
   // Run a block only if nothing has gone wrong so far
   const guard = (body) => { const id = oid++; add(`o${id} if [#<_ofm_fail> EQ 0]\n${body}\no${id} endif`); };
@@ -100,26 +102,28 @@ M5
 #<_ofm_ok> = 0
 #<_ofm_fail> = 0${o.token ? "\n#<_ofm_done> = 0" : ""}
 #<_ofm_w> = 0
-#<_ofm_l> = 0`);
+#<_ofm_l> = 0
+${STEP_RESET}`);
 
   // 1. Top
-  add(`G91 G38.2 Z-25 F${o.fast}
+  add(`${mark("Touch the stock top")}
+G91 G38.2 Z-25 F${o.fast}
 G91 G1 Z1
 G91 G38.2 Z-2 F${o.slow}
 #<_ofm_zt> = #5063
 G91 G0 Z${n(o.clear)}`);
 
   // 2. Left end
-  guard(guarded("X", n(-(o.w / 2 + o.margin + r)), o.travel, 1, "X2", 0));
-  guard(guarded("Z", n(-up), o.fast, 2, "Z2", up));
-  guard(`${touch("X", 1)}
+  guard(`${mark("Move out past the left end, guarded")}\n${guarded("X", n(-(o.w / 2 + o.margin + r)), o.travel, 1, "X2", 0)}`);
+  guard(`${mark("Go down beside the left end, guarded")}\n${guarded("Z", n(-up), o.fast, 2, "Z2", up)}`);
+  guard(`${mark("Touch the left end")}\n${touch("X", 1)}
 #<_ofm_rxa> = #5061
 #<_ofm_xa> = [#5061 + ${n(r)}]
 ${lift("X", 1)}`);
 
   // 3. Right end (planned from the measured left end)
-  guard(guarded("X", `[#<_ofm_xa> + ${n(o.w + o.margin + r)} - [#5061 - 2]]`, o.travel, 3, "X-2", 0));
-  guard(guarded("Z", n(-up), o.fast, 4, "Z2", up));
+  guard(`${mark("Move over to past the right end, guarded")}\n${guarded("X", `[#<_ofm_xa> + ${n(o.w + o.margin + r)} - [#5061 - 2]]`, o.travel, 3, "X-2", 0)}`);
+  guard(`${mark("Go down beside the right end, guarded")}\n${guarded("Z", n(-up), o.fast, 4, "Z2", up)}`);
 
   const x0 = { "x-left": "#<_ofm_xa>", "front-left": "#<_ofm_xa>", "back-left": "#<_ofm_xa>",
     "x-right": "#<_ofm_xb>", "front-right": "#<_ofm_xb>", "back-right": "#<_ofm_xb>" }[o.origin]
@@ -130,7 +134,7 @@ ${lift("X", 1)}`);
   if (!o.probeY) {
     // Zero is set right after the last touch, where the current position is
     // exactly the touch position (#5061..#5063).
-    guard(`${touch("X", -1)}
+    guard(`${mark("Touch the right end")}\n${touch("X", -1)}
 #<_ofm_rxb> = #5061
 #<_ofm_xb> = [#5061 - ${n(r)}]
 #<_ofm_w> = [#<_ofm_xb> - #<_ofm_xa>]
@@ -138,26 +142,26 @@ ${zero(false)}
 ${lift("X", -1)}
 #<_ofm_ok> = 1`);
   } else {
-    guard(`${touch("X", -1)}
+    guard(`${mark("Touch the right end")}\n${touch("X", -1)}
 #<_ofm_rxb> = #5061
 #<_ofm_xb> = [#5061 - ${n(r)}]
 #<_ofm_w> = [#<_ofm_xb> - #<_ofm_xa>]
 ${lift("X", -1)}`);
 
     // 4. Front face, from the middle of the stock in X
-    guard(guarded("X", "[[#<_ofm_xa> + #<_ofm_xb>] / 2 - [#5061 + 2]]", o.travel, 5, "Z2", 0));
-    guard(guarded("Y", n(-(o.l / 2 + o.margin + r)), o.travel, 6, "Y2", 0));
-    guard(guarded("Z", n(-up), o.fast, 7, "Z2", up));
-    guard(`${touch("Y", 1)}
+    guard(`${mark("Move back to the middle, guarded")}\n${guarded("X", "[[#<_ofm_xa> + #<_ofm_xb>] / 2 - [#5061 + 2]]", o.travel, 5, "Z2", 0)}`);
+    guard(`${mark("Move out past the front face, guarded")}\n${guarded("Y", n(-(o.l / 2 + o.margin + r)), o.travel, 6, "Y2", 0)}`);
+    guard(`${mark("Go down beside the front face, guarded")}\n${guarded("Z", n(-up), o.fast, 7, "Z2", up)}`);
+    guard(`${mark("Touch the front face")}\n${touch("Y", 1)}
 #<_ofm_rya> = #5062
 #<_ofm_ya> = [#5062 + ${n(r)}]
 ${lift("Y", 1)}`);
 
     // 5. Back face
-    guard(guarded("Y", `[#<_ofm_ya> + ${n(o.l + o.margin + r)} - [#5062 - 2]]`, o.travel, 8, "Y-2", 0));
-    guard(guarded("Z", n(-up), o.fast, 9, "Z2", up));
+    guard(`${mark("Move over to past the back face, guarded")}\n${guarded("Y", `[#<_ofm_ya> + ${n(o.l + o.margin + r)} - [#5062 - 2]]`, o.travel, 8, "Y-2", 0)}`);
+    guard(`${mark("Go down beside the back face, guarded")}\n${guarded("Z", n(-up), o.fast, 9, "Z2", up)}`);
     const y0 = o.origin.startsWith("front") ? "#<_ofm_ya>" : o.origin.startsWith("back") ? "#<_ofm_yb>" : "[[#<_ofm_ya> + #<_ofm_yb>] / 2]";
-    guard(`${touch("Y", -1)}
+    guard(`${mark("Touch the back face")}\n${touch("Y", -1)}
 #<_ofm_ryb> = #5062
 #<_ofm_yb> = [#5062 - ${n(r)}]
 #<_ofm_l> = [#<_ofm_yb> - #<_ofm_ya>]
@@ -168,7 +172,7 @@ ${lift("Y", -1)}
 
   add("G90");
   // Park over the new zero at travel height
-  if (!o.calibrate) add(`o${oid++} if [#<_ofm_ok> EQ 1]\nG90 G0 ${o.probeY ? "X0 Y0" : "X0"}\no${oid - 1} endif`);
+  if (!o.calibrate) add(`o${oid++} if [#<_ofm_ok> EQ 1]\n${mark("Move over the new zero")}\nG90 G0 ${o.probeY ? "X0 Y0" : "X0"}\no${oid - 1} endif`);
   // 1.31.0: the wizard only counts a measurement as done when this run's token is set at the end
   if (o.token) add(`o${oid++} if [#<_ofm_ok> EQ 1]\n#<_ofm_done> = ${o.token}\no${oid - 1} endif`);
   add("M2");

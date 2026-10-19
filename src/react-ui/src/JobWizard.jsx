@@ -13,6 +13,9 @@ import { BORE_DEFAULTS, BORE_FAILS, boreProgram, boreSpots, boreOrder, boreVerdi
 import { jobSteps, stockCenter, overStockProgram, zeroFor, boreSearch, manualSpindle, cameraPoint, WHY } from "./wizard.js";
 import { newToken } from "./probe.js";
 import { useFinished } from "./doover.js";
+import { programMoves, moveStatus } from "./progress.js";
+import { RunProgress, StepBody, Outcome, useRunStep } from "./steps.jsx";
+import { MeasureArt, SetterArt, BoreArt } from "./art.jsx";
 
 // Start job wizard (1.31.0). Driven by the program's setup sheet: load the stock, put the 3D probe in,
 // measure the stock and set zero on the sheet's corner, line side B up on its reference bores, then
@@ -66,7 +69,15 @@ export default function JobWizard({ config, state, send, subscribe, metric, mach
   const D = ui.v;
   const isDriver = useDriver(state, "wizard", D);
   const patch = (x) => uiPatch("wizard", x).catch(() => {});
-  const run = useRunner(state, subscribe, send);
+  const runRaw = useRunner(state, subscribe, send);
+  // 1.31.1: every screen shows the running program's moves (its progress marks, progress.js)
+  const run = (prog, key, token) => {
+    const mv = programMoves(prog);
+    const kind = /^\(Bore/.test(prog) ? "bore" : /^\(Measure stock/.test(prog) ? "measure" : /^\(Tool setter/.test(prog) ? "setter" : "move";
+    patch(mv.length ? { runMoves: mv, runAt: Date.now(), runKind: kind } : { runMoves: null });
+    return runRaw(prog, key, token);
+  };
+  const runStep = useRunStep(state.of_step, D?.busy && D?.runMoves ? `${D.runKind}:${D.runAt}` : null);
   const [setter, setSetter] = useState(null);
   const [prefs, setPrefsState] = useState(null);
   const toolOpen = !!useUi(state, "tool").v;
@@ -177,7 +188,7 @@ export default function JobWizard({ config, state, send, subscribe, metric, mach
     const r = await uiUpdate("wizard", (d) => (d && d.id === D.id && !d.busy ? { ...d, busy: what, msg: null, driver: ME } : undefined)).catch(() => ({ ok: false }));
     return r.ok;
   };
-  const release = (extra = {}) => patch({ busy: "", ...extra });
+  const release = (extra = {}) => patch({ busy: "", runMoves: null, ...extra });
   const next = (extra = {}) => patch((x) => ({ i: Math.min(x.i + 1, x.steps.length - 1), msg: null, ...extra }));
   const back = () => patch((x) => ({ i: Math.max(0, x.i - 1), msg: null }));
   const fail = (res, extra = "") => release({ msg: { ok: false, text: `${WHY[res.why] || "It didn't finish."}${res.msg ? ` (${res.msg})` : ""}${extra ? ` ${extra}` : ""}` } });
@@ -330,7 +341,7 @@ export default function JobWizard({ config, state, send, subscribe, metric, mach
 
   const steps = D.steps || [];
   const kind = stepNow?.kind;
-  const msgBox = D.msg && <div className={D.msg.ok ? "why" : "why bad"} role={D.msg.ok ? "status" : "alert"}><b>{D.msg.ok ? "Done" : "Stopped"}</b><p>{D.msg.text}</p></div>;
+  const msgBox = D.msg && <Outcome ok={D.msg.ok} title={D.msg.ok ? "Done" : "Stopped"}><p>{D.msg.text}</p></Outcome>;
   const toolLine = (p) => p ? `T${p.tool ?? "?"}${p.tool_name ? ` · ${p.tool_name.replace(/^T\d+\s*/, "")}` : ""}` : "";
   const stick = S.tool?.stick && (!part || String(part.tool) === String(S.tool?.num)) ? S.tool.stick : null;
 
@@ -402,7 +413,6 @@ export default function JobWizard({ config, state, send, subscribe, metric, mach
             {origin !== "center-x" && <label className="check"><input type="checkbox" checked={probeY} onChange={(e) => patch({ probeY: e.target.checked })} /> Touch the front and back faces too (they must stand above the vise jaws and clamps)</label>}
             {setter && typeof setter.x === "number" && <label className="check"><input type="checkbox" checked={D.useSetter !== false} onChange={(e) => patch({ useSetter: e.target.checked })} /> Then touch the tool setter with the probe</label>}
             <p><button className="primary" disabled={!canMove || touched} onClick={measure}>{busy === "measure" ? "Measuring…" : "Measure stock"}</button></p>
-            {busy === "measure" && <div className="indet" />}
           </>}
 
           {kind === "flip" && D.refs && <>
@@ -468,6 +478,13 @@ export default function JobWizard({ config, state, send, subscribe, metric, mach
           </>}
 
           {!homed && kind !== "overview" && kind !== "done" && <p className="err">Home the machine first.</p>}
+          {busy && D.runMoves && (() => {
+            const cur = runStep === null ? -1 : moveStatus(D.runMoves, runStep).cur;
+            const art = D.runKind === "bore" ? <BoreArt moves={D.runMoves} cur={cur} /> : D.runKind === "measure" ? <MeasureArt moves={D.runMoves} cur={cur} probeY={probeY} />
+              : D.runKind === "setter" ? <SetterArt moves={D.runMoves} cur={cur} probe /> : null;
+            const title = { bore: "Probing the bore", measure: "Measuring the stock", setter: "Touching the tool setter", move: "Moving over the stock" }[D.runKind] || "Running";
+            return <div className="wz-run"><StepBody art={art}><RunProgress title={title} moves={D.runMoves} step={runStep} started={state.cycle !== "idle"} note="Keep a hand near the E-stop. Cancel stops the machine." /></StepBody></div>;
+          })()}
           {msgBox}
         </div>
       </div>
