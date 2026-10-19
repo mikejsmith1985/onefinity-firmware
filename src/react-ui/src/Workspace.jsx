@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import DepthView from "./DepthView.jsx";
 import PathView from "./PathView.jsx";
 import GCode from "./GCode.jsx";
@@ -17,6 +17,8 @@ export default function Workspace({ lines, state, path, pathBusy, send, mach, cf
   const [tab, setTab] = useState(() => { try { return localStorage.getItem("next-work") || "depth"; } catch { return "depth"; } });
   const hasNote = !!useNote(state.selected);
   const pick = (t) => { setTab(t); try { localStorage.setItem("next-work", t); } catch {} };
+  // Another part of this screen asks for a tab (Cut deeper: "Show in Depth view")
+  useEffect(() => { const f = (e) => { if (TABS.some(([id]) => id === e.detail)) pick(e.detail); }; window.addEventListener("next-work-tab", f); return () => window.removeEventListener("next-work-tab", f); }, []);
   return (
     <div className="work">
       <div className="tabs" role="tablist" aria-label="Workspace">

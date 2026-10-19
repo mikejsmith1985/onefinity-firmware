@@ -11,6 +11,9 @@ import { getSetter } from "./ToolSetter.jsx";
 import { setterChecks } from "./setter.js";
 import { Modal } from "./ui.jsx";
 import { useUi, uiSet, uiCas, uiOpen, uiClose, uiPatch, usePref, setPref, getPref } from "./shared.js";
+import { useCheckpoint } from "./checkpoint.js";
+import { useFinished } from "./doover.js";
+import DoOverDialog from "./DoOverDialog.jsx";
 
 function Override({ label, kind, hint, value }) {
   // Shows the controller's override (the same on every screen) except while this slider is being dragged.
@@ -94,6 +97,10 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
     })();
     return () => { gone = true; };
   }, [state.selected, state.selected_time, state.offset_x, state.offset_y, state.offset_z, metric, probeTick, path]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Cut deeper (1.30.0): offered once the selected program has run to the end
+  const { cp } = useCheckpoint(state);
+  const doover = useUi(state, "doover").v;
+  const finished = useFinished(cp, state.selected);
   const sheet = useUi(state, "sheet").v;
   const setSheet = (v) => (v ? uiSet("sheet", v) : uiClose("sheet"));
   const [sheetBusy, setSheetBusy] = useState(false);
@@ -150,6 +157,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         <small>Program</small>
         <strong title={file}>{file || "No program selected"}</strong>
         {file && !active && <button className="linkish" disabled={sheetBusy} onClick={openSheet} title="Where to zero, which corner to probe, tool and feeds for this program">{sheetBusy ? "Reading…" : "Setup sheet"}</button>}
+        {file && !active && finished && <button className="linkish" onClick={() => uiOpen("doover", { file, at: Date.now() })} title="The cut didn't go all the way through: run only the deepest passes again, deeper">Cut deeper…</button>}
         {note && <em className="file-note" title={note}>{note}</em>}
       </div>
       <div className="bar" role="progressbar" aria-valuenow={active ? pct : 0} aria-valuemin="0" aria-valuemax="100"><i style={{ width: `${active ? (pct || 2) : 0}%` }} /></div>
@@ -196,6 +204,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       </dl>
       <Override label="Feed" kind="feed" hint="Feed rate override" value={state.fo} />
       <Override label="Speed" kind="speed" hint="Spindle speed override" value={state.so} />
+      {doover && <DoOverDialog state={state} metric={metric} onClose={() => uiClose("doover")} />}
       {(parkAsk || state.park) && <ParkDialog state={state} config={config} active={active} onClose={() => setParkAsk(false)} />}
       {check && <Checklist checks={check.checks} setup={check.setup} ack={!!check.ack} never={!!check.never}
         onAck={(on) => uiPatch("runcheck", { ack: on })} onNever={(on) => uiPatch("runcheck", { never: on })}

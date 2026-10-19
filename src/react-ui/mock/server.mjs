@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const NEXT = process.env.MOCK_UI_DIR || path_.resolve(path_.dirname(fileURLToPath(import.meta.url)), "../../resources/next");
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".woff2": "font/woff2", ".woff": "font/woff" };
 import { WebSocketServer } from "ws";
+import { spawnSync } from "node:child_process";
 
 const PORT = process.env.PORT || 8080;
 
@@ -31,7 +32,9 @@ const state = {
 // MOCK_START_UNHOMED=1 starts with no axis homed (as after a controller restart).
 if (process.env.MOCK_START_UNHOMED) for (const i of [0, 1, 2, 3]) state[`${i}homed`] = false;
 const jogLog = [];
-const store = { checkpoint: process.env.MOCK_INTERRUPTED ? { v: 1, seq: 5, t: Math.floor(Date.now() / 1000) - 3600, status: "running", file: "alternator_arm.nc", nlines: 12840, line: 4212, offset: { x: 163.142, y: 217.435, z: -58.989 } } : null };
+const made = {}; // programs written by the mock (Cut deeper)
+const MOCK_TEXT = "G21\nG90\nG0 Z15\nM3 S17000\nG1 X10 Y10 F300\nG1 Z-5\nG1 X140 F1500\nG1 Y80\nG1 X10\nG1 Y10\nT2 M6\nG1 X20\nM5\nT3\nM6\nM30\n";
+const store = { checkpoint: process.env.MOCK_FINISHED ? { v: 1, seq: 7, t: Math.floor(Date.now() / 1000) - 600, status: "stopped", file: "fuel_filter_outline.nc", nlines: 100, line: 100, tool: 1, offset: { x: 0, y: 0, z: 0 } } : process.env.MOCK_INTERRUPTED ? { v: 1, seq: 5, t: Math.floor(Date.now() / 1000) - 3600, status: "running", file: "alternator_arm.nc", nlines: 12840, line: 4212, offset: { x: 163.142, y: 217.435, z: -58.989 } } : null };
 // MOCK_OFFSET=1: the zero has changed since the job stopped (as after a restart restored an older zero)
 if (process.env.MOCK_OFFSET) Object.assign(state, { offset_x: 188.322, offset_y: 146.319, offset_z: -55.036 });
 const macros = [
@@ -228,9 +231,42 @@ const server = http.createServer((req, res) => {
     return json(res, { lines: 16, errors: issues.length, warnings: 0, issues, stock_top: null });
   }
   if (p.startsWith("/api/file/")) {
+    const fname = decodeURIComponent(p.slice("/api/file/".length));
+    if (req.method === "GET" && made[fname]) { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end(made[fname]); }
     if (req.method === "GET" && process.env.MOCK_PROGRAM) { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end(fs.readFileSync(process.env.MOCK_PROGRAM)); }
     if (req.method === "GET") { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end("G21\nG90\nG0 Z15\nM3 S17000\nG1 X10 Y10 F300\nG1 Z-5\nG1 X140 F1500\nG1 Y80\nG1 X10\nG1 Y10\nT2 M6\nG1 X20\nM5\nT3\nM6\nM30\n"); }
     return json(res, "ok");
+  }
+  // Cut deeper (1.30.0): the real DoOver.py runs on the mock program (mock/doover.py)
+  if (p === "/api/next-doover") {
+    let b = ""; req.on("data", (d) => (b += d));
+    req.on("end", () => {
+      const q = JSON.parse(b || "{}");
+      const rec = store.checkpoint;
+      const text = made[q.file] || (process.env.MOCK_PROGRAM ? fs.readFileSync(process.env.MOCK_PROGRAM, "utf8") : MOCK_TEXT);
+      let run;
+      if (!rec || rec.file !== q.file) run = { status: "unknown", msg: `The controller has no saved run of ${q.file}, so it cannot check that the zero and the cut are the same as before.`, notes: [], delta: {}, homed: true };
+      else if (!(rec.nlines && rec.line >= rec.nlines - 5) || ["running", "estop", "parked"].includes(rec.status)) run = { status: "interrupted", msg: `The last run of ${q.file} did not finish. Finish it with Resume first.`, notes: [], delta: {}, homed: true };
+      else {
+        const d = {}; for (const a of "xyz") if (Math.abs((state["offset_" + a] || 0) - (rec.offset?.[a] || 0)) > 0.05) d[a] = +((state["offset_" + a] || 0) - rec.offset[a]).toFixed(4);
+        run = Object.keys(d).length ? { status: "moved", msg: `The work zero has changed since ${q.file} ran (${Object.entries(d).map(([a, v]) => `${a.toUpperCase()} by ${v} mm`).join(", ")}). Put the zero back first.`, delta: d, notes: [], homed: true }
+          : { status: "ok", msg: `The work zero is the same as when ${q.file} ran.`, notes: [], delta: {}, homed: true };
+      }
+      if (q.action === "restore_zero") {
+        const d = {}; for (const a of [...(q.axes || "xyz")]) d["offset_" + a] = rec?.offset?.[a] ?? 0;
+        broadcast(d); return json(res, { axes: [...(q.axes || "xyz")], cmd: "G92 (mock)", offset: d });
+      }
+      const py = spawnSync("python3", [path_.join(path_.dirname(fileURLToPath(import.meta.url)), "doover.py")], { input: JSON.stringify({ ...q, text, run }), encoding: "utf8" });
+      let out; try { out = JSON.parse(py.stdout); } catch { out = { err: `mock doover.py failed: ${py.stderr}` }; }
+      if (out.err) { res.writeHead(400, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ message: out.err, code: 400 })); }
+      if (q.action === "build") {
+        made[out.ok.file] = out.text;
+        const files = state.files.includes(out.ok.file) ? state.files : [...state.files, out.ok.file].sort();
+        broadcast({ files, selected: out.ok.file, selected_time: Date.now() });
+      }
+      json(res, out.ok);
+    });
+    return;
   }
   if (p === "/api/next-resume") {
     let b = ""; req.on("data", (d) => (b += d));

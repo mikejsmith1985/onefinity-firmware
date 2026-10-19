@@ -518,6 +518,31 @@ class LintHandler(bbctrl.APIHandler):
         self.write_json(bbctrl.Lint.lint_file(path))
 
 
+class DoOverHandler(bbctrl.APIHandler):
+    # Cut deeper (1.30.0)
+    # analyse:      the operations of a program, their floors, and how its
+    #               last run went
+    # build:        write doover-<file> and load it
+    # restore_zero: put the work zero back where it was for the last run
+    def put(self):
+        ctrl = self.get_ctrl()
+        q = self.json if isinstance(self.json, dict) else {}
+        action, filename = q.get('action'), q.get('file') or ''
+        try:
+            dov = bbctrl.DoOver(ctrl)
+            if action == 'analyse': self.write_json(dov.analyse(filename))
+            elif action == 'build':
+                self.write_json(dov.build(filename, q.get('opts') or {}))
+            elif action == 'restore_zero':
+                self.write_json(dov.restore_zero(filename, q.get('axes') or 'xyz'))
+            else: raise HTTPError(400, 'Unknown action')
+        except Exception as e:
+            if isinstance(e, HTTPError): raise
+            if not isinstance(e, bbctrl.DoOverError):
+                ctrl.log.get('Web').exception('Cut deeper failed')
+            raise HTTPError(400, '%s', str(e))
+
+
 class EStopHandler(bbctrl.APIHandler):
     def put_ok(self): self.get_ctrl().mach.estop()
 
@@ -1092,6 +1117,7 @@ class Web(tornado.web.Application):
             (r'/api/next-store/(runs|notes|prefs|checkpoint|probe|uiprefs)', NextStoreHandler),
             (r'/api/ui/([a-z0-9._-]+)', SessionHandler),
             (r'/api/next-resume', ResumeHandler),
+            (r'/api/next-doover', DoOverHandler),
             (r'/api/next-align', AlignHandler),
             (r'/api/camera', CameraHandler),
             (r'/api/log', LogHandler),

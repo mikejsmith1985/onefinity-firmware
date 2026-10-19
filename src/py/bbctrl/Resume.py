@@ -80,6 +80,9 @@ def fmt(v):
 
 
 class Modal(object):
+    # The modal state of a program as it is read line by line.  Shared by
+    # Resume (state at the restart line) and DoOver (state at the start of
+    # each operation, 1.30.0).
     def __init__(self):
         self.units = 'G21'
         self.dist = 'G90'
@@ -92,7 +95,55 @@ class Modal(object):
         self.tool = None
         self.mist = False       # M7
         self.flood = False      # M8
-        self.pos = dict((a, None) for a in AXES)
+        self.pos = dict((a, None) for a in AXES)   # program units
+
+
+    def copy(self):
+        m = Modal()
+        m.__dict__.update(self.__dict__)
+        m.pos = dict(self.pos)
+        return m
+
+
+    def apply(self, text):
+        '''Applies one line of code (comments already removed, no
+        expressions).  Returns (words, g, mc, vals) for the caller's checks.'''
+        words = [(c.upper(), float(v)) for c, v in WORD.findall(text)]
+        g = [v for c, v in words if c == 'G']
+        mc = [int(v) for c, v in words if c == 'M']
+        vals = {}
+        for c, v in words: vals[c] = v
+
+        for v in g:
+            if v in (20, 21): self.units = 'G%d' % v
+            elif v in (90, 91): self.dist = 'G%d' % v
+            elif v in (17, 18, 19): self.plane = 'G%d' % v
+            elif 54 <= v <= 59 and v == int(v): self.wcs = 'G%d' % v
+            elif v in (0, 1, 2, 3): self.motion = int(v)
+
+        if 'F' in vals: self.feed = vals['F']
+        if 'S' in vals: self.speed = vals['S']
+        if 'T' in vals: self.tool = int(vals['T'])
+
+        for v in mc:
+            if v in (3, 4, 5): self.spindle = 'M%d' % v
+            elif v == 7: self.mist = True
+            elif v == 8: self.flood = True
+            elif v == 9: self.mist = self.flood = False
+
+        has_axes = any(a in vals for a in AXES)
+        if has_axes and (self.motion is not None or 53 in g):
+            if 53 in g:
+                # Machine coordinates: work position is unknown afterwards
+                for a in AXES:
+                    if a in vals: self.pos[a] = None
+            else:
+                for a in AXES:
+                    if a not in vals: continue
+                    if self.dist == 'G91':
+                        if self.pos[a] is not None: self.pos[a] += vals[a]
+                    else: self.pos[a] = vals[a]
+        return words, g, mc, vals
 
 
 def scan(lines, upto):
@@ -106,49 +157,48 @@ def scan(lines, upto):
                               'start position cannot be worked out safely.' % (n + 1))
 
         words = [(c.upper(), float(v)) for c, v in WORD.findall(text)]
-        g = [v for c, v in words if c == 'G']
-        mc = [int(v) for c, v in words if c == 'M']
-        vals = {}
-        for c, v in words: vals[c] = v
-
-        for v in g:
-            if v in (28, 30, 92, 92.1, 92.2, 92.3, 10, 38.2, 38.3, 38.4, 38.5,
-                     81, 82, 83, 84, 85, 86, 87, 88, 89) or 10 <= v < 11:
+        for c, v in words:
+            if c == 'G' and (v in (28, 30, 92, 92.1, 92.2, 92.3, 10, 38.2, 38.3,
+                                   38.4, 38.5, 81, 82, 83, 84, 85, 86, 87, 88,
+                                   89) or 10 <= v < 11):
                 raise ResumeError('Line %d uses G%s, which resume cannot '
                                   'handle safely. Start this job again from a '
                                   'line you choose.' % (n + 1, fmt(v)))
-            if v == 93: raise ResumeError('Line %d uses inverse-time feed (G93).' % (n + 1))
-            if v in (20, 21): m.units = 'G%d' % v
-            elif v in (90, 91): m.dist = 'G%d' % v
-            elif v in (17, 18, 19): m.plane = 'G%d' % v
-            elif 54 <= v <= 59 and v == int(v): m.wcs = 'G%d' % v
-            elif v in (0, 1, 2, 3): m.motion = int(v)
-
-        if 'F' in vals: m.feed = vals['F']
-        if 'S' in vals: m.speed = vals['S']
-        if 'T' in vals: m.tool = int(vals['T'])
-
-        for v in mc:
-            if v in (3, 4, 5): m.spindle = 'M%d' % v
-            elif v == 7: m.mist = True
-            elif v == 8: m.flood = True
-            elif v == 9: m.mist = m.flood = False
-            elif v == 2 or v == 30:
+            if c == 'G' and v == 93:
+                raise ResumeError('Line %d uses inverse-time feed (G93).' % (n + 1))
+            if c == 'M' and int(v) in (2, 30):
                 raise ResumeError('Line %d ends the program before the resume line.' % (n + 1))
-
-        has_axes = any(a in vals for a in AXES)
-        if has_axes and (m.motion is not None or 53 in g):
-            if 53 in g:
-                # Machine coordinates: work position is unknown afterwards
-                for a in AXES:
-                    if a in vals: m.pos[a] = None
-            else:
-                for a in AXES:
-                    if a not in vals: continue
-                    if m.dist == 'G91':
-                        if m.pos[a] is not None: m.pos[a] += vals[a]
-                    else: m.pos[a] = vals[a]
+        m.apply(text)
     return m
+
+
+def start_lines(m, spinup, manual, router, where, pause = False):
+    '''Lines that put the tool, spindle and coolant back the way the Modal m
+    has them, after the operator prompt.  where: what the prompt asks the
+    operator to check, e.g. "the tool is over the restart point".'''
+    out = []
+    w = out.append
+    if manual:
+        # The controller can't start this router, so never plunge until the
+        # operator has switched it on, whatever the pause setting says
+        dial = (' at %s' % GCodeText.safe_comment(router).strip()) if router and router.strip() else ''
+        w('(MSG, Check %s. Switch the router ON%s and let it reach speed. '
+          'Press Start to continue.)' % (where, dial))
+        w('M0')
+    elif pause:
+        w('(MSG, Check %s. Press Start to continue.)' % where)
+        w('M0')
+
+    if m.tool is not None: w('T%d' % m.tool)
+
+    if m.spindle in ('M3', 'M4'):
+        speed = m.speed if m.speed is not None else 0
+        w('S%s %s' % (fmt(speed), m.spindle))
+        if spinup > 0: w('G4 P%s' % fmt(spinup))
+    elif m.speed is not None: w('S%s' % fmt(m.speed))
+    if m.mist: w('M7')
+    if m.flood: w('M8')
+    return out
 
 
 def locate(lines, pos, floor, tol = 0.1):
@@ -291,26 +341,8 @@ def build(lines, line_no, name, opts, top_mm, source_hint = '',
         if m.pos[a] is not None: xy += ' %s%s' % (a, fmt(m.pos[a]))
     w(xy)
 
-    if manual:
-        # The controller can't start this router, so never plunge until the
-        # operator has switched it on, whatever the pause setting says
-        dial = (' at %s' % safe(router).strip()) if router and router.strip() else ''
-        w('(MSG, Check the tool is over the restart point. Switch the router ON%s '
-          'and let it reach speed. Press Start to continue.)' % dial)
-        w('M0')
-    elif o['pause']:
-        w('(MSG, Check the tool is over the restart point. Press Start to continue.)')
-        w('M0')
-
-    if m.tool is not None: w('T%d' % m.tool)
-
-    if m.spindle in ('M3', 'M4'):
-        speed = m.speed if m.speed is not None else 0
-        w('S%s %s' % (fmt(speed), m.spindle))
-        if o['spinup'] > 0: w('G4 P%s' % fmt(o['spinup']))
-    elif m.speed is not None: w('S%s' % fmt(m.speed))
-    if m.mist: w('M7')
-    if m.flood: w('M8')
+    out.extend(start_lines(m, o['spinup'], manual, router,
+                           'the tool is over the restart point', o['pause']))
 
     z = m.pos['Z']
     app = o['approach'] * k
@@ -482,17 +514,19 @@ class Resume(object):
     # again, so the zero can be restored without probing the part, which is
     # often impossible once it is half cut.  Z is only right if the cutter has
     # not been moved in the collet, so the caller chooses the axes.
-    def restore_zero(self, axes):
-        cp = self.ctrl.checkpoint
-        rec = cp.get() if cp else None
-        if not rec or not rec.get('file') or rec.get('status') == 'dismissed':
-            raise ResumeError('There is no interrupted job to take the zero from.')
+    def restore_zero(self, axes, rec = None):
+        # rec: a saved run record chosen by the caller (Cut deeper, 1.30.0)
+        if rec is None:
+            cp = self.ctrl.checkpoint
+            rec = cp.get() if cp else None
+            if not rec or not rec.get('file') or rec.get('status') == 'dismissed':
+                raise ResumeError('There is no interrupted job to take the zero from.')
         if self.ctrl.state.get('cycle') != 'idle':
             raise ResumeError('Wait until the machine is idle.')
         self._check_homed()
         saved = rec.get('offset') or {}
         axes = [a for a in (axes or 'xyz') if a in 'xyz' and saved.get(a) is not None]
-        if not axes: raise ResumeError('The interrupted job has no saved zero.')
+        if not axes: raise ResumeError('The saved job has no saved zero.')
 
         s = self.ctrl.state
         scale = 1.0 if s.get('metric', True) else 1 / 25.4   # G92 takes program units

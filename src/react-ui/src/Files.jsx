@@ -2,6 +2,9 @@ import React, { useMemo, useRef, useState } from "react";
 import { api, DELETE_LIST_PREFIX, MACRO_PREFIX } from "./controller.js";
 import { Modal, Confirm } from "./ui.jsx";
 import { isEnter } from "./vkbd.js";
+import { uiOpen } from "./shared.js";
+import { useCheckpoint } from "./checkpoint.js";
+import { useFinished } from "./doover.js";
 
 const OK_EXT = ["nc", "ngc", "gcode", "gc"];
 
@@ -16,6 +19,8 @@ export default function Files({ state, cfg, idle }) {
   const [dlg, setDlg] = useState(null);
   const [newName, setNewName] = useState("");
 
+  const { cp } = useCheckpoint(state);
+  const finished = useFinished(cp, state.selected);
   const macroFiles = (state.macros_list || []).map((m) => m.file_name);
   const lists = state.gcode_list || [];
   const folders = lists.filter((f) => f.type === "folder").map((f) => f.name);
@@ -141,6 +146,7 @@ export default function Files({ state, cfg, idle }) {
         <input ref={fileIn} type="file" multiple hidden accept=".nc,.ngc,.gcode,.gc" onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
         <input ref={dirIn} type="file" hidden webkitdirectory="" directory="" onChange={(e) => { const f = [...e.target.files]; if (f.length) upload(f, f[0].webkitRelativePath.split("/")[0]); e.target.value = ""; }} />
         <a className={`btn${state.selected ? "" : " disabled"}`} href={state.selected ? `/api/file/${encodeURIComponent(state.selected)}` : undefined} download={state.selected || undefined}>Download selected</a>
+        <button disabled={!idle || !state.selected || !finished} onClick={() => uiOpen("doover", { file: state.selected, at: Date.now() })} title={finished ? "Run only the deepest passes of the selected program again, deeper" : "Available after the selected program has run to the end"}>Cut deeper…</button>
         <span className="grow" />
         <select aria-label="Folder" value={folder} disabled={!idle} onChange={(e) => { setFolder(e.target.value); setSel([]); }}>
           <option value="default">Default folder</option>
