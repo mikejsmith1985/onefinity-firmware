@@ -4,18 +4,28 @@ import { api } from "./controller.js";
 import { errText } from "./checkpoint.js";
 
 // "Park and power down": stop, spindle off, lift Z, then it is safe to switch off.
-export default function ParkDialog({ state, active, onClose }) {
+// A router the controller cannot switch (no VFD or PWM spindle) keeps running after M5 (1.29.0).
+const manualRouter = (state, config) => {
+  const t = config?.tool;
+  if (t) return String(t["tool-type"] || "Disabled").toLowerCase() === "disabled" || ["router", "disabled"].includes(String(t["selected-tool"] || "").toLowerCase());
+  return !!state.park_manual; // set by the controller when it parks (Resume.py)
+};
+
+export default function ParkDialog({ state, active, onClose, config }) {
+  const manual = manualRouter(state, config);
   const [err, setErr] = useState("");
   const park = async () => { setErr(""); try { await api.put("next-resume", { action: "park" }); } catch (e) { setErr(errText(e)); } };
   const done = () => { api.put("next-resume", { action: "clear" }).catch(() => {}); onClose(); };
 
-  if (state.park === "parking") return <Modal title="Parking…" dismissable={false}><p>Stopping the job, turning the spindle off and lifting Z. Do not switch anything off yet.</p><div className="indet" /></Modal>;
+  if (state.park === "parking") return <Modal title="Parking…" dismissable={false}><p>Stopping the job, turning the spindle off and lifting Z. Do not switch anything off yet.{manual ? " Switch the router OFF at its own switch now." : ""}</p><div className="indet" /></Modal>;
   if (state.park === "parked") return (
     <Modal title="Safe to power off" dismissable={false} actions={<>
       <button onClick={done}>Close</button>
       <button className="danger" data-autofocus onClick={() => { api.put("shutdown").catch(() => {}); onClose(); }}>Shut down controller</button>
     </>}>
-      <p>The job is saved at line {Number(state.line || 0).toLocaleString()}, the spindle is off and Z is at the top. When you come back, switch on, home the machine and press <b>Resume</b> on the Control tab.</p>
+      {manual
+        ? <p>The job is saved at line {Number(state.line || 0).toLocaleString()} and Z is at the top. <b>Switch the router OFF at its own switch</b>: the controller cannot turn it off. When you come back, switch on, home the machine and press <b>Resume</b> on the Control tab.</p>
+        : <p>The job is saved at line {Number(state.line || 0).toLocaleString()}, the spindle is off and Z is at the top. When you come back, switch on, home the machine and press <b>Resume</b> on the Control tab.</p>}
       <p className="note">Do not move the stock or the machine while it is off. If you change the work zero, the resume point will be wrong.</p>
     </Modal>
   );
@@ -23,7 +33,7 @@ export default function ParkDialog({ state, active, onClose }) {
   if (!active) return null;
   return (
     <Confirm title="Park and power down?" confirmLabel="Park" onCancel={onClose} onConfirm={park}>
-      <p>This stops the job here, turns the spindle off and lifts Z to the top of its travel. You can then switch the machine off and finish the job later with Resume.</p>
+      <p>This stops the job here, {manual ? "lifts Z to the top of its travel and asks you to switch the router off at its own switch" : "turns the spindle off and lifts Z to the top of its travel"}. You can then switch the machine off and finish the job later with Resume.</p>
       <p className="note">The cutter is lifted straight up from where it stopped. The line being cut is cut again from its start when you resume.</p>
       {err && <p className="warnbox" role="alert">{err}</p>}
     </Confirm>

@@ -265,6 +265,9 @@ function General({ cfg, ver, state }) {
         <Group title="Power-loss recovery">
           <Recovery state={state} />
         </Group>
+        <Group title="Mist">
+          <MistPref />
+        </Group>
         <Group title="Connection">
           <Drops />
         </Group>
@@ -282,8 +285,8 @@ function General({ cfg, ver, state }) {
           <label className="check"><input type="checkbox" checked={c.admin.time_format === true} onChange={async (e) => { const v = e.target.checked; cfg.edit((x) => { x.admin.time_format = v; }); }} /> Use 24-hour format</label>
           <div className="btnrow dt">
             <input type="date" aria-label="Date" value={sel.date} onChange={(e) => setSel({ ...sel, date: e.target.value })} />
-            <input type="number" aria-label="Hours" placeholder="HH" min={c.admin.time_format ? 0 : 1} max={c.admin.time_format ? 23 : 12} value={sel.h} onChange={(e) => setSel({ ...sel, h: e.target.value })} />
-            <input type="number" aria-label="Minutes" placeholder="MM" min="0" max="59" value={sel.m} onChange={(e) => setSel({ ...sel, m: e.target.value })} />
+            <input type="text" inputMode="numeric" autoComplete="off" aria-label="Hours" placeholder="HH" min={c.admin.time_format ? 0 : 1} max={c.admin.time_format ? 23 : 12} value={sel.h} onChange={(e) => setSel({ ...sel, h: e.target.value })} />
+            <input type="text" inputMode="numeric" autoComplete="off" aria-label="Minutes" placeholder="MM" value={sel.m} onChange={(e) => setSel({ ...sel, m: e.target.value })} />
             <select aria-label="AM or PM" disabled={c.admin.time_format === true} value={sel.mer} onChange={(e) => setSel({ ...sel, mer: e.target.value })}><option>AM</option><option>PM</option></select>
             <button onClick={setDateTime}>Update</button>
           </div>
@@ -404,6 +407,20 @@ function Drops() {
   );
 }
 
+// Mist only while cutting (1.29.0, off by default). Saved with the other shared prefs on the controller,
+// which reads it when a program is loaded (Planner.py).
+function MistPref() {
+  const [prefs, setP] = useState(null);
+  useEffect(() => { getPrefs().then(setP); }, []);
+  const save = (v) => { setP((p) => ({ ...p, mistCutting: v })); setPrefs({ mistCutting: v }); };
+  return (
+    <>
+      <label className="check"><input type="checkbox" className="switch" checked={!!prefs?.mistCutting} disabled={!prefs} onChange={(e) => save(e.target.checked)} /> Mist only while cutting</label>
+      <p className="note">Off (the normal way): M7 turns the mist (Load 1) on and M9 turns it off. On: after M7 the mist only runs during cutting moves (G1, G2, G3) and goes off during rapids (G0) and probing, so it does not spray while the router travels. M9 and the end of the program still turn it off. Applies to programs started after the change, not to MDI commands or dry runs. Not yet tested on a real machine.</p>
+    </>
+  );
+}
+
 function Recovery({ state }) {
   const [prefs, setP] = useState(null);
   const { cp } = useCheckpoint(state);
@@ -415,8 +432,8 @@ function Recovery({ state }) {
       <p className="note">While a job runs, the controller saves the program name and line number to its memory card about every 10 seconds, only when the line has changed. If power is lost or the job is stopped, you can resume from that line. This is a few kilobytes of writes per save and runs off the motion path, so it does not affect cutting. Turn it off if you prefer no extra writes. Parking a job needs it on.</p>
       {prefs && (
         <div className="rform">
-          <label>Spindle spin-up wait when resuming (seconds)<input type="number" min="0" max="120" value={prefs.spinup} onChange={(e) => save("spinup", e.target.value)} /></label>
-          <label>Plunge speed when resuming (mm/min)<input type="number" min="10" max="5000" value={prefs.plunge} onChange={(e) => save("plunge", e.target.value)} /></label>
+          <label>Spindle spin-up wait when resuming (seconds)<input type="text" inputMode="numeric" autoComplete="off" value={prefs.spinup} onChange={(e) => save("spinup", e.target.value)} /></label>
+          <label>Plunge speed when resuming (mm/min)<input type="text" inputMode="numeric" autoComplete="off" value={prefs.plunge} onChange={(e) => save("plunge", e.target.value)} /></label>
           <label className="check"><input type="checkbox" checked={!!prefs.pause} onChange={(e) => save("pause", e.target.checked)} /> Pause over the restart point so I can check it</label>
         </div>
       )}

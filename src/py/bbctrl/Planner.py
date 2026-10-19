@@ -29,6 +29,7 @@ import json
 import math
 import re
 import time
+import os
 from collections import deque
 import camotics.gplan as gplan # pylint: disable=no-name-in-module,import-error
 import bbctrl.Cmd as Cmd
@@ -61,6 +62,12 @@ class Planner():
         self.planner = None
         self._position_dirty = False
         self.where = ''
+        self.dry_lift = 0.0   # mm. Non zero only while a dry run is planned
+        self.dry_zmax = None  # highest machine Z the dry run may reach
+        self.spindle = 0.0    # spindle speed as planned so far (1.29.0)
+        self.mist_follow = False  # mist only during cutting moves (option)
+        self.mist_wanted = False  # the program has asked for mist (M7)
+        self.mist_out = False     # what this planner last set Load 1 to
 
         ctrl.state.add_listener(self._update)
 
@@ -77,6 +84,94 @@ class Planner():
         if not force and not self._position_dirty: return
         self._position_dirty = False
         self.planner.set_position(self.ctrl.state.get_position())
+
+
+
+    # Dry run ------------------------------------------------------------
+    # A dry run plans the program exactly as written but sends every move to
+    # the machine dry_lift mm higher, with the spindle and outputs (mist,
+    # relays) blocked.  Nothing is stored on the controller, so there is no
+    # offset to forget to remove: the lift exists only in the commands of
+    # this one run and is dropped when the run ends.
+    def begin_dry(self, lift):
+        state = self.ctrl.state
+        self.dry_lift = float(lift)
+
+        zmax = state.get_soft_limit_vector('tm', math.inf).get('z', math.inf)
+        zmin = state.get_soft_limit_vector('tn', -math.inf).get('z', -math.inf)
+        self.dry_zmax = zmax if zmin < zmax and zmax != math.inf else None
+
+        # The planner works one lift lower than the machine really is, so
+        # that every move keeps the length the planner timed it for
+        position = state.get_position()
+        if 'z' in position: position['z'] -= self.dry_lift
+        self.planner.set_position(position)
+        self._position_dirty = True # Re-sync to the real position next time
+        state.set('dry_lift', self.dry_lift)
+        state.set('dry_run', True)
+        self.log.info('Dry run: Z lifted %.1f mm' % self.dry_lift)
+
+
+    def end_dry(self):
+        if self.dry_lift: self.log.info('Dry run ended')
+        self.dry_lift = 0.0
+        self.dry_zmax = None
+        state = self.ctrl.state
+        if state.get('dry_run', False): state.set('dry_run', False)
+        if state.get('dry_lift', 0): state.set('dry_lift', 0)
+
+
+    def is_dry(self): return 0 < self.dry_lift
+
+
+    def _dry_target(self, target):
+        target = dict(target)
+        for key in ('z', 'Z'):
+            if key in target:
+                z = target[key] + self.dry_lift
+                if self.dry_zmax is not None: z = min(z, self.dry_zmax)
+                target[key] = z
+        return target
+
+
+    # Spindle interlock (1.29.0) -------------------------------------------
+    # A probing move with the spindle commanded on would spin a cutter into a
+    # touch plate or a 3D probe.  The planned spindle speed is followed
+    # command by command, so an M5 just before the probe in the same program
+    # counts.  The probing screens send M5 first.
+    def _begin_spindle(self):
+        try: self.spindle = float(self.ctrl.state.get('speed', 0) or 0)
+        except (TypeError, ValueError): self.spindle = 0.0
+
+
+    # Mist follows cutting (1.29.0, optional, off by default) ----------------
+    # With "mist only while cutting" on in Settings, M7 no longer switches the
+    # mist on at once.  It is switched on at the start of each cutting move
+    # (G1, G2, G3) and off at the start of each rapid (G0), and M9 or the end
+    # of the program switches it off as usual.  The switch rides in the
+    # command stream, so it happens exactly where the move starts.
+    def _read_mist_pref(self):
+        try:
+            path = os.path.join(self.ctrl.get_path('next-data'), 'prefs.json')
+            with open(path, 'r', encoding = 'utf-8') as f:
+                return bool(json.load(f).get('mistCutting', False))
+        except Exception: return False
+
+
+    def _begin_mist(self, program):
+        self.mist_follow = program and self._read_mist_pref()
+        self.mist_wanted = False
+        try: self.mist_out = bool(int(self.ctrl.state.get('1oa', 0) or 0))
+        except (TypeError, ValueError): self.mist_out = False
+
+
+    def _mist_for_line(self, block):
+        if not self.mist_follow or self.is_dry(): return None
+        want = self.mist_wanted and not block.get('rapid', False) \
+            and not block.get('seeking', False)
+        if want == self.mist_out: return None
+        self.mist_out = want
+        return Cmd.output('mist', 1 if want else 0)
 
 
     def get_config(self, mdi, with_limits):
@@ -245,9 +340,19 @@ class Planner():
 
         if type == 'line':
             self._enqueue_line_time(block)
-            return Cmd.line(block['target'], block['exit-vel'],
+            for _, sp in block.get('speeds', []) or []:
+                try: self.spindle = float(sp)
+                except (TypeError, ValueError): pass
+            if self.is_dry():
+                return Cmd.line(self._dry_target(block['target']),
+                                block['exit-vel'], block['max-accel'],
+                                block['max-jerk'], block['times'], [])
+
+            line = Cmd.line(block['target'], block['exit-vel'],
                             block['max-accel'], block['max-jerk'],
                             block['times'], block.get('speeds', []))
+            mist = self._mist_for_line(block)
+            return line if mist is None else mist + '\n' + line
 
         if type == 'set':
             name, value = block['name'], block['value']
@@ -258,6 +363,9 @@ class Planner():
             if name in ['line', 'tool']: self._enqueue_set_cmd(id, name, value)
 
             if name == 'speed':
+                try: self.spindle = float(value)
+                except (TypeError, ValueError): pass
+                if self.is_dry(): value = 0 # Spindle stays off
                 self._enqueue_set_cmd(id, name, value)
                 return Cmd.speed(value)
 
@@ -285,7 +393,14 @@ class Planner():
             return Cmd.input(block['port'], block['mode'], block['timeout'])
 
         if type == 'output':
-            return Cmd.output(block['port'], int(float(block['value'])))
+            if self.is_dry(): return # Mist, relays etc. stay off
+            value = int(float(block['value']))
+            if block['port'] == 'mist' and self.mist_follow:
+                # M7 waits for the next cutting move; M9 switches off now
+                self.mist_wanted = bool(value)
+                if value or not self.mist_out: return
+                self.mist_out = False
+            return Cmd.output(block['port'], value)
 
         if type == 'dwell':
             self._enqueue_dwell_time(block)
@@ -294,6 +409,14 @@ class Planner():
         if type == 'pause': return Cmd.pause(block['pause-type'])
 
         if type == 'seek':
+            # Probe input only: homing seeks a limit switch
+            if self.spindle and str(block.get('switch', '')).lower() == 'probe':
+                raise RuntimeError(
+                    'Probing refused: the spindle is on (S%g). A probe move '
+                    'with the spindle running would spin the cutter into the '
+                    'touch plate or the probe. Turn it off with M5 first.'
+                    % self.spindle)
+            if self.is_dry(): return # No probing in the air
             sw = self.ctrl.state.get_switch_id(block['switch'])
             return Cmd.seek(sw, block['active'], block['error'])
 
@@ -329,6 +452,7 @@ class Planner():
         if stop:
             self.ctrl.mach.stop()
 
+        self.end_dry()
         self.planner = gplan.Planner()
         self.planner.set_resolver(self._get_var_cb)
         # TODO logger is global and will not work correctly in demo mode
@@ -346,21 +470,28 @@ class Planner():
         self.where = '<mdi>'
         self.log.info('MDI:' + cmd)
         self._sync_position()
+        self._begin_spindle()
+        self._begin_mist(False)
         self.planner.load_string(cmd, self.get_config(True, with_limits))
         self.reset_times()
 
 
-    def load(self, path):
+    def load(self, path, dry_lift = 0):
         self.where = path
         path = self.ctrl.get_path('upload', path)
         self.log.info('GCode:' + path)
+        self.end_dry()
         self._sync_position()
+        if dry_lift: self.begin_dry(dry_lift)
+        self._begin_spindle()
+        self._begin_mist(True)
         self.planner.load(path, self.get_config(False, True))
         self.reset_times()
 
 
     def stop(self):
         try:
+            self.end_dry()
             self.planner.stop()
             self.cmdq.clear()
 
@@ -373,6 +504,8 @@ class Planner():
         try:
             id = self.ctrl.state.get('id')
             position = self.ctrl.state.get_position()
+            if self.is_dry() and 'z' in position:
+                position['z'] -= self.dry_lift # Planner frame, see begin_dry()
 
             self.log.info('Planner restart: %d %s' % (id, log_json(position)))
 

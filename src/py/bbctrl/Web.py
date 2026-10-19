@@ -73,6 +73,35 @@ class LogHandler(bbctrl.RequestHandler):
         self.set_header('Content-Type', 'text/plain')
 
 
+class HomePromptHandler(bbctrl.APIHandler):
+    # The "Home the machine?" question after a restart belongs to the
+    # machine, not to one browser.  Once anyone answers it (or the machine is
+    # homed), every connected screen closes it and it isn't asked again until
+    # the controller restarts.  Kept in the live state, so it resets on restart.
+    def put_ok(self):
+        self.get_ctrl().state.set('home_prompt', 'done')
+
+
+class SessionHandler(bbctrl.APIHandler):
+    # The shared screen session (see Session.py).  PUT {"v": value} sets a
+    # value; with "rev" it is only set if nobody changed it since that
+    # revision.  The answer is {"ok", "v", "rev"}: on a refused write, the
+    # value another screen set first.
+    def get(self, name):
+        if not bbctrl.Session.valid_name(name): raise HTTPError(404)
+        self.write_json(self.get_ctrl().session.get(name))
+
+
+    def put(self, name):
+        if not bbctrl.Session.valid_name(name): raise HTTPError(404)
+        if not isinstance(self.json, dict): raise HTTPError(400, 'Expected {"v": ...}')
+        try:
+            ok, cur = self.get_ctrl().session.put(name, self.json.get('v'),
+                                                  self.json.get('rev'))
+        except ValueError as e: raise HTTPError(400, str(e))
+        self.write_json(dict(ok = ok, v = cur['v'], rev = cur['rev']))
+
+
 class MessageAckHandler(bbctrl.APIHandler):
     def put_ok(self, id):
         self.get_ctrl().state.ack_message(int(id))
@@ -364,7 +393,11 @@ class ConfigRestoreHandler(bbctrl.APIHandler):
 
 
 class ConfigSaveHandler(bbctrl.APIHandler):
-    def put_ok(self): self.get_ctrl().config.save(self.json)
+    def put_ok(self):
+        self.get_ctrl().config.save(self.json)
+        # Other screens re-read the saved settings.
+        session = getattr(self.get_ctrl(), 'session', None)
+        if session: session.store_changed('config')
 
 
 class ConfigResetHandler(bbctrl.APIHandler):
@@ -456,7 +489,33 @@ class HomeHandler(bbctrl.APIHandler):
 
 
 class StartHandler(bbctrl.APIHandler):
-    def put_ok(self): self.get_ctrl().mach.start()
+    def put_ok(self):
+        # {"dry_lift": mm} runs the selected program as a dry run.
+        # {"ack": true} is the operator's "Run anyway" on the checklist.
+        # Without it the controller checks the program itself (1.29.0), so
+        # a screen that could not read the program cannot start it blind.
+        ctrl = self.get_ctrl()
+        body = self.json if isinstance(self.json, dict) else {}
+        if not body.get('ack'):
+            filename = ctrl.state.get('selected', '')
+            if filename:
+                stops = bbctrl.Lint.start_stops(ctrl, filename)
+                if stops:
+                    msg = ' '.join(s['msg'] for s in stops)
+                    ctrl.log.get('Web').info('Start refused: %s' % msg)
+                    raise HTTPError(409, '%s', 'Not started. ' + msg)
+        ctrl.mach.start(body.get('dry_lift', 0))
+
+
+class LintHandler(bbctrl.APIHandler):
+    # The pre-run G-code check for an uploaded program (1.29.0)
+    def get(self, filename):
+        filename = url_unescape(filename)
+        if not filename or '/' in filename or filename.startswith('.'):
+            raise HTTPError(400, 'Bad file name')
+        path = self.get_upload(filename)
+        if not os.path.isfile(path): raise HTTPError(404, 'No such file')
+        self.write_json(bbctrl.Lint.lint_file(path))
 
 
 class EStopHandler(bbctrl.APIHandler):
@@ -515,7 +574,7 @@ class NextStoreHandler(bbctrl.APIHandler):
     # Small JSON documents for the new UI (run history, file notes), kept on
     # the controller so every browser sees the same data.  Only whitelisted
     # names are accepted and each document is capped in size.
-    NAMES = ('runs', 'notes', 'prefs', 'checkpoint')
+    NAMES = ('runs', 'notes', 'prefs', 'checkpoint', 'probe', 'uiprefs')
     MAX_BYTES = 1000000
 
     def _path(self, name):
@@ -555,6 +614,10 @@ class NextStoreHandler(bbctrl.APIHandler):
         with open(tmp, 'w', encoding = 'utf-8') as f: json.dump(self.json, f)
         os.replace(tmp, path)
 
+        # Every open screen re-reads it straight away.
+        session = getattr(self.get_ctrl(), 'session', None)
+        if session: session.store_changed(name)
+
         if name == 'prefs':
             cp = getattr(self.get_ctrl(), 'checkpoint', None)
             if cp: cp.reload()
@@ -576,6 +639,8 @@ class ResumeHandler(bbctrl.APIHandler):
             elif action == 'park':
                 res.park()
                 self.write_json('ok')
+            elif action == 'restore_zero':
+                self.write_json(res.restore_zero(self.json.get('axes') or 'xyz'))
             elif action == 'clear':
                 res.clear_park()
                 self.write_json('ok')
@@ -583,6 +648,34 @@ class ResumeHandler(bbctrl.APIHandler):
         except Exception as e:
             if isinstance(e, HTTPError): raise
             raise HTTPError(400, '%s', str(e))
+
+
+class CameraHandler(bbctrl.APIHandler):
+    # GET: is a camera connected, and its focus range and value.
+    # PUT {"focus": n} locks focus at n, {"focus": null} gives it back to
+    # autofocus.
+    def get(self):
+        cam = self.application.camera
+        self.write_json(cam.get_status() if cam else {'connected': False})
+
+
+    def put(self):
+        cam = self.application.camera
+        if cam is None: raise HTTPError(503, 'Camera is disabled')
+        focus = self.json.get('focus') if isinstance(self.json, dict) else None
+        try: cam.set_focus(None if focus is None else int(focus))
+        except (TypeError, ValueError): raise HTTPError(400, 'Bad focus value')
+        self.write_json(cam.get_status())
+
+
+class AlignHandler(bbctrl.APIHandler):
+    # Write a copy of a program rotated about its X0 Y0 (camera alignment).
+    def put(self):
+        al = getattr(self.get_ctrl(), 'align', None)
+        if al is None: raise HTTPError(503, 'Alignment is not available')
+        j = self.json if isinstance(self.json, dict) else {}
+        try: self.write_json(al.build(j.get('file'), j.get('angle')))
+        except bbctrl.AlignError as e: raise HTTPError(400, '%s', str(e))
 
 
 class JogHandler(bbctrl.APIHandler):
@@ -996,10 +1089,14 @@ class Web(tornado.web.Application):
 
         handlers = [
             (r'/websocket', WSConnection),
-            (r'/api/next-store/(runs|notes|prefs|checkpoint)', NextStoreHandler),
+            (r'/api/next-store/(runs|notes|prefs|checkpoint|probe|uiprefs)', NextStoreHandler),
+            (r'/api/ui/([a-z0-9._-]+)', SessionHandler),
             (r'/api/next-resume', ResumeHandler),
+            (r'/api/next-align', AlignHandler),
+            (r'/api/camera', CameraHandler),
             (r'/api/log', LogHandler),
             (r'/api/message/(\d+)/ack', MessageAckHandler),
+            (r'/api/home-prompt', HomePromptHandler),
             (r'/api/bugreport', BugReportHandler),
             (r'/api/reboot', RebootHandler),
             (r'/api/shutdown', ShutdownHandler),
@@ -1019,6 +1116,7 @@ class Web(tornado.web.Application):
             (r'/api/path/([^/]+)((/positions)|(/speeds))?', PathHandler),
             (r'/api/home(/[xyzabcXYZABC]((/set)|(/clear))?)?', HomeHandler),
             (r'/api/start', StartHandler),
+            (r'/api/lint/([^/]+)', LintHandler),
             (r'/api/estop', EStopHandler),
             (r'/api/clear', ClearHandler),
             (r'/api/stop', StopHandler),
@@ -1037,13 +1135,14 @@ class Web(tornado.web.Application):
             (r'/api/time', TimeHandler),
             (r'/api/rotary', RotaryHandler),
             (r'/api/remote-diagnostics', RemoteDiagnosticsHandler),
-            # New React interface; the original UI at / is untouched.
-            (r'/next', tornado.web.RedirectHandler, {'url': '/next/'}),
-            (r'/next/(.*)', StaticFileHandler,
-             {'path': bbctrl.get_resource('http/next/'),
-              'default_filename': 'index.html'}),
+            # The React interface is the interface. Old /next/ bookmarks go to /.
+            (r'/next', tornado.web.RedirectHandler, {'url': '/'}),
+            (r'/next/(.*)', tornado.web.RedirectHandler, {'url': '/'}),
+            # Data files the interface reads from the controller's root address.
+            (r'/(config-template\.json|buildbotics\.nc|favicon\.ico|onefinity_[a-z0-9_]+\.json|images/.*|fonts/.*)',
+             StaticFileHandler, {'path': bbctrl.get_resource('http/')}),
             (r'/(.*)', StaticFileHandler,
-             {'path': bbctrl.get_resource('http/'),
+             {'path': bbctrl.get_resource('http/next/'),
               'default_filename': 'index.html'}),
             ]
 

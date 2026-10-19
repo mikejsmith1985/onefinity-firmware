@@ -1,5 +1,5 @@
 import React from "react";
-import { Group } from "./ui.jsx";
+import { NumInput, Group } from "./ui.jsx";
 import { VFD_NOTES } from "./vfdNotes.js";
 
 // Renders "#[tt baud]" markup from the original notes as <tt> text.
@@ -80,8 +80,8 @@ export function VfdProgram({ cfg, state, send, template, toolType }) {
                   <tr key={i}>
                     <th>{i}</th>
                     <td><select aria-label={`Register ${i} command`} value={type} onChange={(e) => setReg(i, "reg-type", e.target.value)}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</select></td>
-                    <td><input aria-label={`Register ${i} address`} type="number" inputMode="numeric" min={rt.template["reg-addr"].min} max={rt.template["reg-addr"].max} disabled={type === "disabled"} value={reg["reg-addr"]} onChange={(e) => setReg(i, "reg-addr", num(e.target.value))} /></td>
-                    <td><input aria-label={`Register ${i} value`} type="number" inputMode="numeric" min={rt.template["reg-value"].min} max={rt.template["reg-value"].max} disabled={!hasUserValue(type)} value={reg["reg-value"]} onChange={(e) => setReg(i, "reg-value", num(e.target.value))} /></td>
+                    <td><NumInput int aria-label={`Register ${i} address`} min={rt.template["reg-addr"].min} max={rt.template["reg-addr"].max} disabled={type === "disabled"} value={reg["reg-addr"]} onChange={(n) => setReg(i, "reg-addr", n)} /></td>
+                    <td><NumInput int aria-label={`Register ${i} value`} min={rt.template["reg-value"].min} max={rt.template["reg-value"].max} disabled={!hasUserValue(type)} value={reg["reg-value"]} onChange={(n) => setReg(i, "reg-value", n)} /></td>
                   </tr>
                 );
               })}

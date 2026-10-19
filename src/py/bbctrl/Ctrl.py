@@ -45,6 +45,7 @@ class Ctrl(object):
         self.log = bbctrl.log.Log(args, self.ioloop, log_path)
 
         self.state = bbctrl.State(self)
+        self.session = bbctrl.Session(self)
         self.config = bbctrl.Config(self)
 
         self.log.get('Ctrl').info('Starting %s' % self.id)
@@ -69,6 +70,11 @@ class Ctrl(object):
             except Exception:
                 self.resume = None
                 self.log.get('Ctrl').exception('Resume unavailable')
+
+            try: self.align = bbctrl.Align(self)
+            except Exception:
+                self.align = None
+                self.log.get('Ctrl').exception('Alignment unavailable')
 
             self.mach.connect()
 

@@ -3,6 +3,8 @@ import re
 import time
 import hashlib
 
+from bbctrl import GCodeText
+
 # Builds a G-code program that continues an interrupted job, and parks the
 # machine so the job can be continued after the power is switched off.
 #
@@ -49,8 +51,27 @@ def clean_opts(opts):
 
 
 def strip(line):
-    line = re.sub(r'\([^)]*\)', ' ', line)
-    return line.split(';', 1)[0].strip()
+    # Code part of one line, read the way the planner reads it (GCodeText)
+    return GCodeText.code_of(line).strip()
+
+
+def _lines(lines, upto = None):
+    # (1-based number, raw line, code) for each line, following comments left
+    # open across lines like the planner does.  A line whose comment the
+    # planner would read differently from how it looks is refused: guessing
+    # could turn comment text into a move.
+    open_comment = False
+    for n, raw in enumerate(lines, 1):
+        if upto is not None and n > upto: break
+        code, _, issues, open_comment = GCodeText.split(raw, open_comment)
+        if issues:
+            raise ResumeError('Line %d: %s. Resume cannot work out the start '
+                              'position safely. Fix the comment in the program '
+                              '(brackets inside a comment can be written as '
+                              '[ ]), upload it again and start the job from a '
+                              'line you choose.'
+                              % (n, GCodeText.problem_text(issues)))
+        yield n, raw, code.strip()
 
 
 def fmt(v):
@@ -77,8 +98,8 @@ class Modal(object):
 def scan(lines, upto):
     # Applies lines[0:upto] and returns the resulting Modal state.
     m = Modal()
-    for n in range(upto):
-        text = strip(lines[n])
+    for n1, _, text in _lines(lines, upto):
+        n = n1 - 1
         if not text or text.startswith('%'): continue
         if '#' in text or '[' in text:
             raise ResumeError('Line %d uses variables or expressions, so the '
@@ -130,18 +151,106 @@ def scan(lines, upto):
     return m
 
 
-def build(lines, line_no, name, opts, top_mm, source_hint = ''):
+def locate(lines, pos, floor, tol = 0.1):
+    # Finds where the tool physically is inside the program.
+    # pos: work position in millimetres, {'x':, 'y':, 'z':}.
+    # floor: 1-based line to start looking from (the saved line).
+    # Returns (line, distance_mm) for the EARLIEST straight move at or after
+    # floor that passes through pos, or None.  Earliest is the safe choice: if
+    # the same path is cut again and again (finishing laps), restarting at an
+    # earlier lap only re-cuts air, while a later one would skip cutting.
+    # Only simple absolute G0/G1 programs are searched; anything else (arcs,
+    # incremental moves, variables, G53 moves, a change of work coordinate
+    # system) gives no match, and the saved line is used instead.
+    try: target = [float(pos[a]) for a in 'xyz']
+    except (TypeError, ValueError, KeyError): return None
+
+    try: return _locate(lines, target, floor, tol)
+    except ResumeError: return None   # a comment the planner reads differently
+
+
+def _locate(lines, target, floor, tol):
+    cur = [None, None, None]
+    metric = True
+    motion = None
+    dist = 90
+    wcs = None
+    for n, raw, text in _lines(lines):
+        if not text or text.startswith('%'): continue
+        if '#' in text or '[' in text: return None
+        words = [(c.upper(), float(v)) for c, v in WORD.findall(text)]
+        g = [v for c, v in words if c == 'G']
+        vals = dict(words)
+        if 53 in g:
+            cur = [None, None, None]
+            continue
+        for v in g:
+            if v == 20: metric = False
+            elif v == 21: metric = True
+            elif v in (90, 91): dist = int(v)
+            elif v == int(v) and 54 <= v <= 59:
+                if wcs is not None and wcs != int(v): return None
+                wcs = int(v)
+            elif v in (0, 1, 2, 3): motion = int(v)
+        if dist != 90: return None
+        k = 1.0 if metric else MM
+        new = [vals[a] * k if a in vals else cur[i] for i, a in enumerate('XYZ')]
+        has_axes = any(a in vals for a in 'XYZ')
+
+        if has_axes and motion in (2, 3):
+            if 'I' in vals or 'J' in vals or 'K' in vals or 'R' in vals:
+                cur = new
+                continue
+        if has_axes and motion in (0, 1) and n >= floor and None not in cur and None not in new:
+            d = _seg_dist(cur, new, target)
+            if d <= tol: return n, d
+        cur = new
+    return None
+
+
+def _seg_dist(a, b, p):
+    ab = [b[i] - a[i] for i in range(3)]
+    ap = [p[i] - a[i] for i in range(3)]
+    den = sum(v * v for v in ab)
+    t = 0.0 if den == 0 else max(0.0, min(1.0, sum(ab[i] * ap[i] for i in range(3)) / den))
+    return sum((a[i] + t * ab[i] - p[i]) ** 2 for i in range(3)) ** 0.5
+
+
+def build(lines, line_no, name, opts, top_mm, source_hint = '',
+          manual = False, router = ''):
     # lines: the original program (list of strings, no newlines)
     # line_no: 1-based number of the line that was running
     # top_mm: machine Z used for "top of travel" (millimetres, already
     #         backed off from the limit)
+    # manual: the spindle is a router the controller can't switch (no VFD or
+    #         PWM spindle), so the operator must switch it on before the plunge
+    # router: the setup sheet's router line (for example the dial setting)
     o = clean_opts(opts)
     if not (1 <= line_no <= len(lines)):
         raise ResumeError('The saved line %d is not inside the program (%d lines).'
                           % (line_no, len(lines)))
 
+    # The resume line itself must read the same way to the planner as it looks
+    for _ in _lines(lines, line_no): pass
     m = scan(lines, line_no - 1)
     warnings = []
+
+    # Comments later in the program that the planner will stop on
+    later = []
+    open_comment = False
+    for n, raw in enumerate(lines, 1):
+        _, _, issues, open_comment = GCodeText.split(raw, open_comment)
+        if n > line_no and issues: later.append(n)
+    if later:
+        warnings.append('Line%s %s later in the program ha%s a comment the '
+                        'planner will read differently from how it looks '
+                        '(brackets inside a comment, or one left open). The '
+                        'job may stop with an error there. Fix the program '
+                        'before resuming if you can.'
+                        % ('s' if len(later) > 1 else '',
+                           ', '.join(str(x) for x in later[:5]) +
+                           (' and more' if len(later) > 5 else ''),
+                           've' if len(later) > 1 else 's'))
     metric = m.units == 'G21'
     k = 1.0 if metric else 1.0 / MM        # millimetres -> file units
     start = line_no - 1
@@ -151,7 +260,10 @@ def build(lines, line_no, name, opts, top_mm, source_hint = ''):
     first_words = [int(float(v)) for c, v in WORD.findall(strip(first)) if c.upper() == 'G']
     if m.motion is not None and not any(g in (0, 1, 2, 3) for g in first_words) \
        and any(c.upper() in AXES for c, v in WORD.findall(strip(first))):
-        first = 'G%d %s' % (m.motion, first.strip())
+        # Keep a leading line number (N word) first: "N10 G1 X1", not "G1 N10 X1"
+        mn = re.match(r'\s*(N\s*\d+\s*)(.*)$', first, re.I)
+        if mn: first = '%sG%d %s' % (mn.group(1), m.motion, mn.group(2).strip())
+        else: first = 'G%d %s' % (m.motion, first.strip())
 
     for a in 'XY':
         if m.pos[a] is None:
@@ -160,8 +272,9 @@ def build(lines, line_no, name, opts, top_mm, source_hint = ''):
 
     out = []
     w = out.append
-    w('(RESUME of %s at line %d)' % (name.replace('(', '[').replace(')', ']'), line_no))
-    shown = strip(lines[start])[:60].replace('(', '[').replace(')', ']')
+    safe = GCodeText.safe_comment
+    w('(RESUME of %s at line %d)' % (safe(name), line_no))
+    shown = safe(strip(lines[start])[:60])
     w('(Line %d: %s)' % (line_no, shown))
     if m.tool is not None: w('(Tool in spindle must be T%d)' % m.tool)
     w('(Check that Z0 is the top of the stock)')
@@ -178,7 +291,14 @@ def build(lines, line_no, name, opts, top_mm, source_hint = ''):
         if m.pos[a] is not None: xy += ' %s%s' % (a, fmt(m.pos[a]))
     w(xy)
 
-    if o['pause']:
+    if manual:
+        # The controller can't start this router, so never plunge until the
+        # operator has switched it on, whatever the pause setting says
+        dial = (' at %s' % safe(router).strip()) if router and router.strip() else ''
+        w('(MSG, Check the tool is over the restart point. Switch the router ON%s '
+          'and let it reach speed. Press Start to continue.)' % dial)
+        w('M0')
+    elif o['pause']:
         w('(MSG, Check the tool is over the restart point. Press Start to continue.)')
         w('M0')
 
@@ -224,7 +344,9 @@ def build(lines, line_no, name, opts, top_mm, source_hint = ''):
         'units': 'mm' if metric else 'in',
         'wcs': m.wcs,
         'pos': dict((a.lower(), m.pos[a]) for a in AXES if m.pos[a] is not None),
-        'spinup': o['spinup'], 'plunge': o['plunge'], 'pause': o['pause'],
+        'spinup': o['spinup'], 'plunge': o['plunge'],
+        'pause': o['pause'] or bool(manual),
+        'manual_spindle': bool(manual),
         'warnings': warnings,
     }
     return '\n'.join(out) + '\n', info
@@ -245,6 +367,17 @@ def output_name(source):
     # Never overwrite the file being resumed from: alternate between two names
     if name == source: name = 'resume-' + root + '-b' + ext
     return name
+
+
+def manual_spindle(config):
+    '''True when the controller can't switch the spindle itself: a router
+    with its own switch and speed dial (tool type Disabled, or the Router
+    tool), so M3 and M5 do nothing.'''
+    try:
+        tool_type = str(config.get('tool-type', 'Disabled') or 'Disabled')
+        selected = str(config.get('selected-tool', '') or '')
+    except Exception: return True
+    return tool_type.lower() == 'disabled' or selected.lower() in ('router', 'disabled')
 
 
 class Resume(object):
@@ -287,16 +420,49 @@ class Resume(object):
         path = self.ctrl.get_upload(src)
         if not os.path.isfile(path):
             raise ResumeError('The program %s is no longer on the controller.' % src)
-        if rec.get('sha') and sha_of(path) != rec['sha']:
-            raise ResumeError('%s has changed since the job was interrupted, '
-                              'so the saved line no longer points at the same '
-                              'place. Start the job again.' % src)
+        changed = bool(rec.get('sha')) and sha_of(path) != rec['sha']
 
         with open(path, 'r', encoding = 'utf-8', errors = 'replace') as f:
             lines = f.read().splitlines()
 
-        line = int(rec.get('line') or 0)
-        text, info = build(lines, line, src, opts, self._top_mm())
+        saved = int(rec.get('line') or 0)
+        line = saved
+        notes = []
+
+        # Where is the tool right now?  The saved line can be behind the
+        # machine, and after a controlled stop the tool is still on the path.
+        # If it is, restart there.  After a power loss the machine has been
+        # homed away from the path, so there is no match and the saved line is used.
+        found = None
+        try:
+            s = self.ctrl.state
+            work = dict((a, float(s.get(a + 'p', 0) or 0) - float(s.get('offset_' + a, 0) or 0))
+                        for a in 'xyz')
+            found = locate(lines, work, saved)
+        except Exception as e: self.log.warning('Could not match the tool position: %s' % e)
+
+        if found:
+            line = found[0]
+            if line != saved:
+                notes.append('The tool is on the program path at line %d, ahead of the '
+                             'saved line %d, so the program restarts at line %d.'
+                             % (line, saved, line))
+
+        if changed:
+            if not found:
+                raise ResumeError('%s has changed since the job was interrupted, and '
+                                  'the tool is not on its path, so the saved line cannot '
+                                  'be trusted. Start the job again.' % src)
+            notes.append('%s was changed after the job was interrupted. The restart point '
+                         'was found from where the tool is, not from the saved line.' % src)
+
+        manual = manual_spindle(self.ctrl.config)
+        router = GCodeText.setup_fields(lines[:400]).get('router', '')
+        text, info = build(lines, line, src, opts, self._top_mm(),
+                           manual = manual, router = router)
+        info['saved_line'] = saved
+        info['located'] = bool(found)
+        info['warnings'] = notes + info['warnings']
 
         name = output_name(src)
         tmp = self.ctrl.get_upload(name + '.tmp')
@@ -308,6 +474,37 @@ class Resume(object):
         info['source'] = src
         info.update(self._offset_check(rec))
         return info
+
+
+    # Put the work zero back where it was when the job stopped -------------
+    # The checkpoint keeps the work offsets (machine position of work zero) at
+    # the moment the job was interrupted.  On a homed machine they are valid
+    # again, so the zero can be restored without probing the part, which is
+    # often impossible once it is half cut.  Z is only right if the cutter has
+    # not been moved in the collet, so the caller chooses the axes.
+    def restore_zero(self, axes):
+        cp = self.ctrl.checkpoint
+        rec = cp.get() if cp else None
+        if not rec or not rec.get('file') or rec.get('status') == 'dismissed':
+            raise ResumeError('There is no interrupted job to take the zero from.')
+        if self.ctrl.state.get('cycle') != 'idle':
+            raise ResumeError('Wait until the machine is idle.')
+        self._check_homed()
+        saved = rec.get('offset') or {}
+        axes = [a for a in (axes or 'xyz') if a in 'xyz' and saved.get(a) is not None]
+        if not axes: raise ResumeError('The interrupted job has no saved zero.')
+
+        s = self.ctrl.state
+        scale = 1.0 if s.get('metric', True) else 1 / 25.4   # G92 takes program units
+        words = []
+        for a in axes:
+            pos = float(s.get(a + 'p', 0) or 0)                # machine position, mm
+            words.append('%s%s' % (a.upper(), fmt((pos - float(saved[a])) * scale)))
+        cmd = 'G92 ' + ' '.join(words)
+        self.log.info('Restoring the interrupted job\'s zero: %s' % cmd)
+        self.ctrl.mach.mdi(cmd)
+        return {'axes': axes, 'cmd': cmd,
+                'offset': dict((a, float(saved[a])) for a in axes)}
 
 
     def _offset_check(self, rec):
@@ -334,6 +531,7 @@ class Resume(object):
         top = self._top_mm()
 
         self.parking = True
+        s.set('park_manual', manual_spindle(ctrl.config))
         s.set('park', 'parking')
         ctrl.mach.stop()
         self._wait(lambda: s.get('cycle') == 'idle' and s.get('xx') == 'READY',

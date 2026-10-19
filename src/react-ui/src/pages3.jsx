@@ -33,7 +33,6 @@ export function Help({ cfg, net }) {
               <div className="stat"><dt>Wi-Fi</dt><dd>{net.wifi || "—"}</dd></div>
             </dl>
           </Group>
-          <Group title="Original interface"><p>The original interface is still available at <a href="/">the controller's main address</a>.</p></Group>
         </div>
       </div>
     </Page>

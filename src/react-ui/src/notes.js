@@ -34,6 +34,8 @@ export async function syncNotes() {
 }
 syncNotes();
 if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => { if (!document.hidden) syncNotes(); });
+// Another screen edited a note.
+if (typeof window !== "undefined") window.addEventListener("next-store:notes", () => syncNotes());
 const later = debounce(syncNotes, 1000);
 
 export const getNote = (f) => map[f]?.t || "";

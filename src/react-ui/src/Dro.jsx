@@ -1,22 +1,23 @@
 import React, { useState } from "react";
 import { api } from "./controller.js";
 import { computeAxis, fmtLen } from "./axis.js";
-import { Modal, Confirm } from "./ui.jsx";
+import { Modal, Confirm, parseNum } from "./ui.jsx";
+import { isEnter } from "./vkbd.js";
 
 const STATUS_TEXT = { HOMED: "Homed", UNHOMED: "Not homed", FAULT: "Motor fault", SHUTDOWN: "Power shutdown" };
 const FIT_TEXT = { OVER: "Over limit", UNDER: "Under limit", "NO FIT": "Won't fit" };
 
 function PositionDialog({ axis, metric, onClose, title, label, action, initial = "0" }) {
   const [v, setV] = useState(initial);
-  const ok = v.trim() !== "" && isFinite(Number(v));
-  const go = () => { if (!ok) return; const n = Number(v); action(metric ? n : n * 25.4); onClose(); };
+  const ok = parseNum(v) !== null;
+  const go = (raw = v) => { const n = parseNum(raw); if (n === null) return; action(metric ? n : n * 25.4); onClose(); };
   return (
     <Modal title={title} onClose={onClose} actions={<>
       <button onClick={onClose}>Cancel</button>
-      <button className="primary" disabled={!ok} onClick={go}>Set</button>
+      <button className="primary" disabled={!ok} onClick={() => go()}>Set</button>
     </>}>
       <label className="stack">{label}
-        <input data-autofocus type="number" inputMode="decimal" step="any" value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.key === "Enter" && go()} />
+        <input data-autofocus type="text" inputMode="decimal" autoComplete="off" spellCheck="false" value={v} onChange={(e) => setV(e.target.value)} onKeyUp={(e) => { if (isEnter(e)) go(e.currentTarget.value); }} />
         <small>{metric ? "mm" : "in"}</small>
       </label>
     </Modal>

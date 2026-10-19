@@ -7,5 +7,8 @@ import "@fontsource/barlow-semi-condensed/500.css";
 import "@fontsource/barlow-semi-condensed/600.css";
 import "./styles.css";
 import App from "./App.jsx";
+import { installVirtualKeyboardFix } from "./vkbd.js";
+
+installVirtualKeyboardFix();
 
 createRoot(document.getElementById("root")).render(<App />);

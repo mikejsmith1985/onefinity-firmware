@@ -8,6 +8,7 @@ import { Settings, IO, Tool, Motors } from "./pages1.jsx";
 import { Macros, Admin, useLatestVersion } from "./pages2.jsx";
 import { CheatSheet, Help } from "./pages3.jsx";
 import { computeAxis } from "./axis.js";
+import { useUi, uiSet, uiOpen, uiClose, loadPrefs } from "./shared.js";
 
 export function machState(state) {
   const { cycle, xx } = state;
@@ -40,11 +41,15 @@ export default function App() {
   useRunTracker(state);
   const cfg = useConfig(state);
   const [route, setRoute] = useState(parseHash());
-  const [power, setPower] = useState(false);
-  const [askHome, setAskHome] = useState(false);
-  const [homeAsked, setHomeAsked] = useState(false);
-  const [errSeen, setErrSeen] = useState(0);
+  // The power question and the error popup belong to the session: answering on one screen closes them on all.
+  const power = !!useUi(state, "power").v;
+  const setPower = (on) => (on ? uiOpen("power", { at: Date.now() }) : uiClose("power"));
+  const lastErr = state.last_error;
+  const errAck = useUi(state, "err-ack").v || 0;
+  const showErr = !!lastErr && lastErr.id > errAck;
+  const ackErr = () => uiSet("err-ack", lastErr ? lastErr.id : 0).catch(() => {});
   const ver = useLatestVersion(cfg);
+  useEffect(() => { loadPrefs(); }, []);
 
   useEffect(() => { const f = () => setRoute(parseHash()); window.addEventListener("hashchange", f); return () => window.removeEventListener("hashchange", f); }, []);
   const go = useCallback((h) => { location.hash = h; }, []);
@@ -54,13 +59,16 @@ export default function App() {
   const tone = TONE[mach] || "idle";
   const estopped = mach === "ESTOPPED";
 
-  // Offer to home once, when the machine is idle and an axis isn't homed.
-  useEffect(() => {
-    if (homeAsked || !cfg.config || mach !== "READY" || state.cycle !== "idle") return;
-    const axes = ["x", "y", "z", "a"].map((a) => computeAxis(state, cfg.config, a, metric)).filter((a) => a.enabled);
-    if (axes.length && axes.some((a) => !a.homed)) setAskHome(true);
-    setHomeAsked(true);
-  }, [homeAsked, cfg.config, mach, state.cycle]);
+  // Offer to home after a restart. The question belongs to the machine, not to this screen: the controller
+  // keeps one answer for every browser (state.home_prompt, reset when it restarts), so answering it on the PC
+  // closes it at the machine too. It also closes everywhere as soon as homing starts or every axis is homed,
+  // and isn't asked again until the next restart (a later Unhome doesn't bring it back).
+  const homeAxes = cfg.config ? ["x", "y", "z", "a"].map((a) => computeAxis(state, cfg.config, a, metric)).filter((a) => a.enabled) : [];
+  const allHomed = homeAxes.length > 0 && homeAxes.every((a) => a.homed);
+  const homeDone = state.home_prompt === "done";
+  const homePromptDone = useCallback(() => api.put("home-prompt").catch(() => {}), []);
+  useEffect(() => { if (allHomed && !homeDone) homePromptDone(); }, [allHomed, homeDone, homePromptDone]);
+  const askHome = !homeDone && !allHomed && homeAxes.length > 0 && mach === "READY" && state.cycle === "idle";
 
   // G-code messages (MSG, M0 pauses) need an answer before the program goes on.
   const popups = (state.messages || []).filter((m) => !/^#/.test(m.text));
@@ -95,7 +103,6 @@ export default function App() {
           <a key={id} href={`#${id === "admin" ? "admin-general" : id === "motors" ? "motor:0" : id}`} className={page === id ? "on" : ""} aria-current={page === id ? "page" : undefined}>{tabLabel(id, label)}</a>
         ))}
         <span className="grow" />
-        <a className="classic" href="/">Classic UI</a>
         <span className="ver">{cfg.config ? `v${cfg.config.full_version}` : ""}{cfg.net.ip ? ` · ${cfg.net.ip}` : ""}</span>
         <button className="quiet" onClick={() => setPower(true)}>Power</button>
       </nav>
@@ -122,15 +129,15 @@ export default function App() {
           {popups.some((m) => /tool/i.test(m.text)) && <div className="why"><b>Install tool {state.tool || 0}.</b><p>This is the tool the program selected. Check the tool number before you continue, and re-probe Z if your tool change does that.</p></div>}
         </Modal>
       )}
-      {ctl.lastError && ctl.lastError.at !== errSeen && (
-        <Modal title="Error" onClose={() => setErrSeen(ctl.lastError.at)} actions={<button data-autofocus className="primary" onClick={() => setErrSeen(ctl.lastError.at)}>OK</button>}>
-          <p className="big">{ctl.lastError.msg}</p>
-          {explain(ctl.lastError.msg) && <div className="why"><b>{explain(ctl.lastError.msg).what}</b><p>{explain(ctl.lastError.msg).advice}</p></div>}
+      {showErr && (
+        <Modal title="Error" onClose={ackErr} actions={<button data-autofocus className="primary" onClick={ackErr}>OK</button>}>
+          <p className="big">{lastErr.msg}</p>
+          {explain(lastErr.msg) && <div className="why"><b>{explain(lastErr.msg).what}</b><p>{explain(lastErr.msg).advice}</p></div>}
           <p className="dim">Earlier messages are in the Messages tab on Control.</p>
         </Modal>
       )}
       {askHome && (
-        <Confirm title="Home the machine?" confirmLabel="Home" onCancel={() => setAskHome(false)} onConfirm={() => { setAskHome(false); api.put("home").catch(() => {}); }}>
+        <Confirm title="Home the machine?" confirmLabel="Home" onCancel={homePromptDone} onConfirm={() => { homePromptDone(); api.put("home").catch(() => {}); }}>
           <p>One or more axes aren't homed yet. Homing moves the machine to its limit switches. Keep hands and tools clear.</p>
         </Confirm>
       )}

@@ -37,6 +37,7 @@ export async function loadPath(file) {
 }
 
 import { recordDown, recordUp } from "./drops.js";
+import { ME, readUi, uiSet, uiClose, useUiTick } from "./shared.js";
 
 // Live machine state over the controller's raw websocket.
 export function useController() {
@@ -46,6 +47,7 @@ export function useController() {
   const [lastError, setLastError] = useState(null);
   const ws = useRef(null);
   const listeners = useRef(new Set());
+  const storeRev = useRef(null);
 
   useEffect(() => {
     let closed = false, timer, lastMsg = Date.now(), everUp = false;
@@ -69,6 +71,13 @@ export function useController() {
         delete d.heartbeat;
         if (!Object.keys(d).length) return;
         listeners.current.forEach((f) => f(d));
+        // Another screen saved a shared document (notes, history, settings): re-read it here too.
+        if (d.store_rev && typeof d.store_rev === "object") {
+          const prev = storeRev.current; storeRev.current = d.store_rev;
+          for (const [name, n] of Object.entries(d.store_rev)) {
+            if (prev && prev[name] !== n) { try { window.dispatchEvent(new Event(`next-store:${name}`)); } catch { /* old browser */ } }
+          }
+        }
         if (d.log) {
           const m = { ...d.log, level: d.log.level || "info", id: Math.random() };
           setLogs((l) => {
@@ -88,8 +97,11 @@ export function useController() {
     return () => { closed = true; clearTimeout(timer); clearInterval(watch); ws.current && ws.current.close(); };
   }, []);
 
+  // true when the command went to the controller, false when it could not be sent (1.29.0: before, a
+  // command typed or sent while the connection was down was dropped without a word).
   const send = useCallback((gcode) => {
-    if (ws.current && ws.current.readyState === 1) ws.current.send(gcode);
+    if (!ws.current || ws.current.readyState !== 1) return false;
+    try { ws.current.send(gcode); return true; } catch { return false; }
   }, []);
   const subscribe = useCallback((fn) => { listeners.current.add(fn); return () => listeners.current.delete(fn); }, []);
   return { state, online, send, subscribe, logs, clearLogs: () => setLogs([]), lastError, clearError: () => setLastError(null) };
@@ -109,7 +121,10 @@ function fixVersion(v) {
 }
 
 // Configuration: the saved copy from the controller plus the operator's unsaved edits.
+// Unsaved edits are part of the shared session ("cfg-draft"): a setting changed on the PC shows as unsaved on
+// the touchscreen too, and Save or Discard on any screen finishes it everywhere.
 export function useConfig(state) {
+  useUiTick();
   const [draft, setDraft] = useState(null);
   const [template, setTemplate] = useState(null);
   const [net, setNet] = useState({});
@@ -126,14 +141,43 @@ export function useConfig(state) {
   }, []);
 
   useEffect(() => {
-    reload(true).catch(() => {});
+    reload(true).then(() => {
+      // Another screen has unsaved edits: show them here as well.
+      const sh = sharedRef.current;
+      if (sh && sh.by !== ME && sh.draft) { setDraft(sh.draft); setModified(true); }
+    }).catch(() => {});
     fetch("/config-template.json", { cache: "no-cache" }).then((r) => r.json()).then(setTemplate).catch(() => {});
   }, [reload]);
 
-  const edit = useCallback((fn) => {
-    setDraft((d) => { if (!d) return d; const c = clone(d); fn(c); return c; });
-    setModified(true);
+  const shareTimer = useRef(null);
+  const shareDraft = useCallback((c) => {
+    clearTimeout(shareTimer.current);
+    shareTimer.current = setTimeout(() => uiSet("cfg-draft", { by: ME, draft: c, at: Date.now() }).catch(() => {}), 300);
   }, []);
+  const edit = useCallback((fn) => {
+    setDraft((d) => { if (!d) return d; const c = clone(d); fn(c); shareDraft(c); return c; });
+    setModified(true);
+  }, [shareDraft]);
+
+  // Follow edits made on another screen, and its Save or Discard.
+  const shared = readUi(state, "cfg-draft").v;
+  const sharedRef = useRef(null);
+  useEffect(() => {
+    const prev = sharedRef.current; sharedRef.current = shared;
+    if (shared && shared.by !== ME && shared.draft) {
+      setDraft((d) => (JSON.stringify(d) === JSON.stringify(shared.draft) ? d : shared.draft));
+      setModified(true);
+    } else if (!shared && prev && modRef.current) {
+      clearTimeout(shareTimer.current);
+      reload(true).catch(() => {});
+    }
+  }, [shared && shared.at, !!shared]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Saved on another screen: take the new saved copy unless there are edits here.
+  useEffect(() => {
+    const f = () => { if (!modRef.current) reload(true).catch(() => {}); };
+    window.addEventListener("next-store:config", f);
+    return () => window.removeEventListener("next-store:config", f);
+  }, [reload]);
 
   const patch = useCallback((fn) => {
     setDraft((d) => { if (!d) return d; const c = clone(d); fn(c); return JSON.stringify(c) === JSON.stringify(d) ? d : c; });
@@ -151,11 +195,24 @@ export function useConfig(state) {
       c["selected-tool-settings"][sel] = { tool, "pwm-spindle": { ...c["pwm-spindle"] }, "modbus-spindle": saveModbus ? { ...c["modbus-spindle"] } : undefined };
     }
     await api.put("config/save", c);
+    clearTimeout(shareTimer.current);
     setModified(false);
+    uiClose("cfg-draft");
     await reload(true);
   }, [draft, state, reload]);
 
-  return { config: draft, template, net, modified, edit, patch, save, reload, discard: () => reload(true) };
+  // Change only the program lists (folders, files) in the saved settings. Unsaved edits to other settings,
+  // on this screen or another, are not saved by it and stay unsaved.
+  const saveLists = useCallback(async (fn) => {
+    const c = await api.get("config/load");
+    fn(c);
+    await api.put("config/save", c);
+    const fresh = await api.get("config/load");
+    fresh.full_version = fixVersion(fresh.full_version);
+    setDraft((d) => (!d || !modRef.current ? fresh : { ...d, gcode_list: fresh.gcode_list, non_macros_list: fresh.non_macros_list, macros_list: fresh.macros_list }));
+  }, []);
+  const discard = useCallback(() => { clearTimeout(shareTimer.current); uiClose("cfg-draft"); return reload(true); }, [reload]);
+  return { config: draft, template, net, modified, edit, patch, save, saveLists, reload, discard };
 }
 
 export const metricOf = (config) => !config || (config.settings?.units || "METRIC") === "METRIC";

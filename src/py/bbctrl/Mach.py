@@ -136,7 +136,10 @@ class Mach(Comm):
     def _set_mist(self, on): self._i2c_set('1oa', 1 if on else 0)
 
 
-    def _set_cycle(self, cycle): self.ctrl.state.set('cycle', cycle)
+    def _set_cycle(self, cycle):
+        # A dry run never outlives its cycle
+        if cycle == 'idle': self.planner.end_dry()
+        self.ctrl.state.set('cycle', cycle)
 
 
     def _begin_cycle(self, cycle):
@@ -164,6 +167,43 @@ class Mach(Comm):
                 and not self.planner.is_busy() and not super().is_active()):
             self.planner.position_change()
             self._set_cycle('idle')
+            # Offsets arrive a moment after the cycle ends
+            self.ctrl.ioloop.call_later(1.5, self._remember_offsets)
+
+
+    # After a restart the controller puts the work zero back when the machine
+    # is homed, from axes.offset_* in the config.  The stock firmware only
+    # wrote those when a Zero button was used, so a zero set by probing (or a
+    # program) was lost and an older one came back.  Keep them in step with
+    # the live zero whenever the machine settles idle with that axis homed.
+    def _remember_offsets(self):
+        try:
+            state = self.ctrl.state
+            if self._get_cycle() != 'idle': return
+            vals = {}
+            seen = getattr(self, '_zero_seen', None)
+            if seen is None: seen = self._zero_seen = set()
+            for axis in 'xyz':
+                if not state.is_axis_homed(axis):
+                    seen.discard(axis)
+                    continue
+                off = state.get('offset_' + axis)
+                if off is None: continue
+                # 0 is what every axis reads just after a restart, before the
+                # restore after homing has run, so a 0 is only stored once
+                # this axis has had a real zero since it was homed: then a 0
+                # is a zero deliberately set exactly on machine 0 (1.29.0).
+                if abs(float(off)) < 1e-9:
+                    if axis not in seen: continue
+                    off = 0.0
+                else: seen.add(axis)
+                cur = self.ctrl.config.get('offset_' + axis)
+                if cur is None or abs(float(cur) - float(off)) > 0.0005:
+                    vals['offset_' + axis] = float(off)
+            if vals:
+                self.ctrl.config.set('axes', vals)
+                self.log.info('Remembered work zero for restart: %s' % vals)
+        except Exception: self.log.exception('Could not remember the work zero')
 
 
     def _update(self, update):
@@ -187,6 +227,7 @@ class Mach(Comm):
             not super().is_active()):
             self.planner.position_change()
             self._set_cycle('idle')
+            self.ctrl.ioloop.call_later(1.5, self._remember_offsets)
 
         # Planner stop
         if state == 'READY' and self.stopping:
@@ -288,8 +329,10 @@ class Mach(Comm):
                 self.planner.mdi(cmd, with_limits)
                 super().resume()
         except BaseException as err:
-            self.mlog.info("Exception during MDI: %s" % err)
-            pass
+            # Every screen shows it (1.29.0).  Before, a refused command was
+            # only logged, so a probe sent while the machine was busy looked
+            # as if it had been accepted.
+            self.mlog.error('Command refused: %s' % err)
 
     def set(self, code, value):
         super().queue_command('${}={}'.format(code, value))
@@ -356,11 +399,23 @@ class Mach(Comm):
             super().clear()
 
 
-    def start(self):
+    def _check_dry_lift(self, lift):
+        try: lift = float(lift)
+        except (TypeError, ValueError): raise Exception('Bad dry run lift')
+        if not 5 <= lift <= 100:
+            raise Exception('Dry run lift must be between 5 and 100 mm')
+        if not self.ctrl.state.is_axis_homed('z'):
+            raise Exception('Home the machine before a dry run so the Z '
+                            'limit is known')
+        return lift
+
+
+    def start(self, dry_lift = 0):
         filename = self.ctrl.state.get('selected', '')
         if not filename: return
+        if dry_lift: dry_lift = self._check_dry_lift(dry_lift)
         self._begin_cycle('running')
-        self.planner.load(filename)
+        self.planner.load(filename, dry_lift)
         super().resume()
 
 
