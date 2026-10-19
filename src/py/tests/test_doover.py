@@ -92,9 +92,8 @@ check('single-pass contour: tab cannot be confirmed, kept and warned',
 
 # Units, arcs, canned cycles
 ti, _ = build(P.to_inch(std), {'extra': 1.5})
-check('inch program: same mm program', [re.sub(r'(\d\.\d{3})\d*', r'\1', l) for l in code_lines(ti)] ==
-      [re.sub(r'(\d\.\d{3})\d*', r'\1', l) for l in code_lines(t)] or
-      zs(ti) == zs(t), (code_lines(ti)[:20], code_lines(t)[:20]))
+norm = lambda t: [re.sub(r'(-?\d+\.\d+)', lambda m: '%.2f' % float(m.group(1)), l) for l in t.splitlines()]
+check('inch program: the same mm program (to 0.01 mm)', norm(ti) == norm(t))
 check('inch program reported as inches', ops_of(P.to_inch(std))['units'] == 'in')
 pa = P.program(P.contour(arcs=True, tabs=False), P.canned(code=83))
 ta, ia = build(pa, {'extra': 1.0})
