@@ -98,7 +98,7 @@ G91 G38.2 ${axis}${n(dir * 2)} F${o.slow}`;
 G21
 M5
 #<_ofm_ok> = 0
-#<_ofm_fail> = 0
+#<_ofm_fail> = 0${o.token ? "\n#<_ofm_done> = 0" : ""}
 #<_ofm_w> = 0
 #<_ofm_l> = 0`);
 
@@ -169,6 +169,8 @@ ${lift("Y", -1)}
   add("G90");
   // Park over the new zero at travel height
   if (!o.calibrate) add(`o${oid++} if [#<_ofm_ok> EQ 1]\nG90 G0 ${o.probeY ? "X0 Y0" : "X0"}\no${oid - 1} endif`);
+  // 1.31.0: the wizard only counts a measurement as done when this run's token is set at the end
+  if (o.token) add(`o${oid++} if [#<_ofm_ok> EQ 1]\n#<_ofm_done> = ${o.token}\no${oid - 1} endif`);
   add("M2");
   return out.join("\n") + "\n";
 }

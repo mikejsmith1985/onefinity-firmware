@@ -25,7 +25,8 @@ class Sim:
         s.off = [0,0,0]; s.vars = {}; s.inc = False; s.log = []
     def touching(s, P):
         c = (P[0], P[1], P[2] - s.L + s.r)
-        return any(box_dist(c, b) <= s.r + 1e-9 for b in s.obs)
+        # Boxes are (x0,x1,y0,y1,z0,z1); anything else has a dist(point) method (1.31.0: plates with bores)
+        return any((b.dist(c) if hasattr(b, 'dist') else box_dist(c, b)) <= s.r + 1e-9 for b in s.obs)
     def work(s): return [s.P[i]-s.off[i] for i in range(3)]
     def ev(s, e):
         def var(m):
@@ -103,6 +104,8 @@ class Sim:
                 # #5061-#5063: work coordinates by default.  probe_frame = 'machine' models the reading
                 # of the CAMotics source (machine coordinates); see the 1.29.0 release notes, item 2.
                 w = s.P[:] if getattr(s, 'probe_frame', 'work') == 'machine' else s.work()
+                # 1.31.0: optional reading noise on the reported touch (s.noise: std dev, mm)
+                if getattr(s, 'noise', 0): w = [v + s.rng.gauss(0, s.noise) for v in w]
                 s.vars['5061'],s.vars['5062'],s.vars['5063'] = w; s.vars['5070'] = 1.0 if hit else 0.0
             else: s.move(tgt)
         return s

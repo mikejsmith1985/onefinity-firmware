@@ -67,8 +67,9 @@ export function parseSetup(text) {
     fields, stock: stockOk ? stock : null, toolD: raw["tool-d"] ? num(raw["tool-d"]) : null,
     // A stock line that can't be read is reported, not silently skipped (1.29.0)
     stockBad: raw.stock !== undefined && !stockOk ? raw.stock : null,
-    corner: corner && CORNERS.includes(corner) ? corner : null,
-    cornerBad: corner && !CORNERS.includes(corner) ? raw["probe-corner"] : null,
+    // "flip": a copy lined up on reference bores by the Start job wizard (1.31.0)
+    corner: corner && (CORNERS.includes(corner) || corner === "flip") ? corner : null,
+    cornerBad: corner && !CORNERS.includes(corner) && corner !== "flip" ? raw["probe-corner"] : null,
     toolGeom: parseToolGeom(raw["tool-geom"]),
     bad,
   };
@@ -179,7 +180,7 @@ export function stockChecks(setup, metric = true) {
   return [{ level: "ok", name: "Stock", text: `Every move stays inside the plate area the sheet declares (${area}), with ${mm(spare, metric)} to spare at the tightest side. Your plate must be at least that big.` }];
 }
 
-const CORNER_NAMES = { "front-left": "front-left corner", "front-right": "front-right corner", "back-left": "back-left corner", "back-right": "back-right corner", center: "center of the stock", "center-x": "X center of the stock" };
+const CORNER_NAMES = { flip: "reference bores (flip alignment)", "front-left": "front-left corner", "front-right": "front-right corner", "back-left": "back-left corner", "back-right": "back-right corner", center: "center of the stock", "center-x": "X center of the stock" };
 const cornerName = (c) => CORNER_NAMES[c] || c;
 
 // Compares the last probe the controller remembers with the corner the sheet needs.
@@ -188,6 +189,9 @@ export function probeChecks(setup, rec, state) {
   if (setup?.cornerBad) return [{ level: "warn", name: "Zero", text: `The setup sheet asks for zero on "${setup.cornerBad}", which is not a corner this controller knows (front-left, front-right, back-left, back-right, center, center-x). The zero was not checked: confirm it by eye before you run.` }];
   if (!setup?.corner) return [];
   const want = setup.corner;
+  if (want === "flip") {
+    if (!rec || rec.loc !== "flip") return [{ level: "stop", name: "WRONG ZERO", text: `This is a flip-aligned copy: X/Y zero must be the one the flip alignment set on the reference bores. ${rec?.loc ? `Your last probe was on the ${cornerName(rec.loc).toUpperCase()}.` : "The controller has no record of it."} Line side B up again in the Start job wizard.` }];
+  }
   const WANT = cornerName(want).toUpperCase();
   if (!rec || !rec.loc) {
     return [{ level: "warn", name: "Zero", text: `This program needs zero on the ${WANT}. The controller has no record of a corner probe, so it cannot confirm that. Check it by eye before you run.` }];
