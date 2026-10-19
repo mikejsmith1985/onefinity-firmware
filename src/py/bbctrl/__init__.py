@@ -53,6 +53,7 @@ from bbctrl.State import State
 from bbctrl.Session import Session
 from bbctrl.Checkpoint import Checkpoint
 from bbctrl.Resume import Resume
+from bbctrl.DoOver import DoOver, DoOverError
 from bbctrl.Align import Align, AlignError
 from bbctrl import GCodeText, Lint
 from bbctrl.Comm import Comm
