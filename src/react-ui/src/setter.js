@@ -48,6 +48,7 @@ export function setterProgram(o) {
     "M5", // never probe with the spindle on (the controller refuses it too)
     "#<_ofs_ok> = 0",
     "#<_ofs_fail> = 0",
+    ...(o.token ? ["#<_ofs_done> = 0"] : []),
     `G90 G53 G0 Z${n(o.top)}`,
     `G53 G0 X${n(x)} Y${n(y)}`,
   ];
@@ -65,6 +66,8 @@ export function setterProgram(o) {
     "o301 endif",
     `G90 G53 G0 Z${n(o.top)}`);
   if (o.back) lines.push(`G53 G0 X${n(o.back.x)} Y${n(o.back.y)}`);
+  // 1.31.0: the wizard only counts a touch as done when this run's token is set at the end
+  if (o.token) lines.push("o302 if [#<_ofs_ok> EQ 1]", `#<_ofs_done> = ${o.token}`, "o302 endif");
   lines.push("G90", "M2");
   return lines.join("\n") + "\n";
 }
@@ -165,3 +168,49 @@ export function setterChecks(path, setter, state, toolD, metric = true) {
   if (!isFinite(near)) return [{ level: "ok", name: "Tool setter", text: `Every move stays at least ${len(SETTER_Z_MARGIN, metric)} above the tool setter's top.` }];
   return [{ level: "ok", name: "Tool setter", text: `The cutter stays ${len(Math.max(0, near - (toolD || 0) / 2), metric)} from the tool setter's center at the closest point${r.zChecked ? " below the setter's top" : ""}.` }];
 }
+
+// ---- frame-free setter touch (1.31.0, Start job wizard) ----
+// setterProgram() above reads the trip height from #5063 (reference) or sets it with G92 inside the
+// program. Both depend on which frame #5061 to #5063 are reported in, which is still open (1.29.0
+// release notes). This one doesn't read #5063 at all: it touches the setter like setterProgram, then
+// moves exactly 1 mm up (relative) and ends there. The machine Z the controller reports at that
+// point, less 1 mm, is the trip height in machine coordinates; the wizard works out the work Z from
+// it and the Z offset, and sets Z itself (touchResult). Then it lifts with setterLiftProgram.
+export function setterTouchProgram(o) {
+  const { x, y, z } = o.setter;
+  const start = Math.min(o.top, z + o.clear);
+  const descend = o.top - start;
+  const search = start - z + 25;
+  const lines = [
+    "(Tool setter: touch for the Start job wizard)",
+    "G21",
+    "M5",
+    "#<_ofs_ok> = 0",
+    "#<_ofs_fail> = 0",
+    "#<_ofs_done> = 0",
+    `G90 G53 G0 Z${n(o.top)}`,
+    `G53 G0 X${n(x)} Y${n(y)}`,
+  ];
+  if (descend > 0.01) {
+    lines.push(`G91 G38.3 Z${n(-descend)} F${o.travel}`,
+      "o310 if [#5070 EQ 1]", "#<_ofs_fail> = 1", "G90 G53 G0 Z" + n(o.top), "o310 endif");
+  }
+  lines.push("o311 if [#<_ofs_fail> EQ 0]",
+    `G91 G38.2 Z${n(-search)} F${o.fast}`,
+    "G91 G1 Z1",
+    `G91 G38.2 Z-2 F${o.slow}`,
+    `G91 G1 Z1 F${o.fast}`,
+    "#<_ofs_ok> = 1",
+    `#<_ofs_done> = ${o.token || 1}`,
+    "o311 endif",
+    "G90", "M2");
+  return lines.join("\n") + "\n";
+}
+
+export function setterLiftProgram(top, back) {
+  return `G21\nG90 G53 G0 Z${n(top)}\n${back ? `G53 G0 X${n(back.x)} Y${n(back.y)}\n` : ""}G90\nM2\n`;
+}
+
+// zp: machine Z reported after setterTouchProgram ended (1 mm above the trip), offZ: Z offset then.
+// Returns the trip height as a work Z (what setterProgram stores as the reference).
+export const touchTrip = (zp, offZ) => zp - 1 - offZ;
