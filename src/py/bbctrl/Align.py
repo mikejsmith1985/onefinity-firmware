@@ -49,7 +49,7 @@ def _split(line):
     return code, comments
 
 
-def transform(lines, angle_deg, source = '', max_angle = MAX_ANGLE):
+def transform(lines, angle_deg, source = '', max_angle = MAX_ANGLE, header = None):
     """Rotate every XY position (and arc centre offset) about X0 Y0.
 
     Returns (text, info).  Raises AlignError when the program can't be
@@ -200,9 +200,10 @@ def transform(lines, angle_deg, source = '', max_angle = MAX_ANGLE):
         out.append(line)
         moved += 1
 
-    header = ['(Aligned copy of %s, rotated %s degrees about X0 Y0)'
-              % (GCodeText.safe_comment(source or 'program'), fmt(angle_deg, 3)),
-              '(Set X/Y zero on the part\'s reference point before running)']
+    if header is None:
+        header = ['(Aligned copy of %s, rotated %s degrees about X0 Y0)'
+                  % (GCodeText.safe_comment(source or 'program'), fmt(angle_deg, 3)),
+                  '(Set X/Y zero on the part\'s reference point before running)']
     text = '\n'.join(header + out) + '\n'
     return text, {'angle': angle_deg, 'lines': moved}
 

@@ -543,6 +543,38 @@ class DoOverHandler(bbctrl.APIHandler):
             raise HTTPError(400, '%s', str(e))
 
 
+class WizardHandler(bbctrl.APIHandler):
+    # Start job wizard (1.31.0)
+    # plan:        the program's tool changes and the parts they make
+    # part:        write part N of a program with tool changes and load it
+    # flip_refs:   the reference bores on a side B program's setup sheet
+    # flip_solve:  fit the program onto the measured bore centres
+    # flip_build:  write flip-<file>, the copy turned to match
+    def put(self):
+        ctrl = self.get_ctrl()
+        q = self.json if isinstance(self.json, dict) else {}
+        action, filename = q.get('action'), q.get('file') or ''
+        try:
+            if action == 'plan':
+                self.write_json(bbctrl.JobPlan(ctrl).plan(filename))
+            elif action == 'part':
+                self.write_json(bbctrl.JobPlan(ctrl).part(filename, q.get('index')))
+            elif action == 'flip_refs':
+                self.write_json(bbctrl.Flip(ctrl).refs(filename))
+            elif action == 'flip_solve':
+                self.write_json(bbctrl.Flip(ctrl).solve(
+                    filename, q.get('measured') or [], q.get('opts')))
+            elif action == 'flip_build':
+                self.write_json(bbctrl.Flip(ctrl).build(
+                    filename, q.get('measured') or [], q.get('opts')))
+            else: raise HTTPError(400, 'Unknown action')
+        except Exception as e:
+            if isinstance(e, HTTPError): raise
+            if not isinstance(e, (bbctrl.JobPlanError, bbctrl.FlipError)):
+                ctrl.log.get('Web').exception('Start job wizard failed')
+            raise HTTPError(400, '%s', str(e))
+
+
 class EStopHandler(bbctrl.APIHandler):
     def put_ok(self): self.get_ctrl().mach.estop()
 
@@ -1118,6 +1150,7 @@ class Web(tornado.web.Application):
             (r'/api/ui/([a-z0-9._-]+)', SessionHandler),
             (r'/api/next-resume', ResumeHandler),
             (r'/api/next-doover', DoOverHandler),
+            (r'/api/next-wizard', WizardHandler),
             (r'/api/next-align', AlignHandler),
             (r'/api/camera', CameraHandler),
             (r'/api/log', LogHandler),
