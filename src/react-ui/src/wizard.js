@@ -1,3 +1,4 @@
+import { marker, STEP_RESET } from "./progress.js";
 // Start job wizard (1.31.0): the steps of a job, worked out from the program's setup sheet, its tool
 // changes and its reference bores. Pure functions so they can be tested without a browser.
 
@@ -47,14 +48,17 @@ export function stockCenter(origin, w, l) {
 export function overStockProgram({ last, top, above = 10, travel = 1000, token }) {
   const target = last.ztop + above;
   const down = top - target;
+  const mark = marker();
   const lines = [
     "(Start job wizard: over the stock)",
     "G21", "M5",
-    "#<_ofw_fail> = 0", "#<_ofw_done> = 0",
+    "#<_ofw_fail> = 0", "#<_ofw_done> = 0", STEP_RESET,
+    mark("Go up to travel height"),
     `G90 G53 G0 Z${n(top)}`,
+    mark("Move over the stock"),
     `G53 G0 X${n(last.x)} Y${n(last.y)}`,
   ];
-  if (down > 0.01) lines.push(`G91 G38.3 Z${n(-down)} F${travel}`, "o600 if [#5070 EQ 1]", "#<_ofw_fail> = 1", "G91 G0 Z5", "o600 endif");
+  if (down > 0.01) lines.push(mark("Go down over the stock, guarded"), `G91 G38.3 Z${n(-down)} F${travel}`, "o600 if [#5070 EQ 1]", "#<_ofw_fail> = 1", "G91 G0 Z5", "o600 endif");
   lines.push("o601 if [#<_ofw_fail> EQ 0]", `#<_ofw_done> = ${token || 1}`, "o601 endif", "G90", "M2");
   return lines.join("\n") + "\n";
 }

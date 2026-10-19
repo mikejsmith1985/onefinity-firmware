@@ -63,12 +63,16 @@ class State:
                      'metric': True, 'xp': 0.0, 'yp': 0.0, 'zp': 0.0}
         self.listeners = []
         self.messages = []
+        self.history = []   # every set(), in order
     def add_listener(self, cb): self.listeners.append(cb)
     def reset(self): pass
     def get(self, name, default = None): return self.vars.get(name, default)
     def has(self, name): return name in self.vars
-    def set(self, name, value): self.vars[name] = value
+    def set(self, name, value):
+        self.vars[name] = value
+        self.history.append((name, value))
     def update(self, update):
+        self.history.append(('update', dict(update)))
         for k, v in update.items(): self.vars[k] = v
         for cb in list(self.listeners): cb(update)
     def get_position(self):

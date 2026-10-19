@@ -203,4 +203,19 @@ h.run_program('G21\nG91 G38.3 Z-5 F300\nG91 G38.2 X5 F75\n#<_n> = 2\nM2\n', star
 check('dry run with probing moves runs to the end', s.vars.get('_n') == 2 and
       abs(s.P[2] - (TOP - 5)) < 1e-4 and abs(s.P[0] - (CX + 205)) < 1e-4, s.P)
 
+
+# 9. The progress marks (1.31.1) arrive in order while the program runs: the Probe dialog shows them
+import subprocess, json
+GEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'react-ui', 'test', 'gen.mjs')
+cfg = {'probe': {'probe-xdim': 53.975, 'probe-ydim': 53.975, 'probe-zdim': 15.07, 'probe-slow-seek': 25, 'probe-fast-seek': 75}}
+prog = subprocess.run(['node', GEN, 'probe.js', 'probeProgram', json.dumps(
+    {'config': cfg, 'type': 'xyz', 'loc': 'front-left', 'dia': {'mm': 6.35}, 'token': 77})],
+    stdout = subprocess.PIPE, universal_newlines = True, check = True).stdout
+s = machine(); h = SH.Harness(s)
+h.run_program(prog)
+steps = [v for k, v in h.ctrl.state.history if k == 'of_step']
+check('progress marks 0..8 arrive in order during the run', steps == list(range(9)), steps)
+check('with the marks the program still sets zero and the token',
+      h.ctrl.state.get('ofprobe_done') == 77 and abs(s.off[0] - CX) < 0.01, s.off)
+
 done()

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { NumInput, Modal, SharedText } from "./ui.jsx";
 import { ME, useUi, useDriver, uiGet, uiCas, uiUpdate, uiPatch, uiClose } from "./shared.js";
 import { api } from "./controller.js";
@@ -8,11 +8,14 @@ import { readSetup } from "./setup.js";
 import { probeActive, setterProgram, refStatus, probeRefValue } from "./setter.js";
 import { getSetter, saveSetter, setterArgs } from "./ToolSetter.jsx";
 import { MEASURE_DEFAULTS, FAILS, ORIGINS_XY, ORIGINS_X, checkOpts, measureProgram, calibratedBall } from "./measure.js";
+import { programMoves, moveStatus } from "./progress.js";
+import { StepRail, StepBody, RunProgress, Outcome, useRunStep } from "./steps.jsx";
+import { CheckArt, MeasureArt, SetterArt } from "./art.jsx";
 
 // Measure stock with a 3D touch probe: finds the top and the real edges,
 // reports the size and sets the work zero.  See measure.js for the program.
 
-const STEPS = { setup: "Setup", check: "Check probe", place: "Position", run: "Measuring", setter: "Tool setter", done: "Result" };
+const STEPS = { setup: "Setup", check: "Check probe", place: "Position", run: "Measure", setter: "Tool setter", done: "Done" };
 const CORNERS = new Set(["center", "front-left", "front-right", "back-left", "back-right"]);
 
 export default function MeasureStock({ config, state, send, subscribe, metric, onClose, openId }) {
@@ -99,7 +102,7 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
   // Only the screen whose Measure the controller accepted first sends the program.
   const start = async () => {
     const o = opts, base = p;
-    const r = await uiUpdate("measure", (d) => (d && d.id === openId && d.step === "place" ? { ...d, step: "run", phase: "measure", started: false, driver: ME } : undefined)).catch(() => ({ ok: false }));
+    const r = await uiUpdate("measure", (d) => (d && d.id === openId && d.step === "place" ? { ...d, step: "run", phase: "measure", started: false, driver: ME, runAt: Date.now() } : undefined)).catch(() => ({ ok: false }));
     if (!r.ok) return;
     R.current.failed = false;
     setPrefs({ measure: { ...base, w: calib ? base.w : o.w, l: o.l || base.l } });
@@ -107,13 +110,14 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
   };
 
   const finish = async () => {
+    const at = R.current.runStep; // the move it was in, before the step changes
     // Claim the finish so it runs once, on this screen.
     const r = await uiUpdate("measure", (d) => (d && d.id === openId && d.step === "run" && d.driver === ME ? { ...d, step: "finishing" } : undefined)).catch(() => ({ ok: false }));
     if (!r.ok) return;
     const s = R.current.state;
     const failed = R.current.failed || s.xx === "ESTOPPED";
     const ok = s.ofm_ok === 1 && !failed;
-    const res = { ok, fail: failed ? "edge" : s.ofm_fail, w: s.ofm_w, l: s.ofm_l };
+    const res = { ok, fail: failed ? "edge" : s.ofm_fail, w: s.ofm_w, l: s.ofm_l, at: ok ? null : at ?? null };
     if (ok && calib) {
       res.ball = calibratedBall(s.ofm_rxa, s.ofm_rxb, opts.w);
       res.ballOk = res.ball > 0.3 && res.ball < 10;
@@ -124,7 +128,7 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
     if (ok && !calib && setterOn) {
       // Reference the tool setter with the probe while its Z zero is fresh
       R.current.failed = false;
-      await patch({ result: res, step: "setter", phase: "setter", started: false });
+      await patch({ result: res, step: "setter", phase: "setter", started: false, runAt: Date.now() });
       send(setterProgram(setterArgs(s, config, setter, "ref")));
       return;
     }
@@ -181,23 +185,35 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
     </label>
   );
 
+  // The moves of the program on screen (its progress marks, see progress.js), and the one running now
+  const planMoves = useMemo(() => {
+    try { return opts && !errs.length ? programMoves(measureProgram(opts)) : []; } catch { return []; }
+  }, [JSON.stringify(opts), errs.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setterMoves = useMemo(() => {
+    try { return setter && typeof setter.x === "number" && config ? programMoves(setterProgram(setterArgs(state, config, setter, "ref"))) : []; } catch { return []; }
+  }, [setter, !!config]); // eslint-disable-line react-hooks/exhaustive-deps
+  const running = step === "run" || step === "setter";
+  const runStep = useRunStep(state.of_step, running && D?.runAt ? `${step}:${D.runAt}` : null);
+  R.current.runStep = runStep;
+  const runMoves = step === "setter" ? setterMoves : planMoves;
+  const cur = runStep === null ? -1 : moveStatus(runMoves, runStep).cur;
+
   if (!D) return null;
+  const stopAt = result && !result.ok && result.at ? moveStatus(planMoves, result.at) : null;
   return (
     <Modal title={calib ? "Calibrate the stylus" : "Measure stock"} wide dismissable={false} onClose={stop}
       actions={<>
-        {step !== "done" && <button onClick={stop}>Cancel</button>}
+        {step !== "done" && <button className={running || step === "finishing" ? "danger" : ""} onClick={stop}>{running || step === "finishing" ? "Stop" : "Cancel"}</button>}
         {step === "setup" && <button className="primary" data-autofocus disabled={!p || errs.length > 0} onClick={() => setStep("check")}>Next</button>}
-        {step === "place" && <button className="primary" data-autofocus disabled={touched} onClick={start}>{calib ? "Measure the block" : "Measure"}</button>}
+        {step === "place" && <button className="primary" data-autofocus disabled={touched} onClick={start}>{calib ? "Measure the block" : "Start measuring"}</button>}
+        {(running || step === "finishing") && <button className="primary" disabled>Measuring…</button>}
         {step === "done" && result?.ok && calib && result.ballOk && <button className="primary" data-autofocus onClick={saveBall}>Save {show(result.ball)} {unit}</button>}
         {step === "done" && <button className={result?.ok && !calib ? "primary" : ""} onClick={done}>Done</button>}
       </>}>
       <div className="probe">
-        <ol className="probe-steps" aria-label="Steps">
-          <li className="count">Step {list.indexOf(step === "finishing" ? "run" : step) + 1} of {list.length}</li>
-          {list.map((s) => <li key={s} className={s === (step === "finishing" ? "run" : step) ? "active" : ""}>{STEPS[s]}</li>)}
-        </ol>
+        <StepRail steps={list} labels={STEPS} current={step === "finishing" ? "run" : step} />
         <div className="probe-main">
-          {step === "setup" && p && (calib ? <>
+          {step === "setup" && p && <StepBody title={calib ? "Calibrate the stylus ball" : "What to measure"} art={<MeasureArt moves={planMoves} probeY={!!opts?.probeY} />}>{calib ? <>
             <p>Clamp a block you know the exact width of (a 1-2-3 block, a gauge block, or a part you measured with calipers) with its ends free. The machine touches both ends and works out the effective size of the stylus ball. Work zero is not changed.</p>
             <div className="stack">
               <label className="stack">Exact X width of the block ({unit})
@@ -229,18 +245,19 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
               {num("margin", `Drop distance outside the edge (${unit})`, "How far off the typed size can be.")}
               {num("travel", "Travel speed (mm/min)", "Guarded moves stop on any touch.")}
             </div>}
-          </>)}
-          {step === "setup" && errs.length > 0 && p && <ul className="plain err">{errs.map((e) => <li key={e}>{e}</li>)}</ul>}
+          </>}
+          {errs.length > 0 && <ul className="plain err">{errs.map((e) => <li key={e}>{e}</li>)}</ul>}
+          </StepBody>}
 
-          {step === "check" && <>
+          {step === "check" && <StepBody title="Check the probe" art={<CheckArt probe />}>
             <p>Put the 3D probe in the collet and plug it in.</p>
             <p><b>Push the stylus sideways with your finger.</b> This step moves on by itself when the controller sees the touch.</p>
             <div className="indet" />
             {touched && !seenOpen ? <p className="err">The probe input already reads as touched. With normally-closed wiring that means the loop is open: plug the probe in (and the setter), or fit the shorting plug.</p>
               : <p className="dim">Nothing happening? Check the probe cable, and that the probe input type under I/O matches your probe (normally open or normally closed).</p>}
-          </>}
+          </StepBody>}
 
-          {step === "place" && <>
+          {step === "place" && <StepBody title="Position the stylus" art={<MeasureArt moves={planMoves} probeY={!!opts?.probeY} />}>
             <p>Jog the stylus over the <b>middle</b> of the {calib ? "block" : "stock"}, about 3 to 15 {metric ? "mm" : "mm (⅛ to ½ in)"} above the top. It doesn't need to be exact.</p>
             <div className="probe-jog">
               <div className="radios inline">Step: {[10, 1].map((v) => <label key={v}><input type="radio" name="mjs" checked={jogStep === v} onChange={() => setJogStep(v)} /> {v} {unit}</label>)}</div>
@@ -250,31 +267,33 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
                 <span /><button onClick={() => jog("Y", -1)}>Y− (front)</button><span /><button onClick={() => jog("Z", -1)}>Z− (down)</button>
               </div>
             </div>
-            <div className="why"><b>What happens next</b><p>The stylus touches the top, lifts {show(opts.clear, 0)} {unit}, then drops {show(opts.margin, 0)} {unit} outside each {calib || !opts.probeY ? "end" : "edge"} and touches it {show(opts.depth, 0)} {unit} below the top. Any unexpected touch stops it.</p></div>
-          </>}
+            <div className="why"><b>What happens next</b><p>The stylus touches the top, lifts {show(opts.clear, 0)} {unit}, then drops {show(opts.margin, 0)} {unit} outside each {calib || !opts.probeY ? "end" : "edge"} and touches it {show(opts.depth, 0)} {unit} below the top. Any unexpected touch stops it. Keep a hand near the E-stop.</p></div>
+          </StepBody>}
 
-          {step === "setter" && <><p>Touching the tool setter with the probe…</p><div className="indet" /></>}
-          {(step === "run" || step === "finishing") && <><p>Measuring…</p><div className="indet" /><p className="dim">Cancel stops the machine.</p></>}
+          {step === "setter" && <StepBody title="Touching the tool setter" art={<SetterArt moves={setterMoves} cur={cur} probe />}>
+            <RunProgress title="Tool setter reference" moves={setterMoves} step={runStep} started={!!D.started} />
+          </StepBody>}
+          {(step === "run" || step === "finishing") && <StepBody title={calib ? "Measuring the block" : "Measuring"} art={<MeasureArt moves={planMoves} cur={step === "finishing" ? planMoves.length : cur} probeY={!!opts?.probeY} />}>
+            <RunProgress title={calib ? "Measuring the block" : "Measuring the stock"} moves={planMoves} step={step === "finishing" ? null : runStep} started={!!D.started} />
+          </StepBody>}
 
-          {step === "done" && result && (result.ok ? (calib ? <>
-            <h3>Stylus ball: {show(result.ball)} {unit}</h3>
+          {step === "done" && result && <StepBody art={<MeasureArt moves={planMoves} cur={result.ok ? planMoves.length : stopAt ? stopAt.cur : -1} probeY={!!opts?.probeY} />}>{result.ok ? (calib ? <Outcome ok title={`Stylus ball: ${show(result.ball)} ${unit}`}>
             {result.ballOk ? <p>Save it to use it for every measurement from now on. Run this again if you change the stylus.</p>
               : <p className="err">That isn't a believable stylus size. Check the width you typed and that the block's ends are square, then try again.</p>}
-          </> : <>
-            <h3>{show(result.w)}{opts.probeY ? ` × ${show(result.l)}` : ""} {unit}</h3>
+          </Outcome> : <Outcome ok title={`Measured ${show(result.w)}${opts.probeY ? ` × ${show(result.l)}` : ""} ${unit}`}>
             <p>Measured {opts.probeY ? "X × Y" : "X length"}{Number.isFinite(opts.w) ? ` (you typed ${show(opts.w, 2)}${opts.probeY ? ` × ${show(opts.l, 2)}` : ""})` : ""}.</p>
             <p>Zero is set: Z on the top, {origins.find(([v]) => v === opts.origin)?.[1].replace(/ \(.*\)$/, "").toLowerCase()} for {opts.probeY ? "X and Y" : "X (Y not changed)"}. The stylus is parked over it.</p>
             {result.setter === "ok" ? <div className="why"><b>Next: take the probe out</b><p>Put your cutter in, open <b>Tool setter</b> and press <b>Measure tool</b>. Z zero follows the cutter; X and Y stay as measured.</p></div>
               : result.setter ? <div className="why bad"><b>The tool setter reference didn't work</b><p>{result.setter === "notfound" ? "The probe didn't reach the setter and the controller stopped with an E-stop. Check the setter position and cable." : "The setter routine stopped early."} The stock measurement and zero are fine. Put your cutter in and use Probe Z, or fix the setter and take a reference from the Tool setter screen.</p></div>
               : <div className="why"><b>Next: take the probe out</b><p>Put your cutter in and run <b>Probe Z</b>. X and Y stay as measured.</p></div>}
-          </>) : <>
-            <h3>Stopped</h3>
+          </Outcome>) : <Outcome ok={false} title="Measuring stopped">
             {result.fail === "edge" ? <>
               <p>An edge wasn't where it should be, so the controller stopped with an emergency stop. The stock may be smaller than the size you typed, or the touch depth is deeper than the stock is thick.</p>
               <p>Clear the E-stop, then try again.</p>
             </> : <p>{FAILS[result.fail] || "The measurement didn't finish."}</p>}
+            {stopAt && stopAt.cur >= 0 && <p className="dim">Stopped during move {stopAt.cur + 1} of {stopAt.of}: {stopAt.label}.</p>}
             <p className="dim">Work zero was not changed.</p>
-          </>)}
+          </Outcome>}</StepBody>}
         </div>
       </div>
     </Modal>

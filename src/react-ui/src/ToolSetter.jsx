@@ -1,10 +1,13 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { NumInput, Modal } from "./ui.jsx";
 import { ME, useUi, useDriver, uiGet, uiCas, uiUpdate, uiPatch, uiClose } from "./shared.js";
 import { api } from "./controller.js";
 import { computeAxis } from "./axis.js";
 import { getPrefs, setPrefs } from "./checkpoint.js";
 import { SETTER_DEFAULTS, SETTER_FAILS, CORR_MAX, setterProgram, refStatus, probeActive, probeCorrection } from "./setter.js";
+import { programMoves, moveStatus } from "./progress.js";
+import { RunProgress, Outcome, useRunStep, StepBody } from "./steps.jsx";
+import { SetterArt } from "./art.jsx";
 
 // Tool setter screen: save where the setter is, take the reference with a
 // tool whose Z zero is right, and measure each new tool so Z stays right.
@@ -89,6 +92,12 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
   const corr = s?.corr;
 
   const update = (fn) => setS((x) => { const n = fn({ ...x }); saveSetter(n); return n; });
+  // The running program's moves (progress marks, see progress.js) and the one running now (1.31.1)
+  const moves = useMemo(() => {
+    if (!busy || !s || typeof s.x !== "number" || !config) return [];
+    try { return programMoves(setterProgram(setterArgs(state, config, s, busy === "calib" ? "ref" : busy, s.ref?.ref))); } catch { return []; }
+  }, [busy, s, !!config]); // eslint-disable-line react-hooks/exhaustive-deps
+  const runStep = useRunStep(state.of_step, busy && D?.runAt ? `${busy}:${D.runAt}` : null);
 
   const saveLocation = () => {
     update((x) => ({ ...x, x: state.xp, y: state.yp, z: state.zp, ref: null, lastProbe: null }));
@@ -97,7 +106,7 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
 
   const go = async (mode) => {
     // Only one screen runs it: the one whose press the controller accepted first.
-    const r = await uiUpdate("setter", (d) => (d && d.id === openId && !d.busy ? { ...d, busy: mode, msg: null, driver: ME } : undefined)).catch(() => ({ ok: false }));
+    const r = await uiUpdate("setter", (d) => (d && d.id === openId && !d.busy ? { ...d, busy: mode, msg: null, driver: ME, runAt: Date.now() } : undefined)).catch(() => ({ ok: false }));
     if (!r.ok) return;
     local.current = true;
     const res = await run(setterProgram(setterArgs(state, config, s, mode === "calib" ? "ref" : mode, s.ref?.ref)));
@@ -133,7 +142,12 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
 
   return (
     <Modal title="Tool setter" wide onClose={close} actions={<button data-autofocus onClick={close}>Close</button>}>
-      {!s ? <p>Loading…</p> : <div className="setter">
+      {!s ? <p>Loading…</p> : busy ? <div className="setter"><StepBody title={busy === "tool" ? "Measuring the tool" : busy === "calib" ? "Calibrating with this cutter" : "Taking the reference"}
+          art={<SetterArt moves={moves} cur={runStep === null ? -1 : moveStatus(moves, runStep).cur} />}>
+          <RunProgress title="Tool setter" moves={moves} step={runStep} started={state.cycle !== "idle"} />
+          <p><button className="danger" onClick={() => api.put("stop").catch(() => {})}>Stop</button></p>
+        </StepBody></div> : <div className="setter">
+        {msg && <Outcome ok={msg.ok} title={msg.ok ? "Done" : "Stopped"}><p>{msg.text}</p></Outcome>}
         <p className={ref.ok ? "" : "dim"}>{status}</p>
 
         <div className="setter-actions">
@@ -170,7 +184,6 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
 
         {touched && <p className="err">The probe input reads as touched. With normally-closed wiring that also means a probe or setter is unplugged: plug it in, or fit the shorting plug.</p>}
         {!homed && <p className="err">Home the machine first. The setter position is in machine coordinates.</p>}
-        {msg && <div className={msg.ok ? "why" : "why bad"}><b>{msg.ok ? "Done" : "Stopped"}</b><p>{msg.text}</p></div>}
 
         <button className="quiet" onClick={() => setAdv((a) => !a)}>{adv ? "Hide" : "Show"} details</button>
         {adv && <div className="measure-grid">

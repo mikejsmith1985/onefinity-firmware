@@ -36,7 +36,8 @@ await B.p.evaluate((s) => new Promise((r) => { if (s.readyState === 1) r(); else
 await B.p.evaluate((s) => s.send("mock:touch"), ws);
 check("contact moves both screens to Place probe block", await until(async () => (await visible(A.p, "Place the probe block face down")) && (await visible(B.p, "Place the probe block face down"))));
 // Next pressed on both screens at the same moment: one probe only
-await Promise.all([A.p.getByRole("button", { name: "Next" }).click(), B.p.getByRole("button", { name: "Next" }).click()]);
+// (a press that loses the race finds its button gone with the step: it must not land on a later step)
+await Promise.all([A.p.getByRole("button", { name: "Start probing" }).click({ timeout: 4000 }).catch(() => {}), B.p.getByRole("button", { name: "Start probing" }).click({ timeout: 4000 }).catch(() => {})]);
 await until(async () => (await mdis()).length > before, 3000);
 await sleep(1500);
 check("simultaneous Next sends the probe once", (await mdis()).length - before === 1, `sent ${(await mdis()).length - before}`);
@@ -67,7 +68,7 @@ check("second probe dialog on B", await until(() => visible(B.p, "Probing Z")));
 await A.p.evaluate(() => { const s = new WebSocket(`ws://${location.host}/websocket`); s.onopen = () => s.send("mock:touch"); });
 await until(() => visible(A.p, "Place the probe block face down"));
 const n0 = (await mdis()).length;
-await A.p.getByRole("button", { name: "Next" }).click(); // A sends the probe and drives the dialog
+await A.p.getByRole("button", { name: "Start probing" }).click(); // A sends the probe and drives the dialog
 await until(async () => (await mdis()).length > n0, 3000);
 await A.c.close();                                          // the PC goes away while probing
 check("B takes over and reaches Done", await until(() => visible(B.p, "put away the probe"), 20000));
@@ -113,7 +114,7 @@ check("checklist on B", await until(() => visible(B.p, "Ready to run?") .then(as
 check("checklist on phone", await until(async () => (await visible(C.p, "Ready to run?")) || (await visible(C.p, "Do not run yet"))));
 const runBtn = (p) => p.locator(".modal, [role=dialog]").getByRole("button", { name: /^Run/ }).first();
 const stopBanner = await visible(B.p, "Do not run yet");
-if (stopBanner) { await B.p.getByLabel(/I know this is wrong/).check(); await until(async () => !(await runBtn(C.p).isDisabled())); }
+if (stopBanner) { console.log("INFO checklist stop:", (await B.p.locator(".modal").innerText()).replace(/\n/g, " / ").slice(0, 400)); await B.p.getByLabel(/I know this is wrong/).click(); await until(async () => !(await runBtn(C.p).isDisabled())); }
 await Promise.all([runBtn(B.p).click(), runBtn(C.p).click()]);
 await sleep(1500);
 check("job started exactly once", (await api("/api/starts")) - s0 === 1, `starts ${(await api("/api/starts")) - s0}`);

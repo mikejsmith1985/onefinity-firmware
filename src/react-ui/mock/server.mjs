@@ -145,9 +145,17 @@ if (WIZ && process.env.MOCK_PROGRAM) {
   const f = path_.basename(process.env.MOCK_PROGRAM);
   state.files = [...state.files, f].sort(); state.selected = f; state.non_macros_list = state.files;
 }
+// The program's progress marks (#<_of_step> = N, 1.31.1), reported one after the other over ms
+// MOCK_SLOW=k stretches the measure / setter runs k times (for screenshots taken mid-run)
+const SLOW = +(process.env.MOCK_SLOW || 1);
+function playMarks(text, ms) {
+  const n = [...text.matchAll(/^#<_of_step> = (\d+) \(/gm)].map((m) => +m[1]);
+  broadcast({ of_step: 0 });
+  n.forEach((v, i) => setTimeout(() => broadcast({ of_step: v }), ((i + 0.5) * ms) / Math.max(1, n.length)));
+}
 function wizProgram(text) {
   const tok = (v) => tokOf(text, v);
-  const end = (d, ms = 600) => { broadcast({ xx: "RUNNING", cycle: "mdi" }); setTimeout(() => { broadcast(d); broadcast({ xx: "READY", cycle: "idle" }); }, ms); };
+  const end = (d, ms = 600) => { broadcast({ xx: "RUNNING", cycle: "mdi" }); playMarks(text, ms); setTimeout(() => { broadcast(d); broadcast({ xx: "READY", cycle: "idle" }); }, ms); };
   const bore = /^\(Bore centre (\S+)\)/.exec(text);
   if (bore) {
     const t = boreTruth()[bore[1]];
@@ -175,6 +183,31 @@ function mdi(text) {
   // Probing (Probe XYZ / Z): run for a second, then set an offset
   if (/G38\.2/.test(text) && !text.includes("#<_ofm_ok>") && !text.includes("#<_ofs_ok>")) {
     broadcast({ xx: "RUNNING", cycle: "mdi" });
+    // 1.31.1: the program runs through the controller's own planner code (mock/probe.py, see
+    // src/py/tests/seekharness.py) on a touch plate placed under the bit, and the state updates it
+    // produces (the move being run, positions, the done token, the new zero) are played back. A
+    // probing move that nobody restarts leaves it RUNNING for ever, as on the machine.
+    if (!process.env.MOCK_PROBE_FAIL && !probeStop && !process.env.MOCK_PROBE_SIMPLE) {
+      const r = spawnSync("python3", [path_.join(path_.dirname(fileURLToPath(import.meta.url)), "probe.py")],
+        { input: JSON.stringify({ program: text, xp: state.xp, yp: state.yp, zp: state.zp }), encoding: "utf8" });
+      let frames = null;
+      try { frames = JSON.parse(r.stdout); } catch { console.error("mock probe.py:", r.stderr); }
+      if (frames) {
+        const gap = process.env.MOCK_PROBE_MS ? +process.env.MOCK_PROBE_MS : process.env.MOCK_RUN_FAST ? 60 : 250;
+        // MOCK_PROBE_FAIL_AT=N: the touch at move N finds nothing (E-stop "Switch not found"), for the failure page
+        const failAt = +(process.env.MOCK_PROBE_FAIL_AT || 0);
+        if (failAt) { const k = frames.findIndex((f) => f.of_step >= failAt); if (k >= 0) frames = [...frames.slice(0, k + 1), { estop: 1 }]; }
+        const last = frames[frames.length - 1] || {};
+        if (last.hang) console.error("mock: probe program stalled:", last.hang);
+        frames.forEach((f, i) => setTimeout(() => {
+          const { end, hang, estop, ...d } = f;
+          if (hang) return; // stays RUNNING
+          if (estop) { broadcast({ xx: "ESTOPPED", cycle: "idle", er: "Switch not found" }); return; }
+          broadcast(end ? { ...d, xx: "READY", cycle: "idle" } : d);
+        }, 300 + i * gap));
+        return;
+      }
+    }
     setTimeout(() => {
       if (process.env.MOCK_PROBE_FAIL) { broadcast({ xx: "ESTOPPED", cycle: "idle", er: "Switch not found" }); return; }
       // The program sets #<_ofprobe_done> to its token just before M2 (1.29.0). A stopped one does not.
@@ -193,21 +226,23 @@ function mdi(text) {
   if (text.includes("#<_ofs_ok>")) {
     const ref = text.includes("#<_ofs_ref> = #5063");
     broadcast({ xx: "RUNNING", cycle: "running", ofs_ok: 0, ofs_fail: 0 });
+    playMarks(text, 1200 * SLOW);
     setTimeout(() => {
       if (process.env.MOCK_SETTER_FAIL) broadcast({ ofs_fail: 1 });
       else broadcast(ref ? { ofs_ref: -15.2, ofs_ok: 1 } : { ofs_ok: 1, offset_z: (state.offset_z || 0) + 12.7 });
       broadcast({ xx: "READY", cycle: "idle" });
-    }, 1200);
+    }, 1200 * SLOW);
     return;
   }
   if (text.includes("#<_ofm_ok>")) {
     const cal = /calibration/.test(text), y = text.includes("_ofm_l> = [");
     broadcast({ xx: "RUNNING", cycle: "running", ofm_ok: 0, ofm_fail: 0 });
+    playMarks(text, 1500 * SLOW);
     setTimeout(() => {
       if (process.env.MOCK_MEASURE_FAIL) broadcast({ ofm_fail: +process.env.MOCK_MEASURE_FAIL });
       else broadcast({ ofm_w: cal ? 52.5 : 101.237, ofm_l: y ? 60.412 : 0, ofm_rxa: 10, ofm_rxb: cal ? 62.5 : 111.237, ofm_ok: 1, ofm_done: tokOf(text, "ofm_done"), offset_x: 160.2, offset_y: y ? 88.1 : state.offset_y, offset_z: -42.3 });
       broadcast({ xx: "READY", cycle: "idle" });
-    }, 1500);
+    }, 1500 * SLOW);
     return;
   }
   const m = /G0\s+(.*)/i.exec(text);
