@@ -10,6 +10,7 @@ import Workspace from "./Workspace.jsx";
 import ProbeDialog from "./ProbeDialog.jsx";
 import MeasureStock from "./MeasureStock.jsx";
 import ToolSetter from "./ToolSetter.jsx";
+import JobWizard from "./JobWizard.jsx";
 import { axisEnabled, computeAxis } from "./axis.js";
 import { Modal } from "./ui.jsx";
 import { useUi, uiOpen, uiClose, uiSet, ME } from "./shared.js";
@@ -61,6 +62,7 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
     if (homeFirst && homed && mach !== "HOMING") { setHomeFirst(null); setProbe(homeFirst); }
   }, [homeFirst, homed, mach]);
   const homing = mach === "HOMING";
+  const wizard = useUi(state, "wizard").v;
 
   return (
     <>
@@ -96,6 +98,9 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
       )}
       {probe && probe !== "measure" && probe !== "setter" && cfg.config && (
         <ProbeDialog openId={openId} type={probe} config={cfg.config} state={state} send={send} subscribe={subscribe} rotary={rotary} metric={metric} onClose={() => setProbe(null)} />
+      )}
+      {wizard && cfg.config && (
+        <JobWizard config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} mach={mach} />
       )}
     </main>
     </>

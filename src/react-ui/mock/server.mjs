@@ -103,7 +103,7 @@ function run(dryLift = 0) {
     }
     broadcast({ xp: pts[i * 3], yp: pts[i * 3 + 1], zp: pts[i * 3 + 2], line: i + 1, plan_time: i * 4 });
     i++;
-  }, 400);
+  }, process.env.MOCK_RUN_FAST ? 25 : 400);
 }
 const mdiLog = [];
 let probeStop = false;
@@ -120,8 +120,58 @@ function uiPut(name, body) {
   return { ok: true, v: body.v ?? null, rev: n };
 }
 const storeChanged = (name) => broadcast({ store_rev: { ...state.store_rev, [name]: (state.store_rev[name] || 0) + 1 } });
+// ---- Start job wizard (1.31.0) ----
+// MOCK_WIZARD=1 MOCK_PROGRAM=test/fixtures/sideb-job.nc: the side B stock sits turned MOCK_FLIP_DEG
+// (default 0.8) about the corner the mock's Measure stock sets, shifted 0.3, -0.2 mm. The bore program
+// lands on the true centre if one of its search spots is inside the bore.
+const WIZ = !!process.env.MOCK_WIZARD;
+const tokOf = (text, v) => [...text.matchAll(new RegExp(`#<_${v}>\\s*=\\s*(\\d+)`, "g"))].map((m) => +m[1]).filter(Boolean).pop() ?? 0;
+let wizRefs = null, wizTruth = null, toolLen = 0;
+const wizPy = (q) => {
+  const py = spawnSync("python3", [path_.join(path_.dirname(fileURLToPath(import.meta.url)), "wizard.py")], { input: JSON.stringify(q), encoding: "utf8" });
+  try { return JSON.parse(py.stdout); } catch { return { err: `mock wizard.py failed: ${py.stderr}` }; }
+};
+const progText = (f) => made[f] || (process.env.MOCK_PROGRAM ? fs.readFileSync(process.env.MOCK_PROGRAM, "utf8") : MOCK_TEXT);
+function boreTruth() {
+  if (!wizTruth) {
+    const src = path_.basename(process.env.MOCK_PROGRAM || "x.nc");
+    wizRefs = wizPy({ action: "flip_refs", file: src, text: progText(src) }).ok?.refs || [];
+    const a = (+(process.env.MOCK_FLIP_DEG ?? 0.8) * Math.PI) / 180, c = Math.cos(a), sn = Math.sin(a);
+    wizTruth = Object.fromEntries(wizRefs.map((r) => [r.name, { x: state.offset_x + 0.3 + r.x * c - r.y * sn, y: state.offset_y - 0.2 + r.x * sn + r.y * c, d: r.d }]));
+  }
+  return wizTruth;
+}
+if (WIZ && process.env.MOCK_PROGRAM) {
+  const f = path_.basename(process.env.MOCK_PROGRAM);
+  state.files = [...state.files, f].sort(); state.selected = f; state.non_macros_list = state.files;
+}
+function wizProgram(text) {
+  const tok = (v) => tokOf(text, v);
+  const end = (d, ms = 600) => { broadcast({ xx: "RUNNING", cycle: "mdi" }); setTimeout(() => { broadcast(d); broadcast({ xx: "READY", cycle: "idle" }); }, ms); };
+  const bore = /^\(Bore centre (\S+)\)/.exec(text);
+  if (bore) {
+    const t = boreTruth()[bore[1]];
+    const ball = 2; // what the test saves as the stylus size
+    const spots = [...text.matchAll(/^G38\.3 X(-?[\d.]+) Y(-?[\d.]+)/gm)].map((m) => ({ x: +m[1] + state.offset_x, y: +m[2] + state.offset_y }));
+    if (!spots.length) spots.push({ x: state.xp, y: state.yp });
+    const inside = t && spots.some((p) => Math.hypot(p.x - t.x, p.y - t.y) < t.d / 2 - ball / 2 - 0.2);
+    broadcast({ ofb_ok: 0, ofb_fail: 0, ofb_done: 0 });
+    if (!inside) return end({ ofb_fail: 2, ofb_in: 0 }), true;
+    return end({ xp: +t.x.toFixed(4), yp: +t.y.toFixed(4), ofb_dx: t.d + 0.004, ofb_dy: t.d - 0.003, ofb_sx: 0.002, ofb_sy: -0.001, ofb_in: 1, ofb_ok: 1, ofb_done: tok("ofb_done") }), true;
+  }
+  if (text.startsWith("(Tool setter: touch for the Start job wizard)")) {
+    // the setter trips at machine Z -71 for the probe; a cutter toolLen mm longer trips higher
+    broadcast({ ofs_ok: 0, ofs_fail: 0, ofs_done: 0 });
+    return end({ zp: -71 + toolLen + 1, ofs_ok: 1, ofs_done: tok("ofs_done") }), true;
+  }
+  if (text.startsWith("(Start job wizard: over the stock)")) return end({ ofw_fail: 0, ofw_done: tok("ofw_done") }), true;
+  if (/^G21\nG90 G53 G0 Z[-\d.]+\n/.test(text) && /\nM2\n$/.test(text)) return end({ zp: +/Z(-?[\d.]+)/.exec(text)[1] }, 300), true;
+  return false;
+}
 function mdi(text) {
   mdiLog.push(text);
+  if (text.startsWith("mock:toollen ")) { toolLen = +text.split(" ")[1]; return; }
+  if (wizProgram(text)) return;
   // Probing (Probe XYZ / Z): run for a second, then set an offset
   if (/G38\.2/.test(text) && !text.includes("#<_ofm_ok>") && !text.includes("#<_ofs_ok>")) {
     broadcast({ xx: "RUNNING", cycle: "mdi" });
@@ -155,7 +205,7 @@ function mdi(text) {
     broadcast({ xx: "RUNNING", cycle: "running", ofm_ok: 0, ofm_fail: 0 });
     setTimeout(() => {
       if (process.env.MOCK_MEASURE_FAIL) broadcast({ ofm_fail: +process.env.MOCK_MEASURE_FAIL });
-      else broadcast({ ofm_w: cal ? 52.5 : 101.237, ofm_l: y ? 60.412 : 0, ofm_rxa: 10, ofm_rxb: cal ? 62.5 : 111.237, ofm_ok: 1, offset_x: 160.2, offset_y: y ? 88.1 : state.offset_y, offset_z: -42.3 });
+      else broadcast({ ofm_w: cal ? 52.5 : 101.237, ofm_l: y ? 60.412 : 0, ofm_rxa: 10, ofm_rxb: cal ? 62.5 : 111.237, ofm_ok: 1, ofm_done: tokOf(text, "ofm_done"), offset_x: 160.2, offset_y: y ? 88.1 : state.offset_y, offset_z: -42.3 });
       broadcast({ xx: "READY", cycle: "idle" });
     }, 1500);
     return;
@@ -232,6 +282,8 @@ const server = http.createServer((req, res) => {
   }
   if (p.startsWith("/api/file/")) {
     const fname = decodeURIComponent(p.slice("/api/file/".length));
+    // Reading a program selects it, as on the controller (only the wizard test relies on it)
+    if (WIZ && req.method === "GET" && (made[fname] || state.files.includes(fname)) && state.selected !== fname) broadcast({ selected: fname, selected_time: Date.now() });
     if (req.method === "GET" && made[fname]) { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end(made[fname]); }
     if (req.method === "GET" && process.env.MOCK_PROGRAM) { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end(fs.readFileSync(process.env.MOCK_PROGRAM)); }
     if (req.method === "GET") { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end("G21\nG90\nG0 Z15\nM3 S17000\nG1 X10 Y10 F300\nG1 Z-5\nG1 X140 F1500\nG1 Y80\nG1 X10\nG1 Y10\nT2 M6\nG1 X20\nM5\nT3\nM6\nM30\n"); }
@@ -332,7 +384,28 @@ const server = http.createServer((req, res) => {
   }
   if (p.startsWith("/api/position/")) {
     const a = p.split("/").pop();
-    return json(res, "ok");
+    let b = ""; req.on("data", (d) => (b += d));
+    req.on("end", () => {
+      // Sets the work position of an axis: the offset becomes machine position less it
+      try { const q = JSON.parse(b || "{}"); if (WIZ && "xyz".includes(a) && typeof q.position === "number") broadcast({ [`offset_${a}`]: +(state[`${a}p`] - q.position).toFixed(4) }); } catch { /* not JSON */ }
+      json(res, "ok");
+    });
+    return;
+  }
+  if (p === "/api/next-wizard") {
+    let b = ""; req.on("data", (d) => (b += d));
+    req.on("end", () => {
+      const q = JSON.parse(b || "{}");
+      const out = wizPy({ ...q, text: progText(q.file) });
+      if (out.err) { res.writeHead(400, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ message: out.err, code: 400 })); }
+      if (out.text && out.ok.file) {
+        made[out.ok.file] = out.text;
+        const files = state.files.includes(out.ok.file) ? state.files : [...state.files, out.ok.file].sort();
+        broadcast({ files, selected: out.ok.file, selected_time: Date.now() });
+      }
+      json(res, out.ok);
+    });
+    return;
   }
   return json(res, "ok");
 });
