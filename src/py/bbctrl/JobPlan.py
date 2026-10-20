@@ -1,6 +1,8 @@
 import os
 import re
 
+from tornado import gen
+
 from bbctrl import GCodeText, Lint, Work
 from bbctrl.Resume import Modal, fmt, WORD
 
@@ -260,6 +262,11 @@ def _plan_job(path):
     return summary(_read_lines(path))
 
 
+# summary() per file version (1.31.4): the wizard's first page needs it, and
+# it is worked out in the background right after an upload
+_plans = Work.FileCache(_plan_job, 32)
+
+
 def _part_job(path, filename, k, top_mm, tmp):
     '''Writes part k of a program to tmp (in the worker, 1.31.2).  Returns
     (info, n, lint), info None for a one tool program (nothing written).'''
@@ -308,12 +315,6 @@ class JobPlan(object):
         except Exception: return None
 
 
-    def _plan_steps(self, filename):
-        r = yield (_plan_job, (self._path(filename),))
-        r['file'] = filename
-        return r
-
-
     def _part_steps(self, filename, k):
         ctrl = self.ctrl
         if ctrl.state.get('cycle') != 'idle':
@@ -346,7 +347,26 @@ class JobPlan(object):
         return info
 
 
-    def plan(self, filename): return Work.drive_sync(self._plan_steps(filename))
-    def plan_async(self, filename): return Work.drive(self._plan_steps(filename))
+    @staticmethod
+    def prefetch(path):
+        '''Work out the wizard's plan of a new upload in the background.'''
+        return _plans.get_async(path, True)
+
+
+    def plan(self, filename):
+        r = dict(_plans.get(self._path(filename)))
+        r['file'] = filename
+        return r
+
+
+    @gen.coroutine
+    def plan_async(self, filename):
+        # Cached per file version; a background job for it moves ahead
+        r = yield _plans.get_async(self._path(filename))
+        r = dict(r)
+        r['file'] = filename
+        return r
+
+
     def part(self, filename, k): return Work.drive_sync(self._part_steps(filename, k))
     def part_async(self, filename, k): return Work.drive(self._part_steps(filename, k))

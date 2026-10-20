@@ -1272,4 +1272,7 @@ class Web(tornado.web.Application):
     # Override default logger
     def log_request(self, handler):
         log = self.get_ctrl(handler.get_cookie('client-id')).log.get('Web')
-        log.info("%d %s", handler.get_status(), handler._request_summary())
+        # A slow answer shows how long it took (1.31.4)
+        t = handler.request.request_time()
+        log.info("%d %s%s", handler.get_status(), handler._request_summary(),
+                 ' %.1f s' % t if t >= 1 else '')

@@ -16,9 +16,6 @@
 import os
 import re
 import json
-import threading
-import collections
-import concurrent.futures
 
 from tornado import gen
 
@@ -362,11 +359,8 @@ def summary(result):
 # Results are kept per file until the file changes (its modification time
 # or size), the most recently used CACHE_MAX files.  Up to 1.31.1 the whole
 # cache was wiped when it reached 8 files, so a folder of programs was
-# checked again and again.
+# checked again and again.  The cache is Work.FileCache (1.31.4).
 CACHE_MAX = 32
-_cache = collections.OrderedDict()  # path -> (key, result)
-_inflight = {}                      # (path, key) -> Future
-_lock = threading.Lock()
 
 
 def _key(path):
@@ -383,83 +377,47 @@ def _lint_path(path):
     return res
 
 
-def _store(path, key, res):
-    with _lock:
-        _cache[path] = (key, res)
-        _cache.move_to_end(path)
-        while len(_cache) > CACHE_MAX: _cache.popitem(last = False)
+_results = None
+
+def _cache():
+    global _results
+    if _results is None:
+        from bbctrl import Work
+        _results = Work.FileCache(_lint_path, CACHE_MAX)
+    return _results
 
 
 def cached(path):
     '''The result for the file as it is now, or None if it has not been
     checked since it last changed.  Raises OSError if it can't be read.'''
-    key = _key(path)
-    with _lock:
-        hit = _cache.get(path)
-        if hit and hit[0] == key:
-            _cache.move_to_end(path)
-            return hit[1]
+    return _cache().cached(path)
 
 
 def remember(path, res):
     '''Keep res (with its 'setup') as the check of the file as it is now,
     for a program the controller has just written and checked.'''
-    try: _store(path, _key(path), res)
-    except OSError: pass
+    _cache().remember(path, res)
 
 
 def lint_file(path):
     '''lint_lines() for a file, cached until the file changes.  Runs in the
     calling thread: the web server uses lint_file_async().'''
-    key = _key(path)
-    hit = cached(path)
-    if hit is not None: return hit
-    res = _lint_path(path)
-    _store(path, key, res)
-    return res
+    return _cache().get(path)
 
 
-def lint_file_async(path):
+def lint_file_async(path, background = False):
     '''lint_file() in the worker (1.31.2).  Returns a
     concurrent.futures.Future: done at once if the file was already checked,
     and shared by everyone asking for the same version of the file while it
     is being checked.  The Future fails with OSError if the file can't be
-    read.'''
-    from bbctrl import Work
-    try:
-        key = _key(path)
-        hit = cached(path)
-    except OSError as e:
-        f = concurrent.futures.Future()
-        f.set_exception(e)
-        return f
-    if hit is not None: return Work.done(hit)
-
-    with _lock:
-        hit = _cache.get(path)  # finished since cached() looked
-        if hit and hit[0] == key: return Work.done(hit[1])
-        f = _inflight.get((path, key))
-        if f is not None: return f
-        f = Work.run(_lint_path, path)
-        _inflight[(path, key)] = f
-
-    def finished(f):
-        with _lock: _inflight.pop((path, key), None)
-        try:
-            if not f.cancelled() and f.exception() is None:
-                _store(path, key, f.result())
-        except Exception: pass
-
-    f.add_done_callback(finished)
-    return f
+    read.  background: nobody is waiting for it yet (a new upload), so any
+    screen's work goes first (1.31.4); a screen asking for the same file
+    later moves it ahead.'''
+    return _cache().get_async(path, background)
 
 
-def in_flight():
-    with _lock: return len(_inflight)
-
-
-def clear_cache():
-    with _lock: _cache.clear()
+def in_flight(): return _cache().in_flight()
+def clear_cache(): _cache().clear()
 
 
 # Controller-side run check ----------------------------------------------

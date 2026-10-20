@@ -102,10 +102,15 @@ class FileHandler(bbctrl.APIHandler):
             self.get_ctrl().preplanner.invalidate(self.uploadFilename)
             self.get_ctrl().state.add_file(self.uploadFilename)
 
-            # Start the G-code check now, in the worker process (1.31.2),
-            # so it is ready (or under way) when a screen asks for it
+            # Start the G-code check and the Start job wizard's plan now, in
+            # the worker process (1.31.2), so they are ready (or under way)
+            # when a screen asks.  In the background (1.31.4): a screen's own
+            # work goes first, so the wizard or Run doesn't wait for the
+            # checks of every program uploaded before it.
             try:
-                bbctrl.Lint.lint_file_async(self.get_upload(self.uploadFilename))
+                path = self.get_upload(self.uploadFilename)
+                bbctrl.Lint.lint_file_async(path, background = True)
+                bbctrl.JobPlan.prefetch(path)
             except Exception as e:
                 self.get_log('FileHandler').warning('G-code check not started: %s' % e)
 

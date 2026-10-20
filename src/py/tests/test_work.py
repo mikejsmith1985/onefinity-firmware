@@ -166,7 +166,7 @@ srv = socket.socket(); srv.bind(('127.0.0.1', 0)); srv.listen(1)
 Work.shutdown()   # the next job forks a new worker, after the socket opened
 n, ppid, nice = Work.run(worker_sockets).result(30)
 check('the worker holds none of the server\'s sockets', n == 0, n)
-check('the worker is niced below the server', nice >= os.nice(0) + Work.NICE, nice)
+check('the worker is niced below the server', nice >= os.nice(0) + Work.NICE_FG, nice)
 port = srv.getsockname()[1]; srv.close()
 s2 = socket.socket(); s2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 try: s2.bind(('127.0.0.1', port)); s2.listen(1); freed = True
