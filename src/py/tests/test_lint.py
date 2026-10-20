@@ -122,4 +122,39 @@ check('Run anyway (ack) starts', start('bad.nc', {'ack': True}) == 'started' and
 check('clean program starts, dry lift passed', start('good.nc', {'dry_lift': 30}) == 'started' and c.started[-1] == 30)
 r = start('fr.nc', None)
 check('no body: still checked', r != 'started' and 'WRONG ZERO' in r[1])
+
+# 1.31.5: a peck going back down inside its own hole is not a plunge into the material
+PECK = """
+(SETUP stock: x=0..100 y=0..50 z=0..20)
+G21 G90
+G0 X10 Y10
+G0 Z25
+G1 Z15 F70
+G0 Z25
+G1 Z15.5 F1000
+G1 Z12 F70
+G0 Z25
+M30
+"""
+k, r = keys(PECK)
+check('peck re-entry above the last depth is not flagged', k.get('plunge', {}).get('lines') == [5, 8], k.get('plunge'))
+
+# 1.31.5: where the program moves, for the screens' plate check (same as setup.js programExtent)
+EXT = """
+G21 G90
+G0 X10 Y10
+G1 X20 F500
+G2 X30 Y10 I5 J0
+G0 Z5
+G53 G0 X300 Y300
+M30
+"""
+k, r = keys(EXT)
+e = r['extent']
+check('extent covers the moves and the arc top', e and abs(e['minx'] - 10) < 1e-6 and abs(e['maxx'] - 30) < 1e-6 and abs(e['maxy'] - 15) < 1e-6 and abs(e['miny'] - 10) < 1e-6, e)
+k, r = keys("G21 G91\nG1 X10 Y10 F100\nM30")
+check('no extent for incremental moves (the screen measures it itself)', r['extent'] is None, r['extent'])
+k, r = keys("G20 G90\nG0 X1 Y2\nM30")
+check('extent in mm for an inch program', abs(r['extent']['maxx'] - 25.4) < 1e-6 and abs(r['extent']['maxy'] - 50.8) < 1e-6, r['extent'])
+
 done()

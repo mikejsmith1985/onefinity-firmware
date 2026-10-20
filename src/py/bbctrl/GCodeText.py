@@ -15,6 +15,7 @@
 import re
 
 WORD = re.compile(r'([A-Za-z])\s*([-+]?(?:\d+\.?\d*|\.\d+))')
+_SPECIAL = re.compile(r"[();']")
 
 
 class Issue(object):
@@ -36,6 +37,11 @@ def split(line, in_comment = False):
     line.  Returns (code, comments, issues, in_comment_after): code has every
     comment replaced by a space, comments is the list of comment texts
     (without their brackets), issues lists anything that looks wrong.'''
+    # Most lines of a program have no comment at all: nothing to split
+    # (1.31.5: the character loop below was most of the pre-run check's time
+    # on a large program)
+    if not in_comment and not _SPECIAL.search(line):
+        return line, [], [], False
     code = []
     comments = []
     issues = []

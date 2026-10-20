@@ -16,6 +16,7 @@
 import os
 import re
 import json
+import math
 
 from tornado import gen
 
@@ -120,6 +121,55 @@ class _Report(object):
         return out
 
 
+def _codes(rep, n, gs, ms):
+    for g in gs:
+        if g in DEGRADED_G:
+            rep.add('g%s' % g, 'error', n, DEGRADED_G[g] + '.')
+        elif g in DOUBTFUL_G:
+            rep.add('g%s' % g, 'warn', n, DOUBTFUL_G[g] + '.')
+        elif g not in KNOWN_G:
+            rep.add('g%s' % g, 'warn', n,
+                    '%s is not a code this controller knows. The planner '
+                    'may stop with an error or ignore it.' % _code_name('G', g))
+    for mc in ms:
+        if mc in DEGRADED_M:
+            rep.add('m%s' % mc, 'error', n, DEGRADED_M[mc] + '.')
+        elif mc in IGNORED_M:
+            rep.add('m%s' % mc, 'warn', n, IGNORED_M[mc] + '.')
+        elif mc not in KNOWN_M:
+            rep.add('m%s' % mc, 'warn', n,
+                    '%s is not a code this controller knows. The planner '
+                    'may stop with an error or ignore it.' % _code_name('M', mc))
+
+
+def _xy_key(p): return (round(p['X'], 2), round(p['Y'], 2))
+
+
+def _grow(ext, x, y):
+    if ext[0] is None: ext[:] = [x, x, y, y]; return
+    if x < ext[0]: ext[0] = x
+    elif x > ext[1]: ext[1] = x
+    if y < ext[2]: ext[2] = y
+    elif y > ext[3]: ext[3] = y
+
+
+def _arc_extent(ext, a, b, i, j, ccw):
+    '''Adds the points where an arc from a to b around a + (i, j) reaches
+    its furthest left, right, back and front (same as the UI's
+    programExtent).'''
+    cx, cy = a['X'] + i, a['Y'] + j
+    r = math.hypot(a['X'] - cx, a['Y'] - cy)
+    a0 = math.atan2(a['Y'] - cy, a['X'] - cx)
+    a1 = math.atan2(b['Y'] - cy, b['X'] - cx)
+    sweep = a1 - a0 if ccw else a0 - a1
+    while sweep <= 1e-9: sweep += 2 * math.pi
+    for q in range(4):
+        qa = q * math.pi / 2
+        d = qa - a0 if ccw else a0 - qa
+        while d < 0: d += 2 * math.pi
+        if d <= sweep: _grow(ext, cx + r * math.cos(qa), cy + r * math.sin(qa))
+
+
 def lint_lines(lines, setup = None):
     '''Checks a program.  lines: list of strings.  setup: the setup sheet
     fields (GCodeText.setup_fields), read from lines when None.'''
@@ -143,11 +193,16 @@ def lint_lines(lines, setup = None):
     rapids = []           # (line, from_z, to_z, xy_moved) rapid moves
     min_z = None
     spin_dir, spin_speed = None, 0.0
+    deepest = {}          # (x, y) rounded -> lowest Z reached there (1.31.5)
+    ext = [None, None, None, None]   # min x, max x, min y, max y of the moves
+    ext_ok = True         # False once a move can't be followed (G91, expressions)
     n = 0
+    WORD = GCodeText.WORD
+    split = GCodeText.split
 
     for n, raw in enumerate(lines, 1):
         was_open = open_comment
-        code, _, issues, open_comment = GCodeText.split(raw, open_comment)
+        code, _, issues, open_comment = split(raw, open_comment)
 
         # Comments ------------------------------------------------------
         kinds = set(i.kind for i in issues)
@@ -180,34 +235,18 @@ def lint_lines(lines, setup = None):
             tracking = False
             # Expressions can still be checked for their codes below
 
-        words = [(c.upper(), v) for c, v in GCodeText.WORD.findall(text)]
-        gs = [_num(v) for c, v in words if c == 'G']
-        ms = [_num(v) for c, v in words if c == 'M']
+        gs = []
+        ms = []
         vals = {}
-        for c, v in words:
+        for c, v in WORD.findall(text):
+            c = c.upper()
+            if c == 'G': gs.append(_num(v))
+            elif c == 'M': ms.append(_num(v))
             try: vals[c] = float(v)
             except ValueError: pass
 
         # Codes -----------------------------------------------------------
-        for g in gs:
-            if g in DEGRADED_G:
-                rep.add('g%s' % g, 'error', n, DEGRADED_G[g] + '.')
-            elif g in DOUBTFUL_G:
-                rep.add('g%s' % g, 'warn', n, DOUBTFUL_G[g] + '.')
-            elif g not in KNOWN_G:
-                rep.add('g%s' % g, 'warn', n,
-                        '%s is not a code this controller knows. The planner '
-                        'may stop with an error or ignore it.' % _code_name('G', g))
-        for mc in ms:
-            if mc in DEGRADED_M:
-                rep.add('m%s' % mc, 'error', n, DEGRADED_M[mc] + '.')
-            elif mc in IGNORED_M:
-                rep.add('m%s' % mc, 'warn', n, IGNORED_M[mc] + '.')
-            elif mc not in KNOWN_M:
-                rep.add('m%s' % mc, 'warn', n,
-                        '%s is not a code this controller knows. The planner '
-                        'may stop with an error or ignore it.' % _code_name('M', mc))
-
+        if gs or ms: _codes(rep, n, gs, ms)
         # Modal state -----------------------------------------------------
         for g in gs:
             if g in (20, 70): units, metric = 'G20', False
@@ -229,14 +268,13 @@ def lint_lines(lines, setup = None):
             elif mc in (3, 4): spin_dir = mc
             elif mc == 5: spin_dir = None
             elif mc in (2, 30): ended = True; spin_dir = None
-        if any(38.15 < g < 38.55 for g in gs) and spin_dir and spin_speed:
+        if gs and spin_dir and spin_speed and any(38.15 < g < 38.55 for g in gs):
             rep.add('probe-spindle', 'error', n,
                     'A probe move (G38) while the spindle is on (M%d S%s). '
                     'The controller refuses it and stops the job there. '
                     'Put M5 before the probe.' % (spin_dir, _fmt(spin_speed)))
 
-        has_axes = any(a in vals for a in 'XYZ')
-        if not has_axes: continue
+        if 'X' not in vals and 'Y' not in vals and 'Z' not in vals: continue
         if first_move is None and not any(g in (28.2, 28.3, 92, 92.1, 92.2, 92.3, 10, 4)
                                           or 38 <= g < 39 for g in gs):
             first_move = n
@@ -252,16 +290,27 @@ def lint_lines(lines, setup = None):
                         'normally G54, with the zero you probed.')
 
         # Moves -----------------------------------------------------------
-        if 53 in gs or any(g in (28, 30) for g in gs):
-            # Machine coordinates or a home move: work position unknown after
-            for a in 'XYZ':
-                if a in vals or 28 in gs or 30 in gs: pos[a] = None
+        if gs:
+            if 53 in gs or 28 in gs or 30 in gs:
+                # Machine coordinates or a home move: work position unknown after
+                for a in 'XYZ':
+                    if a in vals or 28 in gs or 30 in gs: pos[a] = None
+                continue
+            if any(38 <= g < 39 or g in (10, 92, 92.1, 92.2, 92.3, 28.2, 28.3) for g in gs):
+                for a in 'XYZ':
+                    if a in vals: pos[a] = None
+                continue
+        if not tracking or motion not in MOTION:
+            if 'X' in vals or 'Y' in vals:
+                if not tracking: ext_ok = False
+                else:
+                    # A canned cycle's hole positions
+                    k = 1.0 if metric else MM
+                    for a in 'XY':
+                        if a in vals: pos[a] = vals[a] * k
+                    if pos['X'] is not None and pos['Y'] is not None:
+                        _grow(ext, pos['X'], pos['Y'])
             continue
-        if any(38 <= g < 39 for g in gs) or any(g in (10, 92, 92.1, 92.2, 92.3, 28.2, 28.3) for g in gs):
-            for a in 'XYZ':
-                if a in vals: pos[a] = None
-            continue
-        if not tracking or motion not in MOTION: continue
 
         k = 1.0 if metric else MM
         new = dict(pos)
@@ -269,13 +318,31 @@ def lint_lines(lines, setup = None):
             if a in vals: new[a] = vals[a] * k
         if new['Z'] is not None: min_z = new['Z'] if min_z is None else min(min_z, new['Z'])
 
-        if motion == 0 and None not in (pos['Z'], new['Z']):
+        if motion == 0 and pos['Z'] is not None and new['Z'] is not None:
             xy = any(a in vals and pos[a] is not None and abs(new[a] - pos[a]) > EPS
                      for a in 'XY') or any(a in vals and pos[a] is None for a in 'XY')
             rapids.append((n, pos['Z'], new['Z'], xy))
         elif motion == 1 and 'Z' in vals and pos['Z'] is not None and \
-                not any(a in vals for a in 'XY') and new['Z'] < pos['Z'] - EPS:
-            plunges.append((n, pos['Z'], new['Z']))
+                'X' not in vals and 'Y' not in vals and new['Z'] < pos['Z'] - EPS:
+            # Down again inside a hole already cut at least this deep (a peck
+            # drill going back to just above the last depth) is not into the
+            # material (1.31.5)
+            low = deepest.get(_xy_key(new))
+            if low is None or new['Z'] < low - EPS:
+                plunges.append((n, pos['Z'], new['Z']))
+
+        # Where the program moves, for the plate check (1.31.5: worked out
+        # here so the screens don't download and read the whole program)
+        if new['X'] is not None and new['Y'] is not None:
+            if motion in (2, 3) and pos['X'] is not None and pos['Y'] is not None \
+                    and ('I' in vals or 'J' in vals):
+                _arc_extent(ext, pos, new, vals.get('I', 0.0) * k,
+                            vals.get('J', 0.0) * k, motion == 3)
+            _grow(ext, new['X'], new['Y'])
+            if new['Z'] is not None:
+                key = _xy_key(new)
+                low = deepest.get(key)
+                if low is None or new['Z'] < low: deepest[key] = new['Z']
         pos = new
 
     if open_from is not None:
@@ -330,7 +397,11 @@ def lint_lines(lines, setup = None):
                 'so they were not checked for rapids or plunges.' % untracked_from)
 
     items = rep.result()
+    extent = None
+    if ext_ok and ext[0] is not None:
+        extent = {'minx': ext[0], 'maxx': ext[1], 'miny': ext[2], 'maxy': ext[3]}
     return {
+        'extent': extent,
         'lines': n,
         'errors': sum(1 for i in items if i['level'] == 'error'),
         'warnings': sum(1 for i in items if i['level'] == 'warn'),
@@ -383,7 +454,7 @@ def _cache():
     global _results
     if _results is None:
         from bbctrl import Work
-        _results = Work.FileCache(_lint_path, CACHE_MAX)
+        _results = Work.FileCache(_lint_path, CACHE_MAX, 'lint-2')
     return _results
 
 

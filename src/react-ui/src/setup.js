@@ -98,14 +98,33 @@ export async function readSetupHeader(file) {
   return parseSetup(await fetchProgram(file, false));
 }
 
+// Where the program moves, from the controller's G-code check (1.31.5). The check is kept per file
+// version on the controller, so this is quick once the file has been checked. Up to 1.31.4 every Run,
+// Setup sheet and file selection downloaded the whole program and read it on the screen: several
+// seconds for a large program on the controller's own touchscreen. Falls back to reading it here when
+// the controller doesn't give one (older firmware, incremental moves).
+async function controllerExtent(file) {
+  try {
+    const r = await fetch(`/api/lint/${encodeURIComponent(file)}`);
+    if (!r.ok) return undefined;
+    const res = await r.json();
+    if (!res || !("extent" in res)) return undefined;
+    const e = res.extent;
+    return e && [e.minx, e.maxx, e.miny, e.maxy].every(Number.isFinite) ? { ...e, moves: res.lines } : undefined;
+  } catch { return undefined; }
+}
+
 export async function readSetup(file) {
   if (!file) return null;
   const head = await fetchProgram(file, false);
   const setup = parseSetup(head);
   if (!setup) return null;
   if (setup.stock) {
-    try { setup.ext = programExtent(await fetchProgram(file, true)); }
-    catch { setup.ext = null; }
+    setup.ext = await controllerExtent(file);
+    if (setup.ext === undefined) {
+      try { setup.ext = programExtent(await fetchProgram(file, true)); }
+      catch { setup.ext = null; }
+    }
   }
   return setup;
 }

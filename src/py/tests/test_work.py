@@ -66,7 +66,28 @@ for q in paths[:Lint.CACHE_MAX]: Lint.lint_file_async(q).result(30)
 check('32 files all kept (1.31.1 wiped the cache at 8)', all(Lint.cached(q) is not None for q in paths[:Lint.CACHE_MAX]))
 Lint.cached(paths[0])                      # used: now the newest
 Lint.lint_file_async(paths[-1]).result(30) # one more: the oldest unused goes
-check('least recently used file evicted', Lint.cached(paths[1]) is None and Lint.cached(paths[0]) is not None and Lint.cached(paths[-1]) is not None)
+mem = Lint._cache().results
+check('least recently used file evicted from memory', paths[1] not in mem and paths[0] in mem and paths[-1] in mem)
+
+# 6. Kept on disk across a restart (1.31.5): a new cache (a new server
+# process) finds the result without checking the file again
+calls[:] = []
+Work.run = counting_run
+time.sleep(0.3)
+Lint._results = None                       # as after a restart
+p6 = paths[1]
+r6 = Lint.lint_file_async(p6).result(30)
+check('result read back from disk after a restart, no new check', r6['errors'] == 0 and calls.count('_lint_path') == 0, calls)
+check('evicted file found again on disk', Lint.cached(paths[1]) is not None)
+time.sleep(0.02); put(os.path.basename(p6), BAD)
+r7 = Lint.lint_file_async(p6).result(30)
+check('changed file is checked again, not read from disk', r7['errors'] > 0 and calls.count('_lint_path') == 1, calls)
+time.sleep(0.3)  # stored by the job's done callback
+Lint._results = None
+check('the new result is the one on disk', Lint.cached(p6)['errors'] > 0)
+Lint.clear_cache()
+check('clear_cache forgets the disk copy too', Lint.cached(p6) is None)
+Work.run = real_run
 
 # 6. Failures
 f = Lint.lint_file_async(os.path.join(tmp, 'missing.nc'))
