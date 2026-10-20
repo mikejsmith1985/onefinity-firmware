@@ -17,6 +17,10 @@ import os
 import re
 import json
 import threading
+import collections
+import concurrent.futures
+
+from tornado import gen
 
 from bbctrl import GCodeText
 
@@ -355,25 +359,107 @@ def summary(result):
     return ' '.join(parts) + more
 
 
-_cache = {}
+# Results are kept per file until the file changes (its modification time
+# or size), the most recently used CACHE_MAX files.  Up to 1.31.1 the whole
+# cache was wiped when it reached 8 files, so a folder of programs was
+# checked again and again.
+CACHE_MAX = 32
+_cache = collections.OrderedDict()  # path -> (key, result)
+_inflight = {}                      # (path, key) -> Future
 _lock = threading.Lock()
 
 
-def lint_file(path):
-    '''lint_lines() for a file, cached until the file changes.'''
+def _key(path):
     st = os.stat(path)
-    key = (path, st.st_mtime, st.st_size)
-    with _lock:
-        hit = _cache.get(path)
-        if hit and hit[0] == key: return hit[1]
+    return (st.st_mtime, st.st_size)
+
+
+def _lint_path(path):
+    '''The check itself (in the worker process).'''
     with open(path, 'r', encoding = 'utf-8', errors = 'replace') as f:
         lines = f.read().splitlines()
     res = lint_lines(lines)
     res['setup'] = dict((k, v) for k, v in GCodeText.setup_fields(lines[:400]).items())
-    with _lock:
-        if len(_cache) > 8: _cache.clear()
-        _cache[path] = (key, res)
     return res
+
+
+def _store(path, key, res):
+    with _lock:
+        _cache[path] = (key, res)
+        _cache.move_to_end(path)
+        while len(_cache) > CACHE_MAX: _cache.popitem(last = False)
+
+
+def cached(path):
+    '''The result for the file as it is now, or None if it has not been
+    checked since it last changed.  Raises OSError if it can't be read.'''
+    key = _key(path)
+    with _lock:
+        hit = _cache.get(path)
+        if hit and hit[0] == key:
+            _cache.move_to_end(path)
+            return hit[1]
+
+
+def remember(path, res):
+    '''Keep res (with its 'setup') as the check of the file as it is now,
+    for a program the controller has just written and checked.'''
+    try: _store(path, _key(path), res)
+    except OSError: pass
+
+
+def lint_file(path):
+    '''lint_lines() for a file, cached until the file changes.  Runs in the
+    calling thread: the web server uses lint_file_async().'''
+    key = _key(path)
+    hit = cached(path)
+    if hit is not None: return hit
+    res = _lint_path(path)
+    _store(path, key, res)
+    return res
+
+
+def lint_file_async(path):
+    '''lint_file() in the worker (1.31.2).  Returns a
+    concurrent.futures.Future: done at once if the file was already checked,
+    and shared by everyone asking for the same version of the file while it
+    is being checked.  The Future fails with OSError if the file can't be
+    read.'''
+    from bbctrl import Work
+    try:
+        key = _key(path)
+        hit = cached(path)
+    except OSError as e:
+        f = concurrent.futures.Future()
+        f.set_exception(e)
+        return f
+    if hit is not None: return Work.done(hit)
+
+    with _lock:
+        hit = _cache.get(path)  # finished since cached() looked
+        if hit and hit[0] == key: return Work.done(hit[1])
+        f = _inflight.get((path, key))
+        if f is not None: return f
+        f = Work.run(_lint_path, path)
+        _inflight[(path, key)] = f
+
+    def finished(f):
+        with _lock: _inflight.pop((path, key), None)
+        try:
+            if not f.cancelled() and f.exception() is None:
+                _store(path, key, f.result())
+        except Exception: pass
+
+    f.add_done_callback(finished)
+    return f
+
+
+def in_flight():
+    with _lock: return len(_inflight)
+
+
+def clear_cache():
+    with _lock: _cache.clear()
 
 
 # Controller-side run check ----------------------------------------------
@@ -388,15 +474,41 @@ def probe_record(ctrl):
     except (OSError, ValueError, TypeError): return None
 
 
+def _read_stop(filename, e):
+    return [{'key': 'read', 'msg': 'The controller could not read %s: %s'
+             % (filename, e)}]
+
+
 def start_stops(ctrl, filename):
     '''Reasons not to start filename, each {key, msg}.  Empty to go.'''
-    stops = []
     path = ctrl.get_upload(filename)
     try: res = lint_file(path)
-    except OSError as e:
-        return [{'key': 'read', 'msg': 'The controller could not read %s: %s'
-                 % (filename, e)}]
+    except OSError as e: return _read_stop(filename, e)
+    return _stops(ctrl, res)
 
+
+@gen.coroutine
+def start_stops_async(ctrl, filename):
+    '''start_stops() with the check in the worker (1.31.2).  Fails closed:
+    a check that could not run is a reason not to start, and so is a
+    program that changed while it was being checked.'''
+    path = ctrl.get_upload(filename)
+    try:
+        before = _key(path)
+        res = yield lint_file_async(path)
+        after = _key(path)
+    except OSError as e: return _read_stop(filename, e)
+    except Exception as e:
+        return [{'key': 'check', 'msg': 'The controller could not check %s (%s), '
+                 'so it was not started. Press Run again.' % (filename, e)}]
+    if before != after:
+        return [{'key': 'changed', 'msg': '%s changed while it was being '
+                 'checked. Press Run again.' % filename}]
+    return _stops(ctrl, res)
+
+
+def _stops(ctrl, res):
+    stops = []
     if res['errors']:
         stops.append({'key': 'lint', 'msg': 'G-code check: ' + summary(res)})
 

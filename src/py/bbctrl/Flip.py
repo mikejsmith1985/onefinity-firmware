@@ -2,7 +2,7 @@ import os
 import re
 import math
 
-from bbctrl import GCodeText, Lint
+from bbctrl import GCodeText, Lint, Work
 from bbctrl.Align import transform, AlignError, PREFIX as ALIGN_PREFIX
 
 # Two-sided jobs: line side B up with side A using reference bores (1.31.0).
@@ -281,70 +281,125 @@ def output_name(source):
     return PREFIX + source
 
 
+def _read_lines(path):
+    with open(path, 'r', encoding = 'utf-8', errors = 'replace') as f:
+        return f.read().splitlines()
+
+
+def _fields_job(path):
+    '''The setup sheet (in the worker, 1.31.2).'''
+    return GCodeText.setup_fields(_read_lines(path)[:400])
+
+
+def _solve_opts(opts):
+    o = opts or {}
+    tol = min(1.0, max(0.01, float(o.get('tol', TOL))))
+    rot = min(10.0, max(0.5, float(o.get('max_rot', MAX_ROT))))
+    return tol, rot
+
+
+def _build_job(path, filename, measured, opts, tmp):
+    '''Fits the program onto the measured bores and writes the turned copy
+    to tmp (in the worker, 1.31.2).  Returns (sol, info, lint).'''
+    lines = _read_lines(path)
+    fields = GCodeText.setup_fields(lines[:400])
+    sheet = read_sheet(fields)
+    if sheet is None:
+        raise FlipError('%s has no reference bores on its setup sheet.' % filename)
+    tol, rot = _solve_opts(opts)
+    sol = solve(sheet, measured, tol, rot, fields)
+    if not sol['ok']:
+        raise FlipError(' '.join(sol['problems']))
+    text, info = build(lines, filename, sol)
+    out = text.splitlines()
+    lint = Lint.lint_lines(out)
+    if lint['errors']:
+        raise FlipError('The turned copy fails the G-code check, so it was '
+                        'not written: ' + Lint.summary(lint))
+    lint['setup'] = dict(GCodeText.setup_fields(out[:400]).items())
+    with open(tmp, 'w', encoding = 'utf-8') as f: f.write(text)
+    return sol, info, lint
+
+
 class Flip(object):
+    # refs(), solve() and build() run in the calling thread (tests, the
+    # mock); the web server uses the *_async() versions, which read and
+    # rewrite the program in the worker process (1.31.2).
     def __init__(self, ctrl):
         self.ctrl = ctrl
         self.log = ctrl.log.get('Flip')
 
 
-    def _read(self, filename):
+    def _path(self, filename):
         if not filename or '/' in filename or filename.startswith('.'):
             raise FlipError('Bad file name.')
         path = self.ctrl.get_upload(filename)
         if not os.path.isfile(path):
             raise FlipError('The program %s is not on the controller.' % filename)
-        with open(path, 'r', encoding = 'utf-8', errors = 'replace') as f:
-            return f.read().splitlines()
+        return path
 
 
-    def _sheet(self, filename):
-        lines = self._read(filename)
-        fields = GCodeText.setup_fields(lines[:400])
+    def _read(self, filename): return _read_lines(self._path(filename))
+
+
+    def _sheet_steps(self, filename):
+        fields = yield (_fields_job, (self._path(filename),))
         sheet = read_sheet(fields)
         if sheet is None:
             raise FlipError('%s has no reference bores on its setup sheet.'
                             % filename)
-        return lines, fields, sheet
+        return fields, sheet
 
 
-    def refs(self, filename):
-        _, _, sheet = self._sheet(filename)
+    def _refs_steps(self, filename):
+        _, sheet = yield from self._sheet_steps(filename)
         sheet['file'] = filename
         sheet['output'] = output_name(filename)
         return sheet
 
 
-    def solve(self, filename, measured, opts = None):
-        _, fields, sheet = self._sheet(filename)
-        o = opts or {}
-        tol = min(1.0, max(0.01, float(o.get('tol', TOL))))
-        rot = min(10.0, max(0.5, float(o.get('max_rot', MAX_ROT))))
+    def _solve_steps(self, filename, measured, opts):
+        fields, sheet = yield from self._sheet_steps(filename)
+        tol, rot = _solve_opts(opts)
         return solve(sheet, measured, tol, rot, fields)
 
 
-    def build(self, filename, measured, opts = None):
+    def _build_steps(self, filename, measured, opts):
         ctrl = self.ctrl
         if ctrl.state.get('cycle') != 'idle':
             raise FlipError('Wait until the machine is idle.')
         if filename.startswith(PREFIX) or filename.startswith(ALIGN_PREFIX):
             raise FlipError('%s is already a turned copy. Select the original '
                             'side B program.' % filename)
-        lines = self._read(filename)
-        sol = self.solve(filename, measured, opts)
-        if not sol['ok']:
-            raise FlipError(' '.join(sol['problems']))
-        text, info = build(lines, filename, sol)
-        lint = Lint.lint_lines(text.splitlines())
-        if lint['errors']:
-            raise FlipError('The turned copy fails the G-code check, so it was '
-                            'not written: ' + Lint.summary(lint))
+        path = self._path(filename)
         name = output_name(filename)
         tmp = ctrl.get_upload(name + '.tmp')
-        with open(tmp, 'w', encoding = 'utf-8') as f: f.write(text)
-        os.replace(tmp, ctrl.get_upload(name))
+        try:
+            sol, info, lint = yield (_build_job, (path, filename, measured, opts, tmp))
+            dest = ctrl.get_upload(name)
+            os.replace(tmp, dest)
+        except BaseException:
+            try: os.unlink(tmp)
+            except OSError: pass
+            raise
+        Lint.remember(dest, lint)  # checked already
         ctrl.state.add_file(name)
         self.log.info('Wrote %s turned %.4f degrees' % (name, sol['angle']))
         sol.update(file = name, source = filename, lines = info['lines'],
                    lint = {'errors': lint['errors'],
                            'warnings': lint['warnings']})
         return sol
+
+
+    def refs(self, filename):
+        return Work.drive_sync(self._refs_steps(filename))
+    def refs_async(self, filename):
+        return Work.drive(self._refs_steps(filename))
+    def solve(self, filename, measured, opts = None):
+        return Work.drive_sync(self._solve_steps(filename, measured, opts))
+    def solve_async(self, filename, measured, opts = None):
+        return Work.drive(self._solve_steps(filename, measured, opts))
+    def build(self, filename, measured, opts = None):
+        return Work.drive_sync(self._build_steps(filename, measured, opts))
+    def build_async(self, filename, measured, opts = None):
+        return Work.drive(self._build_steps(filename, measured, opts))

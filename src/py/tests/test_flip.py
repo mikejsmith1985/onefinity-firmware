@@ -3,7 +3,7 @@
 #   python3 src/py/tests/test_flip.py
 import sys, os, re, math, json, types, tempfile, random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bbstub import check, done
+from bbstub import check, done, run_sync
 import bbctrl
 from bbctrl import Lint, GCodeText
 F = sys.modules['bbctrl.Flip']
@@ -139,7 +139,7 @@ def web(body):
     h = Web.WizardHandler.__new__(Web.WizardHandler); h.get_ctrl = lambda: Ctrl(); h.json = body
     got = {}
     h.write_json = lambda v: got.setdefault('v', v)
-    try: h.put(); return got.get('v'), None
+    try: run_sync(h.put); return got.get('v'), None
     except Web.HTTPError as e: return None, e
 v, e = web({'action': 'flip_refs', 'file': 'sideb.nc'})
 check('API flip_refs', v and v['flip'] == 'y' and not e)

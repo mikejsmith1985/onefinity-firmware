@@ -57,7 +57,7 @@ from bbctrl.DoOver import DoOver, DoOverError
 from bbctrl.Align import Align, AlignError
 from bbctrl.Flip import Flip, FlipError
 from bbctrl.JobPlan import JobPlan, JobPlanError
-from bbctrl import GCodeText, Lint
+from bbctrl import GCodeText, Lint, Work
 from bbctrl.Comm import Comm
 from bbctrl.CommandQueue import CommandQueue
 from bbctrl.MainLCDPage import MainLCDPage
@@ -89,6 +89,7 @@ def on_exit(sig = 0, func = None):
         ctrl.close()
         ctrl = None
 
+    Work.shutdown()
     sys.exit(0)
 
 

@@ -3,7 +3,7 @@ import re
 import json
 import math
 
-from bbctrl import GCodeText
+from bbctrl import GCodeText, Work
 from bbctrl.Resume import (Modal, start_lines, fmt, sha_of, manual_spindle,
                            MM, WORD)
 
@@ -759,20 +759,89 @@ def output_name(source):
     return name
 
 
+def _read_lines(path):
+    with open(path, 'r', encoding = 'utf-8', errors = 'replace') as f:
+        return f.read().splitlines()
+
+
+def _sha_or_none(path):
+    try: return sha_of(path)
+    except OSError: return None
+
+
+def _analyse_job(path):
+    '''The program's operations and floors (in the worker, 1.31.2).'''
+    lines = _read_lines(path)
+    ops, wcs_all, _, inch = parse(lines)
+    analyse_ops(ops)
+    setup = GCodeText.setup_fields(lines[:400])
+    units = 'in' if inch else 'mm'
+    res = summary(ops, setup, units)
+    res['wcs'] = sorted(wcs_all)
+    res['sha'] = _sha_or_none(path)
+    return res
+
+
+def _below_travel(info, zlim):
+    '''zlim: (Z offset, bottom of Z travel), read from the controller.'''
+    if zlim is None: return
+    try:
+        off, tn = zlim
+        low = off + info['deepest']
+        if low < tn:
+            raise DoOverError('The new floor (Z%s) is below the bottom of Z '
+                              'travel by %s mm.' % (fmt(info['deepest']),
+                                                    fmt(tn - low)))
+    except DoOverError: raise
+    except Exception: pass
+
+
+def _build_job(path, filename, opts, top_mm, manual, tool_now, zlim, tmp):
+    '''Writes the new program to tmp (in the worker, 1.31.2).  Returns
+    (info, lint): lint is the G-code check of the new program.'''
+    from bbctrl import Lint
+    lines = _read_lines(path)
+    router = GCodeText.setup_fields(lines[:400]).get('router', '')
+    text, info = build(lines, filename, opts, top_mm, manual, router,
+                       tool_now = tool_now)
+
+    # Below the Z travel?
+    _below_travel(info, zlim)
+
+    # The same check every program gets before it runs: a generated
+    # program with an error is never written
+    out = text.splitlines()
+    lint = Lint.lint_lines(out)
+    if lint['errors']:
+        raise DoOverError('The new program failed the G-code check, so it was not '
+                          'written: ' + Lint.summary(lint))
+    lint['setup'] = dict(GCodeText.setup_fields(out[:400]).items())
+    with open(tmp, 'w', encoding = 'utf-8') as f: f.write(text)
+    return info, lint
+
+
 class DoOver(object):
+    # analyse() and build() run in the calling thread (tests, the mock);
+    # the web server uses analyse_async() and build_async(), which do the
+    # whole-file work in the worker process (1.31.2).  Both run the same
+    # steps.
     def __init__(self, ctrl):
         self.ctrl = ctrl
         self.log = ctrl.log.get('DoOver')
 
 
-    def _read(self, filename):
+    def _path(self, filename):
         if not filename or '/' in filename or filename.startswith('.'):
             raise DoOverError('Bad file name.')
         path = self.ctrl.get_upload(filename)
         if not os.path.isfile(path):
             raise DoOverError('The program %s is not on the controller.' % filename)
-        with open(path, 'r', encoding = 'utf-8', errors = 'replace') as f:
-            return path, f.read().splitlines()
+        return path
+
+
+    def _read(self, filename):
+        path = self._path(filename)
+        return path, _read_lines(path)
 
 
     def _top_mm(self):
@@ -792,7 +861,7 @@ class DoOver(object):
         except Exception: return None
 
 
-    def run_check(self, filename, path):
+    def run_check(self, filename, path, sha = False):
         '''How the last run of filename went, and whether the zero is the
         same.  status: ok | moved | unknown | interrupted.'''
         s = self.ctrl.state
@@ -814,7 +883,8 @@ class DoOver(object):
             line is not None and int(line) >= int(nlines) - 5
         if rec.get('sha'):
             try:
-                if sha_of(path) != rec['sha']:
+                if sha is False: sha = sha_of(path)  # not given
+                if sha is not None and sha != rec['sha']:
                     res['msg'] = ('%s has changed since it last ran, so the cut on the '
                                   'stock may not match it.' % filename)
                     return res
@@ -855,27 +925,32 @@ class DoOver(object):
         return res
 
 
-    def analyse(self, filename):
-        path, lines = self._read(filename)
-        ops, wcs_all, _, inch = parse(lines)
-        analyse_ops(ops)
-        setup = GCodeText.setup_fields(lines[:400])
-        units = 'in' if inch else 'mm'
-        res = summary(ops, setup, units)
+    def _analyse_steps(self, filename):
+        path = self._path(filename)
+        res = yield (_analyse_job, (path,))
+        sha = res.pop('sha', None)
         res['file'] = filename
         res['output'] = output_name(filename)
-        res['run'] = self.run_check(filename, path)
+        res['run'] = self.run_check(filename, path, sha)
         res['defaults'] = dict((k, v) for k, v in DEFAULTS.items())
-        res['wcs'] = sorted(wcs_all)
         return res
 
 
-    def build(self, filename, opts):
+    def analyse(self, filename):
+        return Work.drive_sync(self._analyse_steps(filename))
+
+
+    def analyse_async(self, filename):
+        return Work.drive(self._analyse_steps(filename))
+
+
+    def _build_steps(self, filename, opts):
         s = self.ctrl.state
         if s.get('cycle') != 'idle': raise DoOverError('Wait until the machine is idle.')
-        path, lines = self._read(filename)
+        path = self._path(filename)
         opts = opts or {}
-        run = self.run_check(filename, path)
+        sha = yield (_sha_or_none, (path,))
+        run = self.run_check(filename, path, sha)
         if not run.get('homed'):
             raise DoOverError('Home the machine first (X, Y and Z).')
         if run['status'] == 'interrupted': raise DoOverError(run['msg'])
@@ -890,44 +965,44 @@ class DoOver(object):
         try: tool_now = int(tool_now) if tool_now not in (None, '') else run.get('tool')
         except (TypeError, ValueError): tool_now = run.get('tool')
         manual = manual_spindle(self.ctrl.config)
-        router = GCodeText.setup_fields(lines[:400]).get('router', '')
-        text, info = build(lines, filename, opts, self._top_mm(), manual, router,
-                           tool_now = tool_now)
 
-        # Below the Z travel?
+        zlim = None
         try:
             motor = s.find_motor('z')
             tn = s.get('%dtn' % motor, None) if motor is not None else None
-            if tn is not None:
-                low = float(s.get('offset_z', 0) or 0) + info['deepest']
-                if low < float(tn):
-                    raise DoOverError('The new floor (Z%s) is below the bottom of Z '
-                                      'travel by %s mm.' % (fmt(info['deepest']),
-                                                            fmt(float(tn) - low)))
-        except DoOverError: raise
+            if tn is not None: zlim = (float(s.get('offset_z', 0) or 0), float(tn))
         except Exception: pass
-
-        # The same check every program gets before it runs: a generated
-        # program with an error is never written
-        from bbctrl import Lint
-        lint = Lint.lint_lines(text.splitlines())
-        if lint['errors']:
-            raise DoOverError('The new program failed the G-code check, so it was not '
-                              'written: ' + Lint.summary(lint))
-        info['lint'] = {'errors': lint['errors'], 'warnings': lint['warnings'],
-                        'issues': lint['issues']}
 
         name = output_name(filename)
         tmp = self.ctrl.get_upload(name + '.tmp')
-        with open(tmp, 'w', encoding = 'utf-8') as f: f.write(text)
-        os.replace(tmp, self.ctrl.get_upload(name))
+        try:
+            info, lint = yield (_build_job, (path, filename, opts, self._top_mm(),
+                                             manual, tool_now, zlim, tmp))
+            dest = self.ctrl.get_upload(name)
+            os.replace(tmp, dest)
+        except BaseException:
+            try: os.unlink(tmp)
+            except OSError: pass
+            raise
+        from bbctrl import Lint
+        Lint.remember(dest, lint)  # checked already
         s.add_file(name)
         self.log.info('Wrote %s: %s mm deeper, %d passes, %d holes'
                       % (name, fmt(info['extra']), info['passes'], info['holes']))
+        info['lint'] = {'errors': lint['errors'], 'warnings': lint['warnings'],
+                        'issues': lint['issues']}
         info['file'] = name
         info['source'] = filename
         info['run'] = run
         return info
+
+
+    def build(self, filename, opts):
+        return Work.drive_sync(self._build_steps(filename, opts))
+
+
+    def build_async(self, filename, opts):
+        return Work.drive(self._build_steps(filename, opts))
 
 
     def restore_zero(self, filename, axes):

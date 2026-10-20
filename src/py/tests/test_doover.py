@@ -3,7 +3,7 @@
 #   python3 src/py/tests/test_doover.py
 import sys, os, re, json, types, tempfile, hashlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bbstub import check, done
+from bbstub import check, done, run_sync
 import bbctrl
 from bbctrl import Lint, GCodeText
 D = sys.modules['bbctrl.DoOver']
@@ -246,7 +246,7 @@ def web(body, r=None, st=None):
     h = Web.DoOverHandler.__new__(Web.DoOverHandler); h.get_ctrl = lambda: c; h.json = body
     got = {}
     h.write_json = lambda v: got.setdefault('v', v)
-    try: h.put(); return got.get('v'), None
+    try: run_sync(h.put); return got.get('v'), None
     except Web.HTTPError as e: return None, e
 v, e = web({'action': 'analyse', 'file': 'part.nc'})
 check('API analyse', v and v['file'] == 'part.nc' and not e)
