@@ -264,7 +264,7 @@ def _plan_job(path):
 
 # summary() per file version (1.31.4): the wizard's first page needs it, and
 # it is worked out in the background right after an upload
-_plans = Work.FileCache(_plan_job, 32)
+_plans = Work.FileCache(_plan_job, 32, 'jobplan-1')
 
 
 def _part_job(path, filename, k, top_mm, tmp):

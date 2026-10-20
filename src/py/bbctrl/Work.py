@@ -41,6 +41,8 @@ import atexit
 import time
 import threading
 import collections
+import json
+import hashlib
 import concurrent.futures
 from concurrent.futures.process import BrokenProcessPool
 
@@ -385,12 +387,63 @@ class FileCache(object):
     job per file version however many ask; a screen asking for a file whose
     job is still queued in the background moves it ahead.'''
 
-    def __init__(self, fn, size = 32):
+    def __init__(self, fn, size = 32, disk = None):
         self.fn = fn
         self.size = size
         self.lock = threading.Lock()
         self.results = collections.OrderedDict()  # path -> (key, result)
         self.inflight = {}                        # (path, key) -> Future
+        # disk: a name to also keep results in cache/<name>/ beside the
+        # upload folder, so a restart doesn't mean checking every program
+        # again (1.31.5: a 50,000 line program took 15 s after each restart
+        # before Run showed its checklist).  Results must be JSON.
+        self.disk = disk
+        self._dirs = set()                        # cache folders written to
+
+
+    def _disk_path(self, path):
+        if not self.disk: return None
+        base = os.path.dirname(os.path.dirname(os.path.abspath(path)))
+        name = hashlib.sha1(os.path.basename(path).encode('utf-8')).hexdigest()
+        folder = os.path.join(base, 'cache', self.disk)
+        self._dirs.add(folder)
+        return os.path.join(folder, name + '.json')
+
+
+    def _disk_load(self, path, key):
+        p = self._disk_path(path)
+        if not p: return None
+        try:
+            with open(p, 'r', encoding = 'utf-8') as f: d = json.load(f)
+            if d.get('path') == os.path.basename(path) and \
+                    list(d.get('key') or []) == list(key):
+                return d.get('result')
+        except (OSError, ValueError, TypeError, AttributeError): pass
+        return None
+
+
+    def _disk_save(self, path, key, res):
+        p = self._disk_path(path)
+        if not p: return
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok = True)
+            tmp = p + '.tmp'
+            with open(tmp, 'w', encoding = 'utf-8') as f:
+                json.dump({'path': os.path.basename(path), 'key': list(key),
+                           'result': res}, f)
+            os.replace(tmp, p)
+            self._disk_prune(os.path.dirname(p))
+        except (OSError, TypeError, ValueError): pass
+
+
+    def _disk_prune(self, folder, keep = 200):
+        try:
+            names = [os.path.join(folder, n) for n in os.listdir(folder)
+                     if n.endswith('.json')]
+            if len(names) <= keep: return
+            names.sort(key = lambda n: os.stat(n).st_mtime)
+            for n in names[:len(names) - keep]: os.unlink(n)
+        except OSError: pass
 
 
     @staticmethod
@@ -399,11 +452,12 @@ class FileCache(object):
         return (st.st_mtime, st.st_size)
 
 
-    def store(self, path, key, res):
+    def store(self, path, key, res, save = True):
         with self.lock:
             self.results[path] = (key, res)
             self.results.move_to_end(path)
             while len(self.results) > self.size: self.results.popitem(last = False)
+        if save: self._disk_save(path, key, res)
 
 
     def cached(self, path):
@@ -415,6 +469,10 @@ class FileCache(object):
             if hit and hit[0] == key:
                 self.results.move_to_end(path)
                 return hit[1]
+        res = self._disk_load(path, key)
+        if res is not None:
+            self.store(path, key, res, save = False)
+            return res
 
 
     def remember(self, path, res):
@@ -470,4 +528,12 @@ class FileCache(object):
 
 
     def clear(self):
-        with self.lock: self.results.clear()
+        '''Forget every result, the ones kept on disk too.'''
+        with self.lock:
+            self.results.clear()
+            dirs, self._dirs = self._dirs, set()
+        for d in dirs:
+            try:
+                for n in os.listdir(d):
+                    if n.endswith('.json'): os.unlink(os.path.join(d, n))
+            except OSError: pass
