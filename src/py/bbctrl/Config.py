@@ -35,6 +35,15 @@ def get_resource(path):
     return resource_filename(Requirement.parse('bbctrl'), 'bbctrl/' + path)
 
 
+# Settings that only list files, not how a program is planned
+FILE_LIST_KEYS = ('gcode_list', 'non_macros_list', 'macros_list')
+
+def plans_same(old, new):
+    if not isinstance(old, dict) or not isinstance(new, dict): return False
+    strip = lambda c: {k: v for k, v in c.items() if k not in FILE_LIST_KEYS}
+    return strip(old) == strip(new)
+
+
 class Config(object):
     def __init__(self, ctrl):
         self.ctrl = ctrl
@@ -43,7 +52,7 @@ class Config(object):
         self.values = {}
 
         try:
-            self.version = "1.31.2"
+            self.version = "1.31.3"
 
             # Load config template
             with open(get_resource('http/config-template.json'), 'r',
@@ -108,13 +117,21 @@ class Config(object):
         self._upgrade(config)
         self._update(config, False)
 
+        path = self.ctrl.get_path('config.json')
+        try:
+            with open(path, 'r') as f: old = json.load(f)
+        except Exception: old = None
 
-        with open(self.ctrl.get_path('config.json'), 'w') as f:
+        with open(path, 'w') as f:
             json.dump(config, f, indent=2)
 
         os.sync()
 
-        self.ctrl.preplanner.invalidate_all()
+        # The Files tab saves its folder lists right after every upload. Those
+        # lists don't change any plan, so keep the plans (1.31.3): dropping
+        # them restarted the new program's preview for nothing.
+        if not plans_same(old, config):
+            self.ctrl.preplanner.invalidate_all()
         self.log.info('Saved')
 
 

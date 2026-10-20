@@ -62,6 +62,11 @@ def safe_remove(path):
     except: pass
 
 
+class PlanCancelled(Exception):
+    '''The plan was dropped (file re-uploaded or deleted, settings saved)
+    before it finished. Not an error: get_plan() moves to the new plan.'''
+
+
 class Plan(object):
     def __init__(self, preplanner, ctrl, filename):
         self.preplanner = preplanner
@@ -165,6 +170,9 @@ class Plan(object):
                                       cwd = tmpdir)
             errs = ''
             self.pid = proc.proc.pid
+            if self.cancel: # terminate() came before the pid was known
+                try: os.kill(self.pid, signal.SIGKILL)
+                except: pass
 
             try:
                 try:
@@ -177,6 +185,7 @@ class Plan(object):
                 self.progress = 1
 
                 ret = yield proc.wait_for_exit(False)
+                if self.cancel: return # killed by terminate(), not a failure
                 if ret:
                     errs = yield proc.stderr.read_until_close()
                     raise Exception('Plan failed: ' + errs.decode('utf8'))
@@ -195,6 +204,7 @@ class Plan(object):
     @gen.coroutine
     def _load(self):
         try:
+            if self.cancel: raise PlanCancelled()
             if self._exists():
                 data = self._read()
                 if data is not None:
@@ -202,9 +212,16 @@ class Plan(object):
                     return
 
             if not self._exists(): yield self._exec()
+            if self.cancel: raise PlanCancelled()
             self.future.set_result(self._read())
 
+        except PlanCancelled:
+            self.future.set_exception(PlanCancelled())
+
         except:
+            if self.cancel: # killed part way: not the file's fault
+                self.future.set_exception(PlanCancelled())
+                return
             self.preplanner.log.exception("Failed to load file - doesn't appear to be GCode.")
 
 
@@ -259,13 +276,20 @@ class Preplanner(object):
         # Wait until state is fully initialized
         yield self.started
 
-        if filename in self.plans: plan = self.plans[filename]
-        else:
-            plan = Plan(self, self.ctrl, filename)
-            self.plans[filename] = plan
+        # A plan dropped while we wait (an upload is followed by a settings
+        # save of the folder lists, a re-upload, ...) hands over to the new one
+        for attempt in range(10):
+            if filename in self.plans: plan = self.plans[filename]
+            else:
+                plan = Plan(self, self.ctrl, filename)
+                self.plans[filename] = plan
 
-        data = yield plan.future
-        return data
+            try:
+                data = yield plan.future
+                return data
+            except PlanCancelled: pass
+
+        raise PlanCancelled()
 
 
     def get_plan_progress(self, filename):
