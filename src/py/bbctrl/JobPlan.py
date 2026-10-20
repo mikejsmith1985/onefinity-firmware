@@ -1,7 +1,7 @@
 import os
 import re
 
-from bbctrl import GCodeText, Lint
+from bbctrl import GCodeText, Lint, Work
 from bbctrl.Resume import Modal, fmt, WORD
 
 # Tool changes for the Start job wizard (1.31.0).
@@ -250,20 +250,53 @@ def summary(lines):
     return p
 
 
+def _read_lines(path):
+    with open(path, 'r', encoding = 'utf-8', errors = 'replace') as f:
+        return f.read().splitlines()
+
+
+def _plan_job(path):
+    '''summary() of a program (in the worker, 1.31.2).'''
+    return summary(_read_lines(path))
+
+
+def _part_job(path, filename, k, top_mm, tmp):
+    '''Writes part k of a program to tmp (in the worker, 1.31.2).  Returns
+    (info, n, lint), info None for a one tool program (nothing written).'''
+    lines = _read_lines(path)
+    p = plan(lines)
+    n = len(p['parts'])
+    if n == 1: return {'tool': p['parts'][0]['tool']}, 1, None
+    text, info = part(lines, k, filename, top_mm)
+    out = text.splitlines()
+    lint = Lint.lint_lines(out)
+    if lint['errors']:
+        raise JobPlanError('Part %d fails the G-code check, so it was not '
+                           'written: %s' % (k + 1, Lint.summary(lint)))
+    lint['setup'] = dict(GCodeText.setup_fields(out[:400]).items())
+    with open(tmp, 'w', encoding = 'utf-8') as f: f.write(text)
+    return info, n, lint
+
+
 class JobPlan(object):
+    # plan() and part() run in the calling thread (tests, the mock); the web
+    # server uses plan_async() and part_async(), which do the whole-file work
+    # in the worker process (1.31.2).
     def __init__(self, ctrl):
         self.ctrl = ctrl
         self.log = ctrl.log.get('JobPlan')
 
 
-    def _read(self, filename):
+    def _path(self, filename):
         if not filename or '/' in filename or filename.startswith('.'):
             raise JobPlanError('Bad file name.')
         path = self.ctrl.get_upload(filename)
         if not os.path.isfile(path):
             raise JobPlanError('The program %s is not on the controller.' % filename)
-        with open(path, 'r', encoding = 'utf-8', errors = 'replace') as f:
-            return f.read().splitlines()
+        return path
+
+
+    def _read(self, filename): return _read_lines(self._path(filename))
 
 
     def _top_mm(self):
@@ -275,35 +308,45 @@ class JobPlan(object):
         except Exception: return None
 
 
-    def plan(self, filename):
-        r = summary(self._read(filename))
+    def _plan_steps(self, filename):
+        r = yield (_plan_job, (self._path(filename),))
         r['file'] = filename
         return r
 
 
-    def part(self, filename, k):
+    def _part_steps(self, filename, k):
         ctrl = self.ctrl
         if ctrl.state.get('cycle') != 'idle':
             raise JobPlanError('Wait until the machine is idle.')
-        lines = self._read(filename)
-        p = plan(lines)
-        n = len(p['parts'])
+        path = self._path(filename)
         try: k = int(k)
-        except (TypeError, ValueError): raise JobPlanError('Bad part number.')
-        if n == 1:
-            # One tool: the program itself is the job
-            return {'file': filename, 'index': 0, 'count': 1,
-                    'tool': p['parts'][0]['tool'], 'warnings': []}
-        text, info = part(lines, k, filename, self._top_mm())
-        lint = Lint.lint_lines(text.splitlines())
-        if lint['errors']:
-            raise JobPlanError('Part %d fails the G-code check, so it was not '
-                               'written: %s' % (k + 1, Lint.summary(lint)))
-        name = output_name(filename, k, n)
-        tmp = ctrl.get_upload(name + '.tmp')
-        with open(tmp, 'w', encoding = 'utf-8') as f: f.write(text)
-        os.replace(tmp, ctrl.get_upload(name))
+        except (TypeError, ValueError): k = None
+        if k is None:
+            yield (_plan_job, (path,))  # its errors come first, as before
+            raise JobPlanError('Bad part number.')
+        # The name needs the part count: written under a temporary name
+        tmp = ctrl.get_upload('.part-%s.tmp' % filename)
+        try:
+            info, n, lint = yield (_part_job, (path, filename, k, self._top_mm(), tmp))
+            if lint is None:
+                # One tool: the program itself is the job
+                return {'file': filename, 'index': 0, 'count': 1,
+                        'tool': info['tool'], 'warnings': []}
+            name = output_name(filename, k, n)
+            dest = ctrl.get_upload(name)
+            os.replace(tmp, dest)
+        except BaseException:
+            try: os.unlink(tmp)
+            except OSError: pass
+            raise
+        Lint.remember(dest, lint)  # checked already
         ctrl.state.add_file(name)
         info.update(file = name, source = filename,
                     lint = {'errors': lint['errors'], 'warnings': lint['warnings']})
         return info
+
+
+    def plan(self, filename): return Work.drive_sync(self._plan_steps(filename))
+    def plan_async(self, filename): return Work.drive(self._plan_steps(filename))
+    def part(self, filename, k): return Work.drive_sync(self._part_steps(filename, k))
+    def part_async(self, filename, k): return Work.drive(self._part_steps(filename, k))

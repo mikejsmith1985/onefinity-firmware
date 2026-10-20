@@ -65,6 +65,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
   // so the check also re-runs when a new record is saved, and every few seconds while a warning shows.
   const [probeTick, setProbeTick] = useState(0);
   const sheetCache = useRef({ file: null, setup: undefined });
+  const lintCache = useRef({ file: null, lint: undefined });
   useEffect(() => {
     const bump = () => setProbeTick((t) => t + 1);
     window.addEventListener("next-store:probe", bump);
@@ -88,8 +89,15 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         const setter = await getSetter();
         const sc = path?.positions ? setterChecks(path, setter, state, setup?.toolD, metric) : [];
         const rec = setup?.corner ? await remoteGet("probe") : null;
-        let lint = [];
-        try { lint = lintChecks(await api.get(`lint/${encodeURIComponent(state.selected)}`)).filter((c) => c.level === "stop"); } catch { /* checked again at Run */ }
+        // The G-code check only changes with the program (1.31.2: it was asked for again every 3 s while
+        // a warning showed). A failed read is not kept, so it is tried again on the next pass.
+        let lint = lintCache.current.file === key ? lintCache.current.lint : undefined;
+        if (lint === undefined) {
+          try {
+            lint = lintChecks(await api.get(`lint/${encodeURIComponent(state.selected)}`)).filter((c) => c.level === "stop");
+            lintCache.current = { file: key, lint };
+          } catch { lint = []; /* checked again at Run */ }
+        }
         const nested = lint.some((c) => c.key === "comment-nested");
         const bad = [...probeChecks(setup, rec, state), ...stockChecks(setup, metric), ...(nested ? [] : sheetLineChecks(setup)), ...lint, ...sc].filter((c) => c.level !== "ok");
         if (!gone) setLive(bad);

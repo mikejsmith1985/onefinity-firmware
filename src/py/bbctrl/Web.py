@@ -489,33 +489,46 @@ class HomeHandler(bbctrl.APIHandler):
 
 
 class StartHandler(bbctrl.APIHandler):
-    def put_ok(self):
-        # {"dry_lift": mm} runs the selected program as a dry run.
-        # {"ack": true} is the operator's "Run anyway" on the checklist.
-        # Without it the controller checks the program itself (1.29.0), so
-        # a screen that could not read the program cannot start it blind.
+    # {"dry_lift": mm} runs the selected program as a dry run.
+    # {"ack": true} is the operator's "Run anyway" on the checklist.
+    # Without it the controller checks the program itself (1.29.0), so
+    # a screen that could not read the program cannot start it blind.
+    # The check runs in the worker process (1.31.2), and fails closed: a
+    # check that could not run, or a program that changed or was swapped
+    # while it was checked, is not started.
+    @gen.coroutine
+    def put(self):
         ctrl = self.get_ctrl()
         body = self.json if isinstance(self.json, dict) else {}
         if not body.get('ack'):
             filename = ctrl.state.get('selected', '')
             if filename:
-                stops = bbctrl.Lint.start_stops(ctrl, filename)
+                stops = yield bbctrl.Lint.start_stops_async(ctrl, filename)
+                if not stops and ctrl.state.get('selected', '') != filename:
+                    stops = [{'key': 'changed', 'msg': 'Another program was '
+                              'selected while %s was being checked. Press Run '
+                              'again.' % filename}]
                 if stops:
                     msg = ' '.join(s['msg'] for s in stops)
                     ctrl.log.get('Web').info('Start refused: %s' % msg)
                     raise HTTPError(409, '%s', 'Not started. ' + msg)
         ctrl.mach.start(body.get('dry_lift', 0))
+        self.write_json('ok')
 
 
 class LintHandler(bbctrl.APIHandler):
-    # The pre-run G-code check for an uploaded program (1.29.0)
+    # The pre-run G-code check for an uploaded program (1.29.0), in the
+    # worker process so a large program can't stall the server (1.31.2)
+    @gen.coroutine
     def get(self, filename):
         filename = url_unescape(filename)
         if not filename or '/' in filename or filename.startswith('.'):
             raise HTTPError(400, 'Bad file name')
         path = self.get_upload(filename)
         if not os.path.isfile(path): raise HTTPError(404, 'No such file')
-        self.write_json(bbctrl.Lint.lint_file(path))
+        try: res = yield bbctrl.Lint.lint_file_async(path)
+        except OSError: raise HTTPError(404, 'No such file')
+        self.write_json(res)
 
 
 class DoOverHandler(bbctrl.APIHandler):
@@ -524,23 +537,26 @@ class DoOverHandler(bbctrl.APIHandler):
     #               last run went
     # build:        write doover-<file> and load it
     # restore_zero: put the work zero back where it was for the last run
+    # analyse and build read the program in the worker process (1.31.2)
+    @gen.coroutine
     def put(self):
         ctrl = self.get_ctrl()
         q = self.json if isinstance(self.json, dict) else {}
         action, filename = q.get('action'), q.get('file') or ''
         try:
             dov = bbctrl.DoOver(ctrl)
-            if action == 'analyse': self.write_json(dov.analyse(filename))
+            if action == 'analyse': res = yield dov.analyse_async(filename)
             elif action == 'build':
-                self.write_json(dov.build(filename, q.get('opts') or {}))
+                res = yield dov.build_async(filename, q.get('opts') or {})
             elif action == 'restore_zero':
-                self.write_json(dov.restore_zero(filename, q.get('axes') or 'xyz'))
+                res = dov.restore_zero(filename, q.get('axes') or 'xyz')
             else: raise HTTPError(400, 'Unknown action')
         except Exception as e:
             if isinstance(e, HTTPError): raise
             if not isinstance(e, bbctrl.DoOverError):
                 ctrl.log.get('Web').exception('Cut deeper failed')
             raise HTTPError(400, '%s', str(e))
+        self.write_json(res)
 
 
 class WizardHandler(bbctrl.APIHandler):
@@ -550,29 +566,32 @@ class WizardHandler(bbctrl.APIHandler):
     # flip_refs:   the reference bores on a side B program's setup sheet
     # flip_solve:  fit the program onto the measured bore centres
     # flip_build:  write flip-<file>, the copy turned to match
+    # Each reads the program in the worker process (1.31.2)
+    @gen.coroutine
     def put(self):
         ctrl = self.get_ctrl()
         q = self.json if isinstance(self.json, dict) else {}
         action, filename = q.get('action'), q.get('file') or ''
         try:
             if action == 'plan':
-                self.write_json(bbctrl.JobPlan(ctrl).plan(filename))
+                res = yield bbctrl.JobPlan(ctrl).plan_async(filename)
             elif action == 'part':
-                self.write_json(bbctrl.JobPlan(ctrl).part(filename, q.get('index')))
+                res = yield bbctrl.JobPlan(ctrl).part_async(filename, q.get('index'))
             elif action == 'flip_refs':
-                self.write_json(bbctrl.Flip(ctrl).refs(filename))
+                res = yield bbctrl.Flip(ctrl).refs_async(filename)
             elif action == 'flip_solve':
-                self.write_json(bbctrl.Flip(ctrl).solve(
-                    filename, q.get('measured') or [], q.get('opts')))
+                res = yield bbctrl.Flip(ctrl).solve_async(
+                    filename, q.get('measured') or [], q.get('opts'))
             elif action == 'flip_build':
-                self.write_json(bbctrl.Flip(ctrl).build(
-                    filename, q.get('measured') or [], q.get('opts')))
+                res = yield bbctrl.Flip(ctrl).build_async(
+                    filename, q.get('measured') or [], q.get('opts'))
             else: raise HTTPError(400, 'Unknown action')
         except Exception as e:
             if isinstance(e, HTTPError): raise
             if not isinstance(e, (bbctrl.JobPlanError, bbctrl.FlipError)):
                 ctrl.log.get('Web').exception('Start job wizard failed')
             raise HTTPError(400, '%s', str(e))
+        self.write_json(res)
 
 
 class EStopHandler(bbctrl.APIHandler):
@@ -1143,6 +1162,11 @@ class Web(tornado.web.Application):
         if not self.args.demo:
             self.get_ctrl()
             self.monitor = bbctrl.MonitorTemp(self)
+            bbctrl.Work.log = self.get_ctrl().log.get('Work')
+
+        # The worker process for whole-file work (1.31.2), started while the
+        # server is still quiet
+        ioloop.call_later(5, bbctrl.Work.warm)
 
         handlers = [
             (r'/websocket', WSConnection),

@@ -2,7 +2,7 @@
 #   python3 src/py/tests/test_lint.py
 import sys, os, json, tempfile, types
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bbstub import check, done
+from bbstub import check, done, run_sync
 import bbctrl
 from bbctrl import Lint
 Web = sys.modules['bbctrl.Web']
@@ -112,7 +112,8 @@ c.mach = types.SimpleNamespace(start=lambda lift=0: c.started.append(lift))
 def start(sel, body):
     c.sel = sel
     h = Web.StartHandler.__new__(Web.StartHandler); h.get_ctrl = lambda: c; h.json = body
-    try: h.put_ok(); return 'started'
+    h.write_json = lambda v: None
+    try: run_sync(h.put); return 'started'
     except Web.HTTPError as e: return (e.status_code, e.log_message % e.args)
 put('bad.nc', 'G21 G54\nG0 X0 Y0 Z5\nG83 X1 Y1 Z-5 R2 Q1\nM30\n')
 r = start('bad.nc', {})

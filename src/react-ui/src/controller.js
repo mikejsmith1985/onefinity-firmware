@@ -37,6 +37,7 @@ export async function loadPath(file) {
 }
 
 import { recordDown, recordUp } from "./drops.js";
+import { linkVerdict, WATCH_MS } from "./linkwatch.js";
 import { ME, readUi, uiSet, uiClose, useUiTick } from "./shared.js";
 
 // Live machine state over the controller's raw websocket.
@@ -50,15 +51,15 @@ export function useController() {
   const storeRev = useRef(null);
 
   useEffect(() => {
-    let closed = false, timer, lastMsg = Date.now(), everUp = false;
-    // The controller sends a heartbeat every 3 s. Silence for 8 s means the link is dead even if the
-    // socket still looks open (a common Wi-Fi failure). Close it so it reconnects and the drop is logged.
+    let closed = false, timer, lastMsg = Date.now(), everUp = false, lastTick = Date.now();
+    // Close a silent link so it reconnects and the drop is logged (linkwatch.js, 1.31.2: 20 s, and a
+    // late check is skipped because then this page was frozen, not the link).
     const watch = setInterval(() => {
-      const s = ws.current;
-      if (!s || s.readyState !== 1 || document.hidden) return;
-      const quiet = Date.now() - lastMsg;
-      if (quiet > 8000) { recordDown(`No data for ${Math.round(quiet / 1000)} s`); setOnline(false); s.close(); }
-    }, 2000);
+      const now = Date.now(), s = ws.current;
+      const v = linkVerdict({ now, lastTick, lastMsg, open: !!s && s.readyState === 1, hidden: document.hidden });
+      lastTick = now;
+      if (v === "dead") { recordDown(`No data for ${Math.round((now - lastMsg) / 1000)} s`); setOnline(false); s.close(); }
+    }, WATCH_MS);
     const connect = () => {
       const proto = location.protocol === "https:" ? "wss" : "ws";
       const s = new WebSocket(`${proto}://${location.host}/websocket`);

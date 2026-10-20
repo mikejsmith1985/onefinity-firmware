@@ -29,3 +29,10 @@ def check(name, cond, msg=''):
 
 def done():
     print('ALL PASS' if ok else 'SOME FAILED'); sys.exit(0 if ok else 1)
+
+# Web handlers are Tornado coroutines (1.31.2): run one to the end
+_loop = None
+def run_sync(fn, *args):
+    global _loop
+    if _loop is None: _loop = tornado.ioloop.IOLoop()
+    return _loop.run_sync(lambda: fn(*args), timeout = 120)

@@ -102,6 +102,13 @@ class FileHandler(bbctrl.APIHandler):
             self.get_ctrl().preplanner.invalidate(self.uploadFilename)
             self.get_ctrl().state.add_file(self.uploadFilename)
 
+            # Start the G-code check now, in the worker process (1.31.2),
+            # so it is ready (or under way) when a screen asks for it
+            try:
+                bbctrl.Lint.lint_file_async(self.get_upload(self.uploadFilename))
+            except Exception as e:
+                self.get_log('FileHandler').warning('G-code check not started: %s' % e)
+
         del (self.uploadFilename)
 
     @gen.coroutine
