@@ -37,6 +37,7 @@ export default function DepthView({ path, busy: pathBusy, file }) {
   const [ready, setReady] = useState(null);
   const [manual, setManual] = useState(false);
   const [sheetTool, setSheetTool] = useState(null);
+  const [sheetTop, setSheetTop] = useState(null);
   const applyTool = (g) => { setDia(g.dia); setType(g.type); if (g.angle) setVAngle(g.angle); };
   useEffect(() => {
     let cancelled = false;
@@ -44,14 +45,18 @@ export default function DepthView({ path, busy: pathBusy, file }) {
     (async () => {
       await loadPrefs();
       const v = file ? fileEntry(file) : null;
-      let geom = null;
-      if (file) { try { geom = (await readSetupHeader(file))?.toolGeom || null; } catch { /* no sheet */ } }
+      let geom = null, top = null;
+      if (file) {
+        try { const sh = await readSetupHeader(file); geom = sh?.toolGeom || null; top = sh?.stockTop ?? null; }
+        catch { /* no sheet */ }
+      }
       if (cancelled) return;
-      setSheetTool(geom);
+      setSheetTool(geom); setSheetTop(top);
       const own = !!(v && v.manual);
-      if (v && (own || !geom)) { setDia(v.dia); setType(v.type); setVAngle(v.vAngle); setStockTop(v.stockTop); }
-      else if (v) setStockTop(v.stockTop);
-      else setStockTop(0);
+      if (v && (own || !geom)) { setDia(v.dia); setType(v.type); setVAngle(v.vAngle); }
+      // The sheet's stock top wins unless one was typed here (up to 1.32.0 it always started at 0, so a
+      // program zeroed on the board showed no cuts at all).
+      setStockTop(top !== null && !own ? top : v ? v.stockTop : top ?? 0);
       if (geom && !own) applyTool(geom);
       setManual(own);
       setReady(file);
@@ -179,9 +184,10 @@ export default function DepthView({ path, busy: pathBusy, file }) {
         </label>
         {type === "v" && <label>Angle<NumInput min={10} max={150} value={vAngle} onChange={edit(setVAngle)} /><em>°</em></label>}
         <label>Stock top at Z<NumInput value={stockTop} onChange={edit(setStockTop)} /><em>mm</em></label>
-        {sheetTool && !manual && <span className="depth-src">Tool from setup sheet</span>}
-        {sheetTool && manual && <button className="depth-src" onClick={() => { applyTool(sheetTool); setManual(false); }}>Use setup sheet tool</button>}
-        {!sheetTool && ready === file && file && <span className="depth-src muted">No tool in this program's setup sheet. Set it here.</span>}
+        {(sheetTool || sheetTop !== null) && !manual && <span className="depth-src">{sheetTool && sheetTop !== null ? "Tool and stock top from setup sheet" : sheetTool ? "Tool from setup sheet" : "Stock top from setup sheet"}</span>}
+        {(sheetTool || sheetTop !== null) && manual && <button className="depth-src" onClick={() => { if (sheetTool) applyTool(sheetTool); if (sheetTop !== null) setStockTop(sheetTop); setManual(false); }}>Use setup sheet</button>}
+        {!sheetTool && sheetTop === null && ready === file && file && <span className="depth-src muted">No tool or stock top in this program's setup sheet. Set them here.</span>}
+        {sheetTop === null && ready === file && file && path && path.bounds && path.bounds.min.z >= stockTop && <span className="depth-src muted">Nothing goes below Z {stockTop}. If Z0 is on the board, set the stock top to the plate thickness.</span>}
       </div>
 
       <div className="stage">

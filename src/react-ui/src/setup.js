@@ -9,6 +9,9 @@
 //                                            (front-left, front-right, back-left, back-right, center)
 //   tool-geom: flat 6.35  /  v 6.35 90       tool the Depth view simulates: shape, diameter in mm and,
 //                                            for a V-bit or chamfer mill, the included angle
+// The Depth view also takes the stock top from the sheet: the top of the stock line's Z range, or,
+// without one, the plate thickness when the zero line says Z0 is on the stock bottom or the board
+// ("Z0 ON STOCK BOTTOM", "Z0 ON MDF", ...), or 0 when it says Z0 is on the stock top (1.32.1).
 // Comments are ignored by the planner, so a program with a sheet runs exactly like any other.
 
 import { commentIssues, CORNERS, normCorner } from "./gcodetext.js";
@@ -40,6 +43,20 @@ export function parseToolGeom(text) {
   return type === "v" ? { type, dia, angle } : { type, dia };
 }
 
+// Z of the stock top in work coordinates, from the sheet. Null when the sheet doesn't say.
+export function sheetStockTop(raw) {
+  const z = raw.stock ? parseRange(raw.stock, "z") : null;
+  if (z) return z.max;
+  const zero = raw.zero || raw.z0 || "";
+  if (/Z0\s+(ON|AT)\s+(THE\s+)?(STOCK|PLATE|PART|MATERIAL)\s+TOP|TOP OF (THE\s+)?(STOCK|PLATE|PART|MATERIAL)/i.test(zero)) return 0;
+  if (/Z0\s+(ON|AT)\s+(THE\s+)?((STOCK|PLATE|PART|MATERIAL)\s+BOTTOM|(SPOIL|WASTE)?\s*BOARD|MDF|TABLE|BED)|BOTTOM OF (THE\s+)?(STOCK|PLATE)/i.test(zero)) {
+    const m = /[\d.]+\s*[X×]\s*[\d.]+\s*[X×]\s*([\d.]+)/i.exec(raw.plate || "");
+    const t = m ? num(m[1]) : null;
+    return t > 0 ? t : null;
+  }
+  return null;
+}
+
 // Reads the SETUP lines out of the start of a program. Returns null when the program has no sheet.
 export function parseSetup(text) {
   const fields = [];
@@ -64,6 +81,7 @@ export function parseSetup(text) {
   const stockOk = !!(stock && stock.x && stock.y);
   const corner = raw["probe-corner"] ? normCorner(raw["probe-corner"]) : null;
   return {
+    stockTop: sheetStockTop(raw),
     fields, stock: stockOk ? stock : null, toolD: raw["tool-d"] ? num(raw["tool-d"]) : null,
     // A stock line that can't be read is reported, not silently skipped (1.29.0)
     stockBad: raw.stock !== undefined && !stockOk ? raw.stock : null,

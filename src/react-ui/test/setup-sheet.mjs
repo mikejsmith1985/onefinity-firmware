@@ -16,6 +16,12 @@ const sheet = (lines) => parseSetup(lines.join("\n") + "\nG21\nG0 X0 Y0\n");
 // 1. A good sheet
 let s = sheet(["(SETUP stock: x=0..300 y=0..200 z=-19..0)", "(SETUP tool-d: 6.35)", "(SETUP probe-corner: front-left)", "(SETUP tool: T1 FLAT 1/4in [6.35mm])"]);
 check("good sheet", s.stock && s.stock.x.max === 300 && s.corner === "front-left" && !s.stockBad && !s.cornerBad && s.bad.length === 0, JSON.stringify(s.bad));
+// 1b. Stock top for the Depth view (1.32.1)
+check("stock top from the stock line", sheet(["(SETUP stock: x=0..152.4 y=0..304.8 z=0..24.3)"]).stockTop === 24.3);
+check("stock top from plate when Z0 is on the stock bottom", sheet(["(SETUP plate: 152.4 X 304.8 X 24.3 MM)", "(SETUP zero: FRONT-LEFT CORNER, Z0 ON STOCK BOTTOM, +Y IS THE BACK)"]).stockTop === 24.3);
+check("stock top from plate when Z0 is on the MDF", sheet(["(SETUP plate: 100 x 50 x 12 mm)", "(SETUP zero: front-left, Z0 on MDF)"]).stockTop === 12);
+check("stock top 0 when Z0 is on the stock top", sheet(["(SETUP zero: back-left, Z0 ON STOCK TOP)"]).stockTop === 0);
+check("no stock top when the sheet doesn't say", sheet(["(SETUP job: test)"]).stockTop === null);
 // 2. Nested brackets in a SETUP line are flagged as a stop
 s = sheet(["(SETUP tool: T1 FLAT 1/4in (6.35mm) - 2FL)", "(SETUP router: DIAL 4)"]);
 check("nested SETUP line flagged", s.bad.length === 1 && s.bad[0].line === 1, JSON.stringify(s.bad));
