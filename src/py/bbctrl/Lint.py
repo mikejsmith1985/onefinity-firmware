@@ -542,19 +542,7 @@ def _stops(ctrl, res):
         stops.append({'key': 'lint', 'msg': 'G-code check: ' + summary(res)})
 
     want = GCodeText.norm_corner(res.get('setup', {}).get('probe-corner'))
-    if want == 'flip':
-        # A flip-aligned copy (1.31.0): X/Y zero must come from the flip
-        # alignment, not from a corner probe
-        rec = probe_record(ctrl)
-        loc = rec.get('loc') if isinstance(rec, dict) else None
-        if loc != 'flip':
-            stops.append({'key': 'zero', 'msg':
-                          'WRONG ZERO: this is a flip-aligned copy, so X/Y zero '
-                          'must be the one the flip alignment set, but the last '
-                          'probe was %s. Line side B up again in the Start job '
-                          'wizard, then run.' % ('on the %s' % loc if loc else
-                                                 'not recorded')})
-    elif want in GCodeText.CORNERS:
+    if want in GCodeText.CORNERS:
         rec = probe_record(ctrl)
         loc = rec.get('loc') if isinstance(rec, dict) else None
         if loc and loc != want:

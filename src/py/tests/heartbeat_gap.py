@@ -1,7 +1,7 @@
 # Heartbeat-gap harness (1.31.2).
 #
 # Runs the controller's real websocket handler (heartbeat every 3 s) and the
-# real G-code check, Cut deeper and Start job handlers in a Tornado server
+# real G-code check, and Cut deeper handlers in a Tornado server
 # process, connects a websocket client like a screen does, asks for the
 # whole-file work on a large program from two "screens" at once, and reports
 # the longest gap between messages the client saw.  The screens give up
@@ -66,9 +66,6 @@ def server(mode, port, upload):
     class SyncDoOver(bbctrl.APIHandler):
         def put(self):
             self.write_json(bbctrl.DoOver(ctrl).analyse(self.json['file']))
-    class SyncWizard(bbctrl.APIHandler):
-        def put(self):
-            self.write_json(bbctrl.JobPlan(ctrl).plan(self.json['file']))
     class FreshLint(Web.LintHandler):
         def get(self, filename):
             Lint.clear_cache()  # every request a new check, like a new upload
@@ -79,7 +76,6 @@ def server(mode, port, upload):
         (r'/websocket', Web.WSConnection),
         (r'/api/lint/([^/]+)', SyncLint if sync else FreshLint),
         (r'/api/next-doover', SyncDoOver if sync else Web.DoOverHandler),
-        (r'/api/next-wizard', SyncWizard if sync else Web.WizardHandler),
     ])
     app.ioloop = tornado.ioloop.IOLoop.current()
     app.listen(port, address='127.0.0.1')
@@ -114,10 +110,9 @@ def client(port, name, quiet_before=7, quiet_after=7):
         listen(ws)
         yield gen.sleep(quiet_before)
         start = time.time()
-        # Two screens check the program at once, then Cut deeper and the wizard
+        # Two screens check the program at once, then Cut deeper
         yield [req('GET', '/api/lint/' + name), req('GET', '/api/lint/' + name)]
         yield req('PUT', '/api/next-doover', json.dumps({'action': 'analyse', 'file': name}))
-        yield req('PUT', '/api/next-wizard', json.dumps({'action': 'plan', 'file': name}))
         busy = time.time() - start
         yield gen.sleep(quiet_after)
         ws.close()

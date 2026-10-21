@@ -10,7 +10,7 @@ import { remoteGet } from "./store.js";
 import { getSetter } from "./ToolSetter.jsx";
 import { setterChecks } from "./setter.js";
 import { Modal } from "./ui.jsx";
-import { useUi, uiSet, uiCas, uiOpen, uiClose, uiPatch, usePref, setPref, getPref, ME } from "./shared.js";
+import { useUi, uiSet, uiCas, uiOpen, uiClose, uiPatch, usePref, setPref, getPref } from "./shared.js";
 import { useCheckpoint } from "./checkpoint.js";
 import { useFinished } from "./doover.js";
 import DoOverDialog from "./DoOverDialog.jsx";
@@ -135,27 +135,6 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
     const mustShow = !!setup || stopped;
     if (skipChecklist() && !mustShow) start(); else setCheck({ checks, setup });
   };
-  // Start job wizard (1.31.0): its Run button goes through the same checks as this one.
-  const startRef = useRef(null);
-  startRef.current = { tryStart, selected: state.selected, ready: mach === "READY" };
-  useEffect(() => {
-    const f = (e) => {
-      const want = e.detail?.file;
-      let tries = 0;
-      // Selecting the part file reaches this screen's state a moment later
-      const go = () => {
-        const c = startRef.current;
-        if (c.selected === want && c.ready) c.tryStart();
-        else if (++tries < 20) setTimeout(go, 200);
-        else setErr(`Not started: ${want} didn't load. Select it and press Run.`);
-      };
-      go();
-    };
-    window.addEventListener("next-run-request", f);
-    return () => window.removeEventListener("next-run-request", f);
-  }, []);
-  const wizard = useUi(state, "wizard").v;
-  const openWizard = () => uiOpen("wizard", { id: `${Date.now()}-${ME}`, driver: ME, file: state.selected });
   const openSheet = async () => {
     setSheetBusy(true); setErr("");
     try {
@@ -186,7 +165,6 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         <small>Program</small>
         <strong title={file}>{file || "No program selected"}</strong>
         {file && !active && <button className="linkish" disabled={sheetBusy} onClick={openSheet} title="Where to zero, which corner to probe, tool and feeds for this program">{sheetBusy ? "Reading…" : "Setup sheet"}</button>}
-        {file && !active && !wizard && <button className="linkish" onClick={openWizard} title="Step by step: load the stock, measure it, line up side B, change and measure each cutter, run each part">Start job…</button>}
         {file && !active && finished && <button className="linkish" onClick={() => uiOpen("doover", { file, at: Date.now() })} title="The cut didn't go all the way through: run only the deepest passes again, deeper">Cut deeper…</button>}
         {note && <em className="file-note" title={note}>{note}</em>}
       </div>

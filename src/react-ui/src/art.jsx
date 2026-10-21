@@ -243,23 +243,3 @@ export function SetterArt({ moves, cur = -1, probe }) {
   </Frame>;
 }
 
-// A reference bore: over it, down into it, touch the walls twice.
-export function BoreArt({ moves, cur = -1 }) {
-  const c = { x: 160, y: 110 }, r = 46;
-  const segs = (moves || []).map(({ label: l }) => {
-    if (/travel height/.test(l) && /^Go up/.test(l)) return { dot: "up", at: { x: 60, y: 60 } };
-    if (/over the bore/.test(l)) return { from: { x: 60, y: 60 }, to: { x: c.x - 10, y: c.y - 10 }, guard: true };
-    if (/down to travel/.test(l)) return { dot: "down", at: { x: 60, y: 60 }, guard: true };
-    if (/down into the bore/.test(l)) return { dot: "down", at: c, guard: true };
-    if (/X walls/.test(l)) return { from: { x: c.x - r + 6, y: c.y }, to: { x: c.x + r - 6, y: c.y }, touch: true };
-    if (/Y walls/.test(l)) return { from: { x: c.x, y: c.y + r - 6 }, to: { x: c.x, y: c.y - r + 6 }, touch: true };
-    if (/Lift/.test(l)) return { dot: "up", at: c };
-    return null;
-  });
-  return <Frame label="Reference bore: the stylus goes down into it and touches the walls">
-    <rect className="art-stock" x="20" y="20" width="280" height="175" rx="2" />
-    <circle className="art-bore" cx={c.x} cy={c.y} r={r} />
-    <Path segs={segs} cur={cur} />
-    <Bit p={c} on={cur < 0} />
-  </Frame>;
-}

@@ -1,15 +1,14 @@
 # A screen's work goes ahead of background work in the worker (1.31.4).
-# Up to 1.31.3 the worker took jobs in the order they were asked for, so the
-# Start job wizard's first page waited for the G-code check of every program
-# uploaded before it (on the controller: tens of seconds after uploading the
-# four programs of a job).
+# Up to 1.31.3 the worker took jobs in the order they were asked for, so a
+# screen's Run check waited for the G-code check of every program uploaded
+# before it (on the controller: tens of seconds after uploading the four
+# programs of a job).
 #   python3 src/py/tests/test_work_queue.py
 import sys, os, time, json, types, tempfile, shutil, glob
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bbstub import check, done, run_sync
 import bbctrl
 from bbctrl import Lint, Work
-JobPlanMod = sys.modules['bbctrl.JobPlan']
 Web = sys.modules['bbctrl.Web']
 FileHandlerMod = sys.modules['bbctrl.FileHandler']
 from tornado import gen
@@ -83,28 +82,8 @@ check('...and it ran before the checks uploaded before it', not bgs[1].done() or
 for b in bgs: b.result(60)
 check('every check done and cached', all(Lint.cached(p) is not None for p in progs))
 
-# 5. The wizard's plan is cached per file version
-calls = []
-real_run = Work.run
-def counting_run(fn, *a):
-    calls.append(fn.__name__); return real_run(fn, *a)
-Work.run = counting_run
-ctrl = types.SimpleNamespace(log = types.SimpleNamespace(get = lambda n: None),
-                             state = types.SimpleNamespace(get = lambda k, d = None: 'idle'),
-                             get_upload = lambda n = None: os.path.join(tmp, n) if n else tmp)
-jp = bbctrl.JobPlan(ctrl)
-a = run_sync(jp.plan_async, 'p0.nc')
-b = run_sync(jp.plan_async, 'p0.nc')
-check('plan worked out once per file version', calls.count('_plan_job') == 1, calls)
-check('plan answer names the file and matches the direct plan', a == b and a['file'] == 'p0.nc' and
-      a == dict(JobPlanMod.summary(open(progs[0]).read().splitlines()), file = 'p0.nc'))
-os.utime(progs[0], (time.time() + 5, time.time() + 5))
-run_sync(jp.plan_async, 'p0.nc')
-check('a changed file is planned again', calls.count('_plan_job') == 2, calls)
-Work.run = real_run
-
-# 6. The real server: upload four programs, then open the wizard on the
-# first.  Its plan request must not wait for the checks of all four.
+# 5. The real server: upload four programs, then a screen asks for the check
+# of the last one.  It must not wait for the checks of the three before it.
 up = tempfile.mkdtemp()
 state = types.SimpleNamespace(vars = {'cycle': 'idle'})
 state.get = lambda k, d = None: state.vars.get(k, d)
@@ -120,13 +99,12 @@ class App(tornado.web.Application):
     def get_ctrl(self, id = None): return ctrl
 
 big = [put('big%d.nc' % i, 150000) for i in range(4)]
-Lint.clear_cache(); JobPlanMod._plans.clear()
+Lint.clear_cache()
 
 @gen.coroutine
 def scenario():
     app = App([(r'/api/file(/.+)?', FileHandlerMod.FileHandler),
-               (r'/api/lint/([^/]+)', Web.LintHandler),
-               (r'/api/next-wizard', Web.WizardHandler)])
+               (r'/api/lint/([^/]+)', Web.LintHandler)])
     srv = app.listen(0, address = '127.0.0.1')
     port = list(srv._sockets.values())[0].getsockname()[1]
     cl = tornado.httpclient.AsyncHTTPClient()
@@ -136,21 +114,20 @@ def scenario():
         with open(p, 'rb') as f: body = f.read()
         r = yield cl.fetch(u('/api/file/' + os.path.basename(p)), method = 'PUT', body = body)
     uploaded = time.time()
-    # Work queued behind the first check: three more checks and three plans
+    # Work queued behind the first check: three more checks
     queued = Work.waiting()
     t = time.time()
-    r = yield cl.fetch(u('/api/next-wizard'), method = 'PUT',
-                       body = json.dumps({'action': 'plan', 'file': 'big0.nc'}), request_timeout = 300)
-    wizard = time.time() - t
+    r = yield cl.fetch(u('/api/lint/big3.nc'), request_timeout = 300)
+    screen = time.time() - t
     srv.stop()
-    return queued, wizard, json.loads(r.body)
+    return queued, screen, json.loads(r.body)
 
 one = time.time(); Lint._lint_path(big[0]); one = time.time() - one
-queued, wizard, res = run_sync(scenario)
+queued, screen, res = run_sync(scenario)
 for p in big: Lint.lint_file_async(p).result(120)
-check('uploads queue their checks and plans in the background', queued[1] >= 5, queued)
-check('wizard plan answered (%.2f s; one check takes %.2f s, all queued work about %.1f s)'
-      % (wizard, one, one * 8), res.get('file') == 'big0.nc' and wizard < one * 3, round(wizard, 2))
+check('uploads queue their checks in the background', queued[1] >= 2, queued)
+check('the screen\'s check answered (%.2f s; one check takes %.2f s, all queued work about %.1f s)'
+      % (screen, one, one * 4), 'errors' in res and screen < one * 2.5, round(screen, 2))
 check('...and the uploaded programs\' checks all finished afterwards', all(Lint.cached(p) is not None for p in big))
 
 Work.shutdown()
