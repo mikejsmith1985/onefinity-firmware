@@ -4,9 +4,7 @@
 import { programMoves, moveStatus, STEP_RESET } from "../src/progress.js";
 import { probeProgram, centerSecondProgram } from "../src/probe.js";
 import { measureProgram, MEASURE_DEFAULTS } from "../src/measure.js";
-import { setterProgram, setterTouchProgram } from "../src/setter.js";
-import { boreProgram, BORE_DEFAULTS } from "../src/bore.js";
-import { overStockProgram } from "../src/wizard.js";
+import { setterProgram } from "../src/setter.js";
 let ok = true;
 const check = (name, cond, msg = "") => { console.log(`${cond ? "PASS" : "FAIL"} ${name} ${msg}`); ok &&= !!cond; };
 
@@ -27,9 +25,6 @@ const progs = {
   "measure calib": measureProgram({ ...m, probeY: false, calibrate: true }),
   "setter ref": setterProgram({ ...st, mode: "ref" }),
   "setter tool": setterProgram({ ...st, mode: "tool", ref: -40 }),
-  "setter touch": setterTouchProgram({ ...st, token: 3 }),
-  "bore": boreProgram({ ...BORE_DEFAULTS, d: 10, ball: 2, depth: 4, clear: 5, travel: 1000, fast: 75, slow: 25, fromX: 0, fromY: 0, fromZ: 20, targets: [{ x: 10, y: 10 }, { x: 12, y: 10 }], token: 9 }),
-  "over stock": overStockProgram({ last: { x: 100, y: 100, ztop: -60 }, top: -1, token: 4 }),
 };
 for (const [name, p] of Object.entries(progs)) {
   const L = p.split("\n").map((l) => l.trim());

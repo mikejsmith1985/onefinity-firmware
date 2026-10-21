@@ -18,9 +18,8 @@
 # after, on the IO loop.
 #
 # Jobs are sent to the worker one at a time, a screen's jobs first (1.31.4).
-# Up to 1.31.3 they went in the order they were asked for, so the Start job
-# wizard (or the Run check) waited behind the G-code check of every program
-# uploaded just before it.  run() is for work a screen is waiting for,
+# Up to 1.31.3 they went in the order they were asked for, so the Run check
+# waited behind the G-code check of every program uploaded just before it.  run() is for work a screen is waiting for,
 # run_background() for work done ahead of time (the check of a new upload),
 # and promote() moves a background job ahead when a screen asks for it.  The
 # worker runs a screen's job at NICE_FG and background jobs at NICE, both

@@ -410,16 +410,6 @@ button.linkish{background:none;border:0;padding:0;margin-left:.75rem;text-decora
 .dv-step output { min-width: 96px; text-align: center; display: inline-block; }
 .dv-tabs { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
 
-/* Start job wizard (1.31.0) */
-.wz-refs { list-style: none; padding: 0; margin: 0 0 12px; }
-.wz-refs li { border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
-.wz-refs li.ok { border-color: var(--green, #3ecf8e); }
-.wz-refs li.bad { border-color: var(--red, #e5484d); }
-.wz-refs li small { flex-basis: 100%; }
-.wz-refs .row-end { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
-.wz-banner { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 900; display: flex; gap: 12px; align-items: center;
-  background: var(--steel2); color: inherit; border: 1px solid var(--blue); border-radius: 8px; padding: 8px 14px; box-shadow: 0 4px 16px rgba(0,0,0,.35); }
-
 /* ---- probing screens, common frame (1.31.1) ---- */
 .probe-steps li { display: flex; align-items: center; gap: 8px; }
 .probe-steps li .tick { display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--rule); font: 600 12px var(--num); color: var(--dim); }

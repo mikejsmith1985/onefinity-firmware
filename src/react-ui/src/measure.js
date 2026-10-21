@@ -173,7 +173,7 @@ ${lift("Y", -1)}
   add("G90");
   // Park over the new zero at travel height
   if (!o.calibrate) add(`o${oid++} if [#<_ofm_ok> EQ 1]\n${mark("Move over the new zero")}\nG90 G0 ${o.probeY ? "X0 Y0" : "X0"}\no${oid - 1} endif`);
-  // 1.31.0: the wizard only counts a measurement as done when this run's token is set at the end
+  // 1.31.0: the screen only counts a measurement as done when this run's token is set at the end
   if (o.token) add(`o${oid++} if [#<_ofm_ok> EQ 1]\n#<_ofm_done> = ${o.token}\no${oid - 1} endif`);
   add("M2");
   return out.join("\n") + "\n";

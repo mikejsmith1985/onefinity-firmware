@@ -1,6 +1,5 @@
-// The common frame of the probing screens (1.31.1): Probe XYZ/Z, Measure stock, Tool setter and the
-// Start job wizard's probing steps all show their steps, illustrations, running moves and results
-// the same way.
+// The common frame of the probing screens (1.31.1): Probe XYZ/Z, Measure stock and Tool setter all
+// show their steps, illustrations, running moves and results the same way.
 import React, { useRef } from "react";
 import { moveStatus } from "./progress.js";
 
