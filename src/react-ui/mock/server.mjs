@@ -92,13 +92,13 @@ function broadcast(diff) {
 function run(dryLift = 0) {
   const n = pts.length / 3;
   let i = 0;
-  broadcast({ xx: "RUNNING", cycle: "running", feed: 1500, speed: dryLift ? 0 : 17000, v: 0, dry_run: !!dryLift, dry_lift: dryLift });
+  broadcast({ xx: "RUNNING", cycle: "running", feed: 1500, speed: dryLift ? 0 : 17000, v: 0, dry_run: !!dryLift, dry_lift: dryLift, dry_note: dryLift ? "First pass of each of 6 operations at 3000 mm/min, about 2 min 09 s." : "" });
   clearInterval(timer);
   timer = setInterval(() => {
     if (state.xx === "HOLDING") return;
     if (i >= n) {
       clearInterval(timer);
-      broadcast({ xx: "READY", cycle: "idle", feed: 0, speed: 0, line: 0, plan_time: 0, dry_run: false, dry_lift: 0 });
+      broadcast({ xx: "READY", cycle: "idle", feed: 0, speed: 0, line: 0, plan_time: 0, dry_run: false, dry_lift: 0, dry_note: "" });
       return;
     }
     broadcast({ xp: pts[i * 3], yp: pts[i * 3 + 1], zp: pts[i * 3 + 2], line: i + 1, plan_time: i * 4 });

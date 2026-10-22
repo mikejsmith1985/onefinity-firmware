@@ -40,7 +40,8 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
   const setCheck = (c) => (c ? uiSet("runcheck", c) : uiClose("runcheck"));
   const parkAsk = !!useUi(state, "park-ask").v;
   const setParkAsk = (on) => (on ? uiOpen("park-ask", { at: Date.now() }) : uiClose("park-ask"));
-  // Dry run: the controller sends the same program 30 mm (or the chosen lift) higher with the router,
+  // Dry run (1.33.0: quick): the controller sends the first pass of each operation, at 3000 mm/min, with
+  // repeated depth levels left out and long facing passes cut short, 30 mm (or the chosen lift) higher with the router,
   // mist and probing blocked. It lasts for one run only, so it can never be left on.
   const dry = !!useUi(state, "dry").v;
   const setDry = (on) => uiSet("dry", on ? true : null).catch(() => {});
@@ -169,7 +170,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         {note && <em className="file-note" title={note}>{note}</em>}
       </div>
       <div className="bar" role="progressbar" aria-valuenow={active ? pct : 0} aria-valuemin="0" aria-valuemax="100"><i style={{ width: `${active ? (pct || 2) : 0}%` }} /></div>
-      {state.dry_run && <div className="dry-banner" role="status">DRY RUN – moves are lifted {Math.round(state.dry_lift || 0)} mm. Router, mist and probing are blocked. Normal runs are unaffected.</div>}
+      {state.dry_run && <div className="dry-banner" role="status">DRY RUN – {state.dry_note ? state.dry_note + " " : ""}Moves are lifted {Math.round(state.dry_lift || 0)} mm. Router, mist and probing are blocked. Normal runs are unaffected.</div>}
       {!active && (
         <div className="dry-opt">
           <label title="Run the selected program in the air: Z lifted, router and mist blocked. Applies to the next run only.">

@@ -108,6 +108,8 @@ class FileHandler(bbctrl.APIHandler):
             try:
                 path = self.get_upload(self.uploadFilename)
                 bbctrl.Lint.lint_file_async(path, background = True)
+                # and the quick dry run's copy (1.33.0), so Dry run starts at once
+                bbctrl.DryRun.prepare_async(path, background = True)
             except Exception as e:
                 self.get_log('FileHandler').warning('G-code check not started: %s' % e)
 

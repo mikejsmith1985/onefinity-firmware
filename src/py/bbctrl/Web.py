@@ -512,7 +512,28 @@ class StartHandler(bbctrl.APIHandler):
                     msg = ' '.join(s['msg'] for s in stops)
                     ctrl.log.get('Web').info('Start refused: %s' % msg)
                     raise HTTPError(409, '%s', 'Not started. ' + msg)
-        ctrl.mach.start(body.get('dry_lift', 0))
+        dry_lift = body.get('dry_lift', 0)
+        dry_path = dry_note = None
+        if dry_lift:
+            # The quick dry run (1.33.0): the first pass of each operation.
+            # Worked out in the worker and kept until the program changes.
+            filename = ctrl.state.get('selected', '')
+            try:
+                res = yield bbctrl.DryRun.prepare_async(ctrl.get_upload(filename))
+                dry_note = bbctrl.DryRun.describe(res)
+                if res.get('text') is not None:
+                    folder = ctrl.get_path('cache')
+                    os.makedirs(folder, exist_ok = True)
+                    dry_path = os.path.join(folder, 'dryrun.nc')
+                    with open(dry_path, 'w', encoding = 'utf-8') as f:
+                        f.write(res['text'])
+            except Exception as e:
+                ctrl.log.get('Web').warning('Quick dry run not prepared: %s' % e)
+                dry_note = 'Whole program (the quick version could not be prepared).'
+            if ctrl.state.get('selected', '') != filename:
+                raise HTTPError(409, '%s', 'Not started. Another program was '
+                                'selected. Press Dry run again.')
+        ctrl.mach.start(dry_lift, dry_path, dry_note)
         self.write_json('ok')
 
 

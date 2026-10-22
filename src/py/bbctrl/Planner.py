@@ -122,6 +122,7 @@ class Planner():
         state = self.ctrl.state
         if state.get('dry_run', False): state.set('dry_run', False)
         if state.get('dry_lift', 0): state.set('dry_lift', 0)
+        if state.get('dry_note', ''): state.set('dry_note', '')
 
 
     def is_dry(self): return 0 < self.dry_lift
@@ -546,9 +547,12 @@ class Planner():
         self.reset_times()
 
 
-    def load(self, path, dry_lift = 0):
+    def load(self, path, dry_lift = 0, text_path = None):
+        # text_path: the file the planner reads instead of the upload (the
+        # quick dry run's shortened copy, 1.33.0).  It has the same lines, so
+        # line numbers still refer to the program.
         self.where = path
-        path = self.ctrl.get_path('upload', path)
+        path = text_path or self.ctrl.get_path('upload', path)
         self.log.info('GCode:' + path)
         self.end_dry()
         self._sync_position()

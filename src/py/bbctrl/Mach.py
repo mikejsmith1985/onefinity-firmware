@@ -415,12 +415,13 @@ class Mach(Comm):
         return lift
 
 
-    def start(self, dry_lift = 0):
+    def start(self, dry_lift = 0, dry_path = None, dry_note = ''):
         filename = self.ctrl.state.get('selected', '')
         if not filename: return
         if dry_lift: dry_lift = self._check_dry_lift(dry_lift)
         self._begin_cycle('running')
-        self.planner.load(filename, dry_lift)
+        self.planner.load(filename, dry_lift, dry_path if dry_lift else None)
+        if dry_lift and dry_note: self.ctrl.state.set('dry_note', dry_note)
         super().resume()
 
 

@@ -102,7 +102,7 @@ c.get_upload = lambda n=None: os.path.join(tmp, n) if n else tmp
 c.get_path = lambda d=None, f=None: os.path.join(tmp, d) if d else tmp
 c.state = types.SimpleNamespace(get=lambda k, d=None: c.sel if k == 'selected' else d)
 c.log = types.SimpleNamespace(get=lambda n: Log())
-c.mach = types.SimpleNamespace(start=lambda lift=0: c.started.append(lift))
+c.mach = types.SimpleNamespace(start=lambda lift=0, *a: c.started.append(lift))
 
 put('good.nc', GOOD); put('bad.nc', BAD)
 st = run_sync(Lint.start_stops_async, c, 'bad.nc')

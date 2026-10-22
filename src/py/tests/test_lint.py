@@ -108,7 +108,7 @@ check('cache follows the file', Lint.start_stops(c, 'bad.nc') == [])
 class Log:
     def info(s, *a): pass
 c.log = types.SimpleNamespace(get=lambda n: Log())
-c.mach = types.SimpleNamespace(start=lambda lift=0: c.started.append(lift))
+c.mach = types.SimpleNamespace(start=lambda lift=0, *a: c.started.append(lift))
 def start(sel, body):
     c.sel = sel
     h = Web.StartHandler.__new__(Web.StartHandler); h.get_ctrl = lambda: c; h.json = body
@@ -120,6 +120,14 @@ r = start('bad.nc', {})
 check('start refused with the reason', r[0] == 409 and 'G83' in r[1] and c.started == [], r)
 check('Run anyway (ack) starts', start('bad.nc', {'ack': True}) == 'started' and c.started == [0])
 check('clean program starts, dry lift passed', start('good.nc', {'dry_lift': 30}) == 'started' and c.started[-1] == 30)
+# 1.33.0: the dry run gets the quick copy, with the same lines, and a note for the screens
+c.mach = types.SimpleNamespace(start=lambda lift=0, *a: c.started.append((lift,) + a))
+check('dry run gets the quick copy', start('good.nc', {'dry_lift': 30}) == 'started' and
+      c.started[-1][1] and os.path.exists(c.started[-1][1]) and
+      len(open(c.started[-1][1]).read().splitlines()) == len(open(c.get_upload('good.nc')).read().splitlines()) and
+      'First pass' in c.started[-1][2], c.started[-1])
+check('a normal run gets no copy', start('good.nc', {}) == 'started' and c.started[-1][1:] == (None, None), c.started[-1])
+c.mach = types.SimpleNamespace(start=lambda lift=0, *a: c.started.append(lift))
 r = start('fr.nc', None)
 check('no body: still checked', r != 'started' and 'WRONG ZERO' in r[1])
 
