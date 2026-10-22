@@ -100,4 +100,15 @@ check('stock top from plate + Z0 on stock bottom', DryRun.stock_top({'plate': '1
 check('stock top from stock line', DryRun.stock_top({'stock': 'x=0..1 y=0..1 z=0..23.8'}) == 23.8)
 check('no stock top', DryRun.stock_top({}) is None)
 
+# 8. Runs on the controller's Python (3.5 on the Pi): no math.dist (1.33.1)
+import math as _m
+_saved = _m.__dict__.pop('dist', None)
+try:
+    r = DryRun.reduce_lines(['(SETUP stock: x=0..60 y=0..60 z=-10..0)', 'G90 G21', '(P)', 'G0 Z5', 'G0 X0 Y0'] + square(-1) + square(-2) + ['G0 Z5', 'M30'])
+    check('works without math.dist', r['lines'] is not None)
+except AttributeError as e:
+    check('works without math.dist', False, e)
+finally:
+    if _saved is not None: _m.dist = _saved
+
 done()

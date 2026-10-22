@@ -298,7 +298,7 @@ def reduce_lines(lines):
             if not pending: pending_start, pending_arcs = (x, y, z), False
             pending_arcs = pending_arcs or mode in (2, 3)
             pending.append(i)
-            pending_len += math.dist((x, y, z), (nx, ny, nz))
+            pending_len += math.sqrt((nx - x) ** 2 + (ny - y) ** 2 + (nz - z) ** 2)
             x, y, z = nx, ny, nz
             tool_up = nz > cut_z
             continue
