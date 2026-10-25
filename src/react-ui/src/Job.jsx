@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { api } from "./controller.js";
-import { fmtTime } from "./axis.js";
+import { fmtTime, computeAxis } from "./axis.js";
 import { useNote } from "./notes.js";
 import { markStopped } from "./history.js";
 import ParkDialog from "./ParkDialog.jsx";
@@ -60,6 +60,12 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       .then(() => setDry(false))
       .catch((e) => setErr(String(e.message || e).replace(/^\{"message":"|","code":\d+\}$/g, "")));
   };
+  // Setter guard inputs (1.34.0): machine Z top of travel, and the dry run lift when Dry run is ticked.
+  const guardOpts = (isDry) => {
+    let zMax;
+    try { const z = config ? computeAxis(state, config, "z", true) : null; if (z && z.homed && isFinite(z.max)) zMax = z.max; } catch { /* no config yet */ }
+    return { zMax, dryLift: isDry ? liftMm : 0 };
+  };
   // Always-visible warning when the loaded program's zero corner or plate does not match what the controller knows.
   const [live, setLive] = useState([]);
   // The probe record is saved after probing ends (when Done is pressed), after the offsets stop changing,
@@ -88,7 +94,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         let setup = sheetCache.current.file === key ? sheetCache.current.setup : undefined;
         if (setup === undefined) { setup = await readSetup(state.selected); sheetCache.current = { file: key, setup }; }
         const setter = await getSetter();
-        const sc = path?.positions ? setterChecks(path, setter, state, setup?.toolD, metric) : [];
+        const sc = path?.positions ? setterChecks(path, setter, state, setup?.toolD, metric, guardOpts(dry)) : [];
         const rec = setup?.corner ? await remoteGet("probe") : null;
         // The G-code check only changes with the program (1.31.2: it was asked for again every 3 s while
         // a warning showed). A failed read is not kept, so it is tried again on the next pass.
@@ -105,7 +111,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       } catch { if (!gone) setLive([]); }
     })();
     return () => { gone = true; };
-  }, [state.selected, state.selected_time, state.offset_x, state.offset_y, state.offset_z, metric, probeTick, path]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.selected, state.selected_time, state.offset_x, state.offset_y, state.offset_z, metric, probeTick, path, dry, liftMm]); // eslint-disable-line react-hooks/exhaustive-deps
   // Cut deeper (1.30.0): offered once the selected program has run to the end
   const { cp } = useCheckpoint(state);
   const doover = useUi(state, "doover").v;
@@ -126,7 +132,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
     try { lint = await api.get(`lint/${encodeURIComponent(file)}`); }
     catch (e) { setErr(`Not started: the controller could not check ${file} (${String(e.message || e).replace(/^\{"message":"|","code":\d+\}$/g, "")}). Press Run again.`); return; }
     let extra = [];
-    try { extra = setterChecks(path, await getSetter(), state, setup?.toolD, metric); } catch { /* no setter saved */ }
+    try { extra = setterChecks(path, await getSetter(), state, setup?.toolD, metric, guardOpts(dry)); } catch { /* no setter saved */ }
     extra = [...lintChecks(lint), ...extra];
     const checks = buildChecks(state, config, metric, file, setup, rec, extra);
     // A program with a setup sheet always shows it. A move outside the plate is never skipped.
@@ -142,7 +148,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
       const setup = await readSetup(state.selected);
       const rec = setup?.corner ? await remoteGet("probe") : null;
       let sc = [];
-      try { sc = setterChecks(path, await getSetter(), state, setup?.toolD, metric); } catch { /* no setter saved */ }
+      try { sc = setterChecks(path, await getSetter(), state, setup?.toolD, metric, guardOpts(dry)); } catch { /* no setter saved */ }
       setSheet(setup ? { setup, checks: [...probeChecks(setup, rec, state), ...stockChecks(setup, metric), ...sheetLineChecks(setup), ...sc] } : { setup: null, checks: sc });
     } catch (e) { setErr(String(e.message || e)); }
     setSheetBusy(false);

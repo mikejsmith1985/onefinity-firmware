@@ -17,7 +17,15 @@ export const SETTER_DEFAULTS = {
   clear: 30,     // start the touch this far above the saved height (covers longer tools)
   travel: 1000,  // mm/min for the guarded descent
   keep: 30,      // keep-out radius around the saved center, mm (programs that pass closer are checked)
+  // Setter guard (1.34.0). The controller reads the same settings (SetterGuard.py) and refuses any
+  // planned move or jog that would hit the setter; these screens show it before you run.
+  installed: true, // the setter is on the table; untick while it is lifted out (e.g. surfacing)
+  allow: 3.2,      // extra for the cutter's radius when the cutter isn't known, mm
+  safeDrop: 5,     // without a reference: over the setter only within this of the top of Z, mm
+  zMargin: 2,      // clearance kept above the setter's top, mm
 };
+const num = (v) => typeof v === "number" && isFinite(v);
+const setting = (s, k) => (num(s?.[k]) && s[k] >= 0 ? s[k] : SETTER_DEFAULTS[k]);
 
 export const SETTER_FAILS = {
   1: "The tool touched the setter before the slow touch started. This tool is more than the clearance longer than the one used to save the setter position. Raise the clearance, or save the setter position again with a longer tool.",
@@ -120,59 +128,103 @@ export function probeRefValue(raw, setter) {
   return raw - c;
 }
 
-// Keep-out check: does the loaded program move over the tool setter low enough to hit it?
-//
-// positions: planner path, x,y,z triples in work mm (Float32Array).
-// setter: {x, y} machine mm, keep: keep-out radius mm (from the saved center).
-// off: {x, y} machine position of work zero. toolR: cutter radius mm.
-// topZ: work Z of the setter top (the current reference), or null when unknown,
-// in which case only X/Y is checked.
-export const SETTER_KEEP_DEFAULT = 30;
-export const SETTER_Z_MARGIN = 2;
+// Setter guard (1.34.0). The setter is a column: a circle on the table (saved center, keep-out
+// radius plus the cutter's radius) up to its top. The top's machine Z comes from the reference
+// (work Z of the top + the current Z offset) when it is still valid. Without one the tool's length
+// is unknown, so moves over the setter only count as safe with the spindle within safeDrop of the
+// top of Z travel. Mirrors SetterGuard.py; keep the two in step.
+export function guardZone(setter, state, zMax, toolR = 0) {
+  if (!setter || !num(setter.x) || !num(setter.y)) return { on: false, why: "unsaved" };
+  if (setter.installed === false) return { on: false, why: "removed" };
+  const keep = setting(setter, "keep") || SETTER_DEFAULTS.keep;
+  const r = keep + Math.max(setting(setter, "allow"), toolR || 0);
+  const ref = refStatus(setter.ref, state);
+  if (ref.ok && num(state.offset_z)) {
+    return { on: true, how: "ref", x: setter.x, y: setter.y, r, zLimit: setter.ref.ref + state.offset_z + setting(setter, "zMargin") };
+  }
+  if (!num(zMax)) return { on: false, why: "unhomed" };
+  return { on: true, how: "top", x: setter.x, y: setter.y, r, zLimit: zMax - setting(setter, "safeDrop") };
+}
 
-export function setterClash(positions, setter, off, toolR, topZ) {
-  if (!positions || positions.length < 6 || !setter || typeof setter.x !== "number") return null;
-  const cx = setter.x - (off.x || 0), cy = setter.y - (off.y || 0); // setter center in work X/Y
-  const reach = (setter.keep > 0 ? setter.keep : SETTER_KEEP_DEFAULT) + (toolR || 0);
-  const limitZ = typeof topZ === "number" ? topZ + SETTER_Z_MARGIN : Infinity;
-  let closest = Infinity, closestLow = Infinity, hits = 0, lowZ = Infinity;
+// Lowest Z of the move a -> b inside the column, or null when the move is clear (machine mm).
+export function segmentHits(a, b, cx, cy, r, zLimit) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+  const ox = a[0] - cx, oy = a[1] - cy;
+  const A = dx * dx + dy * dy, B = 2 * (ox * dx + oy * dy), C = ox * ox + oy * oy - r * r;
+  let t0, t1;
+  if (A < 1e-12) { if (C >= 0) return null; t0 = 0; t1 = 1; }
+  else {
+    const disc = B * B - 4 * A * C;
+    if (disc <= 0) return null;
+    const q = Math.sqrt(disc);
+    t0 = Math.max(0, (-B - q) / (2 * A)); t1 = Math.min(1, (-B + q) / (2 * A));
+    if (t1 <= t0) return null;
+  }
+  const low = Math.min(a[2] + dz * t0, a[2] + dz * t1);
+  return low < zLimit ? low : null;
+}
+
+// Keep-out check over a planned program path.
+// positions: planner path, x,y,z triples in work mm. off: {x, y, z} work offsets (machine = work + off).
+// opts.dryLift: a dry run sends every move this much higher (capped at zMax), as the controller does.
+export function setterClash(positions, zone, off, opts = {}) {
+  if (!positions || positions.length < 6 || !zone?.on) return null;
+  const lift = opts.dryLift || 0, zMax = num(opts.zMax) ? opts.zMax : Infinity;
+  const mz = (z) => Math.min(z + (off.z || 0) + lift, lift ? zMax : Infinity);
+  let hits = 0, lowZ = Infinity, closest = Infinity, first = -1;
   const n = positions.length / 3;
   for (let i = 1; i < n; i++) {
-    const a = (i - 1) * 3, b = i * 3;
-    const ax = positions[a], ay = positions[a + 1], az = positions[a + 2];
-    const bx = positions[b], by = positions[b + 1], bz = positions[b + 2];
-    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
-    let t = l2 > 0 ? ((cx - ax) * dx + (cy - ay) * dy) / l2 : 0;
+    const j = (i - 1) * 3, k = i * 3;
+    const a = [positions[j] + (off.x || 0), positions[j + 1] + (off.y || 0), mz(positions[j + 2])];
+    const b = [positions[k] + (off.x || 0), positions[k + 1] + (off.y || 0), mz(positions[k + 2])];
+    // Closest XY approach while below the top, for the "clear by" note
+    const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+    let t = l2 > 0 ? ((zone.x - a[0]) * dx + (zone.y - a[1]) * dy) / l2 : 0;
     t = Math.max(0, Math.min(1, t));
-    const d = Math.hypot(ax + t * dx - cx, ay + t * dy - cy);
-    const z = Math.min(az, bz); // lowest point of the segment, to be safe
-    if (d < closest) closest = d;
-    if (z < limitZ && d < closestLow) closestLow = d;
-    if (d < reach && z < limitZ) { hits++; lowZ = Math.min(lowZ, z); }
+    if (Math.min(a[2], b[2]) < zone.zLimit) closest = Math.min(closest, Math.hypot(a[0] + t * dx - zone.x, a[1] + t * dy - zone.y));
+    const low = segmentHits(a, b, zone.x, zone.y, zone.r, zone.zLimit);
+    if (low !== null) { hits++; lowZ = Math.min(lowZ, low); if (first < 0) first = i; }
   }
-  return { hits, closest, closestLow, lowZ, reach, center: { x: cx, y: cy }, zChecked: limitZ !== Infinity };
+  return { hits, lowZ, closest, first };
 }
 
 const len = (v, metric) => (metric ? `${v.toFixed(1)} mm` : `${(v / 25.4).toFixed(2)} in`);
 
-// Checklist items for the setter keep-out. path: {positions}, setter: saved setter prefs,
-// state: controller state, toolD: cutter diameter mm (from the setup sheet), metric.
-export function setterChecks(path, setter, state, toolD, metric = true) {
-  if (!setter || typeof setter.x !== "number") return [];
-  if (!path?.positions) return [{ level: "warn", name: "Tool setter", text: "The program's path isn't ready yet, so it wasn't checked against the tool setter." }];
-  const ref = refStatus(setter.ref, state);
-  const topZ = ref.ok ? setter.ref.ref : null;
-  const r = setterClash(path.positions, setter, { x: state.offset_x, y: state.offset_y }, (toolD || 0) / 2, topZ);
-  if (!r) return [];
-  const where = `the tool setter (within ${len(r.reach, metric)} of its center${toolD ? ", counting the cutter's radius" : ""})`;
-  if (r.hits && r.zChecked) {
-    return [{ level: "stop", name: "TOOL SETTER", text: `This program moves over ${where} as low as Z ${len(r.lowZ, metric)}. The setter's top is at about Z ${len(topZ, metric)}, so the cutter would hit it or pass within ${len(SETTER_Z_MARGIN, metric)} of it. Move the stock or the setter, then run again.` }];
+// Plain-language state of the guard, for the Tool setter screen.
+export function guardText(zone, setter, metric) {
+  if (!zone.on) {
+    return zone.why === "removed" ? "Off: the setter is marked removed. Moves aren't checked against it. Tick “On the table” when it's back."
+      : zone.why === "unhomed" ? "Waiting: home the machine and the guard switches on."
+      : "Off: save the setter's position to switch it on.";
   }
-  if (r.hits) {
-    return [{ level: "warn", name: "Tool setter", text: `This program moves over ${where}. There's no current setter reference, so the controller can't tell whether those moves are high enough to clear it. Check by eye, or take a reference first.` }];
-  }
-  const near = r.zChecked ? r.closestLow : r.closest;
-  if (!isFinite(near)) return [{ level: "ok", name: "Tool setter", text: `Every move stays at least ${len(SETTER_Z_MARGIN, metric)} above the tool setter's top.` }];
-  return [{ level: "ok", name: "Tool setter", text: `The cutter stays ${len(Math.max(0, near - (toolD || 0) / 2), metric)} from the tool setter's center at the closest point${r.zChecked ? " below the setter's top" : ""}.` }];
+  return zone.how === "ref"
+    ? `On. Nothing may pass within ${len(zone.r, metric)} of the setter's center below machine Z ${len(zone.zLimit, metric)} (its top from the reference, plus ${len(setting(setter, "zMargin"), metric)}).`
+    : `On, without a reference: the tool's length is unknown, so moves over the setter are only allowed with the spindle within ${len(setting(setter, "safeDrop"), metric)} of the top of Z. Take a reference to allow lower moves that clear it.`;
 }
 
+// Checklist items for the setter keep-out. path: {positions}, setter: saved setter prefs,
+// state: controller state, toolD: cutter diameter mm (setup sheet), metric,
+// opts: {zMax: machine Z top of travel, dryLift}.
+// A clash is a "block": the controller would refuse that move part way through the job,
+// so Run stays locked (there is no Run anyway for it).
+export function setterChecks(path, setter, state, toolD, metric = true, opts = {}) {
+  if (!setter || !num(setter.x)) return [];
+  const zone = guardZone(setter, state, opts.zMax, (toolD || 0) / 2);
+  if (!zone.on) {
+    if (zone.why === "removed") return [{ level: "ok", name: "Tool setter", text: "Marked removed, so moves aren't checked against it. Tick “On the table” on the Tool setter screen when it's back." }];
+    if (zone.why === "unhomed") return [{ level: "warn", name: "Tool setter", text: "The machine isn't homed, so the program couldn't be checked against the tool setter." }];
+    return [];
+  }
+  if (!path?.positions) return [{ level: "warn", name: "Tool setter", text: "The program's path isn't ready yet, so it wasn't checked against the tool setter." }];
+  const off = { x: state.offset_x || 0, y: state.offset_y || 0, z: state.offset_z || 0 };
+  const r = setterClash(path.positions, zone, off, { dryLift: opts.dryLift, zMax: opts.zMax });
+  if (!r) return [];
+  if (r.hits) {
+    const top = zone.how === "ref"
+      ? `the setter's top plus clearance is at work Z ${len(zone.zLimit - off.z, metric)}`
+      : `with no setter reference the controller only allows moves over it with the spindle within ${len(setting(setter, "safeDrop"), metric)} of the top of Z (work Z ${len(zone.zLimit - off.z, metric)})`;
+    return [{ level: "stop", block: true, name: "TOOL SETTER", text: `This program moves within ${len(zone.r, metric)} of the tool setter's center as low as work Z ${len(r.lowZ - off.z, metric)}, and ${top}. The controller would stop the job at that move. Move the stock or the zero, ${zone.how === "top" ? "take a setter reference, " : ""}or lift the setter out and mark it removed on the Tool setter screen.` }];
+  }
+  if (!isFinite(r.closest)) return [{ level: "ok", name: "Tool setter", text: "Every move near the tool setter stays above its top." }];
+  return [{ level: "ok", name: "Tool setter", text: `Clear: below the setter's top, the cutter stays ${len(Math.max(0, r.closest - (toolD || 0) / 2), metric)} from its center.` }];
+}

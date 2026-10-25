@@ -57,6 +57,8 @@ def log_json(o): return json.dumps(log_floats(o))
 class Planner():
     seek_line = None     # the last probing move sent (1.31.1)
     seek_error = True    # error flag of the last seek command
+    guard_pos = None     # where the next planned line starts (setter guard, 1.34.0)
+    guard_exempt = False # a routine that touches the tool setter on purpose
 
     def __init__(self, ctrl):
         self.ctrl = ctrl
@@ -71,6 +73,8 @@ class Planner():
         self.mist_follow = False  # mist only during cutting moves (option)
         self.mist_wanted = False  # the program has asked for mist (M7)
         self.mist_out = False     # what this planner last set Load 1 to
+        self.guard_pos = None     # machine position the next planned line starts from
+        self.guard_exempt = False # a routine that touches the tool setter on purpose
 
         ctrl.state.add_listener(self._update)
 
@@ -396,6 +400,7 @@ class Planner():
         if type != 'set': self.log.info('Cmd:' + log_json(block))
 
         if type == 'line':
+            self._guard_line(block)
             self._enqueue_line_time(block)
             for _, sp in block.get('speeds', []) or []:
                 try: self.spindle = float(sp)
@@ -484,6 +489,26 @@ class Planner():
         raise Exception('Unknown planner command "%s"' % type)
 
 
+    # Tool setter guard (1.34.0) -----------------------------------------
+    def _guard_line(self, block):
+        guard = getattr(self.ctrl, 'setter_guard', None)
+        if guard is None or self.guard_exempt:
+            self.guard_pos = None # Re-read from the machine next time
+            return
+
+        target = block['target']
+        if self.is_dry(): target = self._dry_target(target)
+        target = dict((k.lower(), float(v)) for k, v in target.items())
+        start = self.guard_pos
+        if start is None: start = self.ctrl.state.get_position()
+
+        guard.check_line(start, target) # Raises RuntimeError on a clash
+
+        pos = dict(start)
+        pos.update(target)
+        self.guard_pos = pos
+
+
     def _note_seek(self, block):
         target = block['target']
         if self.is_dry(): target = self._dry_target(target)
@@ -529,6 +554,8 @@ class Planner():
         self.planner.set_logger(self._log_cb, 1, 'LinePlanner:3')
         self._position_dirty = True
         self.seek_line = None
+        self.guard_pos = None
+        self.guard_exempt = False
         self.cmdq.clear()
         self.reset_times()
 
@@ -540,6 +567,11 @@ class Planner():
     def mdi(self, cmd, with_limits = True):
         self.where = '<mdi>'
         self.log.info('MDI:' + cmd)
+        # Homing (no limits) and the setter routines go into the setter's
+        # keep-out area on purpose; everything else is checked.
+        self.guard_pos = None
+        self.guard_exempt = not with_limits or \
+            cmd.lstrip().startswith('(Tool setter')
         self._sync_position()
         self._begin_spindle()
         self._begin_mist(False)
@@ -552,6 +584,8 @@ class Planner():
         # quick dry run's shortened copy, 1.33.0).  It has the same lines, so
         # line numbers still refer to the program.
         self.where = path
+        self.guard_pos = None
+        self.guard_exempt = False
         path = text_path or self.ctrl.get_path('upload', path)
         self.log.info('GCode:' + path)
         self.end_dry()
@@ -567,6 +601,7 @@ class Planner():
         try:
             self.end_dry()
             self.seek_line = None
+            self.guard_pos = None
             self.planner.stop()
             self.cmdq.clear()
 
@@ -584,6 +619,7 @@ class Planner():
 
             self.log.info('Planner restart: %d %s' % (id, log_json(position)))
             self.seek_line = None
+            self.guard_pos = None
 
             self.cmdq.clear()
             self.cmdq.release(id)

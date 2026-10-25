@@ -4,7 +4,7 @@ import { ME, useUi, useDriver, uiGet, uiCas, uiUpdate, uiPatch, uiClose } from "
 import { api } from "./controller.js";
 import { computeAxis } from "./axis.js";
 import { getPrefs, setPrefs } from "./checkpoint.js";
-import { SETTER_DEFAULTS, SETTER_FAILS, CORR_MAX, setterProgram, refStatus, probeActive, probeCorrection } from "./setter.js";
+import { SETTER_DEFAULTS, SETTER_FAILS, CORR_MAX, setterProgram, refStatus, probeActive, probeCorrection, guardZone, guardText } from "./setter.js";
 import { programMoves, moveStatus } from "./progress.js";
 import { RunProgress, Outcome, useRunStep, StepBody } from "./steps.jsx";
 import { SetterArt } from "./art.jsx";
@@ -90,6 +90,9 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
   // Calibrating needs a probe reference, then a cutter whose Z was set by Probe Z after it (so Z zero changed).
   const calibReady = !!lp && typeof state.offset_z === "number" && Math.abs(state.offset_z - lp.offZ) > 0.01;
   const corr = s?.corr;
+  // Setter guard (1.34.0): the controller refuses moves into the setter; this shows what it is doing.
+  const zTop = (() => { try { const z = config ? computeAxis(state, config, "z", true) : null; return z && z.homed && isFinite(z.max) ? z.max : undefined; } catch { return undefined; } })();
+  const zone = s ? guardZone(s, state, zTop) : { on: false, why: "unsaved" };
 
   const update = (fn) => setS((x) => { const n = fn({ ...x }); saveSetter(n); return n; });
   // The running program's moves (progress marks, see progress.js) and the one running now (1.31.1)
@@ -100,7 +103,7 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
   const runStep = useRunStep(state.of_step, busy && D?.runAt ? `${busy}:${D.runAt}` : null);
 
   const saveLocation = () => {
-    update((x) => ({ ...x, x: state.xp, y: state.yp, z: state.zp, ref: null, lastProbe: null }));
+    update((x) => ({ ...x, x: state.xp, y: state.yp, z: state.zp, ref: null, lastProbe: null, installed: true }));
     setMsg({ ok: true, text: "Setter position saved. The old reference was cleared: take a new one with a tool whose Z zero is right." });
   };
 
@@ -165,6 +168,15 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
           </div>
         </div>
 
+        <section className="setter-guard" aria-label="Collision guard">
+          <h3>Collision guard</h3>
+          <label className="check"><input type="checkbox" checked={s.installed !== false} disabled={!located}
+            onChange={(e) => update((x) => ({ ...x, installed: e.target.checked }))} /> On the table</label>
+          <small>Untick while the setter is lifted out, for example to surface the spoilboard. Tick it again when it's back in.</small>
+          <p className={`guard-state ${zone.on ? "on" : "off"}`} role="status">{guardText(zone, s, metric)}</p>
+          {zone.on && <small>The controller itself refuses any program move, typed command or jog that would hit it. Hold-to-jog stops short, sooner at higher speeds.</small>}
+        </section>
+
         {ref.ok && s.ref.by === "probe" && !s.ref.corrected && <p className="err">This reference was taken with the 3D probe before the probe was calibrated against a cutter, so tools measured from it can be off by a fraction of a millimeter. Calibrate once (below), then they'll match.</p>}
 
         <section className="setter-calib" aria-label="Probe calibration">
@@ -192,7 +204,23 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
             <small>How much longer a new tool can be than the one used to save the position.</small></label>
           <label className="stack">Keep-out radius ({unit})
             <NumInput digits={3} min={0} value={(s.keep || SETTER_DEFAULTS.keep) / u} onChange={(n) => update((x) => ({ ...x, keep: n * u }))} />
-            <small>Programs that move within this distance of the setter's center (plus the cutter's radius) and below its top are stopped before they run. Make it at least the setter's widest point from its center, including any bracket.</small></label>
+            <small>From the setter's center to its widest point, including the base, bracket, air fitting and cable exit. Nothing may pass closer than this (plus the cutter allowance) below its top.</small></label>
+          <label className="stack">Cutter allowance ({unit})
+            <NumInput digits={3} min={0} value={(s.allow ?? SETTER_DEFAULTS.allow) / u} onChange={(n) => update((x) => ({ ...x, allow: n * u }))} />
+            <small>Added to the radius for typed commands and jogs, where the cutter isn't known. Use your largest cutter's radius. Programs use the cutter from their setup sheet if it's bigger.</small></label>
+          <label className="stack">Height margin over its top ({unit})
+            <NumInput digits={3} min={0} value={(s.zMargin ?? SETTER_DEFAULTS.zMargin) / u} onChange={(n) => update((x) => ({ ...x, zMargin: n * u }))} />
+            <small>How far above the setter's top (from the reference) the cutter must stay when passing over it.</small></label>
+          <label className="stack">Safe band without a reference ({unit})
+            <NumInput digits={3} min={0} value={(s.safeDrop ?? SETTER_DEFAULTS.safeDrop) / u} onChange={(n) => update((x) => ({ ...x, safeDrop: n * u }))} />
+            <small>With no reference the tool's length is unknown, so moves over the setter are only allowed with the spindle within this distance of the top of Z.</small></label>
+          {located && <>
+            <label className="stack">Setter center, machine X ({unit})
+              <NumInput digits={3} value={s.x / u} onChange={(n) => update((x) => ({ ...x, x: n * u }))} /></label>
+            <label className="stack">Setter center, machine Y ({unit})
+              <NumInput digits={3} value={s.y / u} onChange={(n) => update((x) => ({ ...x, y: n * u }))} />
+              <small>To fine-tune the saved position by typing it. Saving the position by jogging sets both.</small></label>
+          </>}
           {located && <p className="dim">Setter at machine X {fmt(s.x)}, Y {fmt(s.y)}, Z {fmt(s.z)} {unit}.{s.ref ? ` Reference ${fmt(s.ref.ref)} ${unit}.` : ""}</p>}
         </div>}
       </div>}

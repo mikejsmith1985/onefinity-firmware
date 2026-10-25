@@ -58,12 +58,15 @@ export default function Checklist({ checks, setup, onRun, onCancel, ack, never, 
   const setAck = onAck, setNever = onNever;
   const stopItems = checks.filter((c) => c.level === "stop");
   const stops = stopItems.length > 0;
+  // A "block" (1.34.0: the program would hit the tool setter) can't be run anyway: the controller
+  // refuses the move itself and would stop the job part way through.
+  const blocked = checks.some((c) => c.level === "stop" && c.block);
   const warns = checks.some((c) => c.level === "warn");
   const go = () => { if (never && !stops) setPref("checklist.skip", "1"); onRun(); };
   return (
     <Modal title={stops ? "Stop. Do not run yet" : "Ready to run?"} wide onClose={onCancel} actions={<>
       <button data-autofocus className={stops ? "primary" : ""} onClick={onCancel}>{stops ? "Cancel and fix it" : "Cancel"}</button>
-      <button className={stops || warns ? "danger" : "primary"} disabled={stops && !ack} onClick={go}>{stops ? "Run anyway" : warns ? "Run anyway" : "Run"}</button>
+      {!blocked && <button className={stops || warns ? "danger" : "primary"} disabled={stops && !ack} onClick={go}>{stops ? "Run anyway" : warns ? "Run anyway" : "Run"}</button>}
     </>}>
       {stops && (
         <div className="stop-banner" role="alert">
@@ -76,7 +79,9 @@ export default function Checklist({ checks, setup, onRun, onCancel, ack, never, 
           <li key={i} className={c.level}><span className="mark" aria-label={c.level}>{ICON[c.level]}</span><b>{c.name}</b><span>{c.text}</span></li>
         ))}
       </ul>
-      {stops
+      {blocked
+        ? <p className="block-note">This can't be run as it is. Fix the item above and press Run again.</p>
+        : stops
         ? <label className="check ack"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} /> I know this is wrong for this program and want to run it anyway</label>
         : <label className="check"><input type="checkbox" checked={never} onChange={(e) => setNever(e.target.checked)} /> Don't show this check again</label>}
     </Modal>

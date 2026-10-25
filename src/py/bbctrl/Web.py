@@ -684,6 +684,8 @@ class NextStoreHandler(bbctrl.APIHandler):
         if name == 'prefs':
             cp = getattr(self.get_ctrl(), 'checkpoint', None)
             if cp: cp.reload()
+            guard = getattr(self.get_ctrl(), 'setter_guard', None)
+            if guard: guard.reload()
 
 
 class ResumeHandler(bbctrl.APIHandler):

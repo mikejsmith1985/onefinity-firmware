@@ -54,6 +54,9 @@ class Ctrl(object):
             if args.demo: self.avr = bbctrl.AVREmu(self)
             else: self.avr = bbctrl.AVR(self)
 
+            # Tool setter guard (1.34.0): checks every move against the setter
+            self.setter_guard = bbctrl.SetterGuard(self)
+
             self.i2c = bbctrl.I2C(args.i2c_port, args.demo)
             self.lcd = bbctrl.LCD(self)
             self.mach = bbctrl.Mach(self, self.avr)

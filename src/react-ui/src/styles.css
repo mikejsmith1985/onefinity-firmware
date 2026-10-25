@@ -462,3 +462,13 @@ svg.art { width: 100%; height: auto; display: block; background: var(--bed); bor
 .outcome.ok .mark { background: var(--green); color: #07140d; } .outcome.bad .mark { background: var(--red); color: #fff; }
 .outcome h3 { margin: 4px 0 8px; }
 @media (max-width: 860px) { .step-body { grid-template-columns: 1fr; } .step-art { position: static; max-width: 360px; } .moves { columns: 1; } }
+
+/* Tool setter guard (1.34.0) */
+.setter-guard { margin: 14px 0; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 8px; }
+.setter-guard h3 { margin: 0 0 6px; }
+.setter-guard .guard-state { margin: 8px 0 4px; font-weight: 600; }
+.setter-guard .guard-state.on { color: var(--green); }
+.setter-guard .guard-state.off { color: var(--yellow); }
+.block-note { margin-top: 10px; font-weight: 600; }
+.setter-guard .check { display: flex; align-items: center; gap: 8px; }
+.setter-guard small { display: block; margin-top: 2px; }

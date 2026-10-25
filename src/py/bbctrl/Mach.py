@@ -346,7 +346,54 @@ class Mach(Comm):
     def jog(self, axes):
         self._begin_cycle('jogging')
         self.planner.position_change()
-        super().queue_command(Cmd.jog(axes))
+
+        # Tool setter guard (1.34.0): a velocity jog has no end point to
+        # check, so the parts of it heading into the setter are zeroed early
+        # enough to stop short, and re-checked while the jog runs.
+        self._jog_want = dict(axes)
+        send = self._guard_jog(axes)
+        self._jog_sent = send
+        super().queue_command(Cmd.jog(send))
+        self._jog_watch()
+
+
+    def _guard_jog(self, axes):
+        guard = getattr(self.ctrl, 'setter_guard', None)
+        if guard is None: return axes
+        try: send, reason = guard.filter_jog(axes)
+        except Exception:
+            self.mlog.exception('Tool setter guard: jog check failed')
+            return axes
+        if reason and not getattr(self, '_jog_warned', False):
+            self._jog_warned = True
+            self.mlog.warning(
+                'Tool setter guard: jog stopped short of the tool setter. '
+                + ('Raise Z to move over it.' if reason == 'xy' else
+                   'Lowering Z here would hit it.'))
+        return send
+
+
+    def _jog_watch(self):
+        timer = getattr(self, '_jog_timer', None)
+        if timer is not None:
+            self.ctrl.ioloop.remove_timeout(timer)
+            self._jog_timer = None
+
+        want = getattr(self, '_jog_want', {}) or {}
+        if not any(want.get(a, 0) or want.get(a.upper(), 0) for a in 'xyzabc'):
+            self._jog_warned = False
+            return
+
+        def tick():
+            self._jog_timer = None
+            if self._get_cycle() != 'jogging': return
+            send = self._guard_jog(self._jog_want)
+            if send != self._jog_sent:
+                self._jog_sent = send
+                super(Mach, self).queue_command(Cmd.jog(send))
+            self._jog_watch()
+
+        self._jog_timer = self.ctrl.ioloop.call_later(0.1, tick)
 
 
     def home(self, axis, position = None):
