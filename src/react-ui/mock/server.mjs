@@ -80,7 +80,8 @@ for (const depth of [-5, -10, -15]) {
   seg(10, 10, depth, 1500);
 }
 seg(10, 10, 15, NaN);
-const positions = Buffer.from(new Float32Array(pts).buffer);
+// MOCK_POSITIONS=file: serve a real controller path (positions.bin from /api/path/<file>/positions)
+const positions = process.env.MOCK_POSITIONS ? fs.readFileSync(process.env.MOCK_POSITIONS) : Buffer.from(new Float32Array(pts).buffer);
 const speeds = Buffer.from(new Float32Array(spd).buffer);
 
 let timer = null;
