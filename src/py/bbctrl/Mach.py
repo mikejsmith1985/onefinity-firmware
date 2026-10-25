@@ -25,6 +25,7 @@
 #                                                                              #
 ################################################################################
 
+import math
 import bbctrl
 from bbctrl.Comm import Comm
 from bbctrl.CoolantHold import CoolantHold
@@ -343,6 +344,17 @@ class Mach(Comm):
             self.mlog.error('Command refused: %s' % err)
 
     def set(self, code, value):
+        # Config values reach the motion board through here (State.config).
+        # 1.34.6: remember them, so a jog fence restores exactly what the board
+        # was configured with.  (1.34.5 read them from Config.values, where the
+        # "motors-backup" list overwrites the motor limits with 0.)
+        if not hasattr(self, '_config_vars'): self._config_vars = {}
+        self._config_vars[code] = value
+        if code in getattr(self, '_fenced', {}): return   # applied on unfence
+        self._send_var(code, value)
+
+
+    def _send_var(self, code, value):
         super().queue_command('${}={}'.format(code, value))
 
 
@@ -378,10 +390,11 @@ class Mach(Comm):
 
 
     def _config_limit(self, code, motor):
-        name = 'min-soft-limit' if code == 'tn' else 'max-soft-limit'
-        v = (self.ctrl.config.get(name, {}) or {}).get(str(motor), None)
-        try: return float(v)
+        '''The soft limit the motion board was configured with, or None.'''
+        v = getattr(self, '_config_vars', {}).get('%d%s' % (motor, code), None)
+        try: v = float(v)
         except (TypeError, ValueError): return None
+        return v if math.isfinite(v) else None
 
 
     def _fence_jog(self, axes):
@@ -408,8 +421,16 @@ class Mach(Comm):
                 vals = {}
                 for m in motors:
                     base = self._config_limit(code, m)
-                    vals['%d%s' % (m, code)] = value if base is None else \
-                        (min(base, value) if kind == 'max' else max(base, value))
+                    other = self._config_limit('tn' if code == 'tm' else 'tm', m)
+                    # Only tighten a working pair of limits, and never so far
+                    # that min >= max - 1 (the board then switches soft limits
+                    # off for that axis, which is how 1.34.5 failed).
+                    if base is None or other is None: vals = None; break
+                    if kind == 'max': x = min(base, value); ok = x > other + 1
+                    else: x = max(base, value); ok = x < other - 1
+                    if not ok: vals = None; break
+                    vals['%d%s' % (m, code)] = x
+                if vals is None: continue   # can't fence: the Pi-side check only
                 if all(fenced.get(v) == x for v, x in vals.items()):
                     want.update(vals)            # already in place
                     for k in keys: decided[k] = axes[k]
@@ -437,13 +458,12 @@ class Mach(Comm):
 
     def _set_fence(self, want):
         fenced = getattr(self, '_fenced', {})
-        for v in fenced:
-            if v not in want:
-                base = self._config_limit(v[1:], int(v[0]))
-                if base is not None: self.set(v, base)
-        for v, value in want.items():
-            if fenced.get(v) != value: self.set(v, value)
+        conf = getattr(self, '_config_vars', {})
         self._fenced = dict(want)
+        for v in fenced:
+            if v not in want and v in conf: self._send_var(v, conf[v])
+        for v, value in want.items():
+            if fenced.get(v) != value: self._send_var(v, value)
 
 
     def _unfence(self):

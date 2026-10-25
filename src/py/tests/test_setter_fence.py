@@ -80,7 +80,7 @@ class Board:
         s.p = dict(pos); s.c = dict((a, SCurve()) for a in 'xyz'); s.next = {}
         s.vars = {}
         for m in range(4): s.vars['%dtn' % m] = CONF_TN[str(m)]; s.vars['%dtm' % m] = CONF_TM[str(m)]
-        s.jumps = []
+        s.jumps = []; s.collapsed = []; s.outside = []
     def limit(s, a, lo):
         m = {'x': 0, 'y': 1, 'z': 3}[a]          # axis_get_soft_limit: the axis' motor
         return s.vars['%d%s' % (m, 'tn' if lo else 'tm')]
@@ -88,7 +88,13 @@ class Board:
         if isinstance(cmd, tuple): s.next = dict((k.lower(), v) for k, v in cmd[1].items())
         elif cmd.startswith('$'):
             k, v = cmd[1:].split('='); s.vars[k] = float(v)
+    def check(s):
+        for m in range(4):
+            if not s.vars['%dtn' % m] < s.vars['%dtm' % m] - 1: s.collapsed.append((m, s.vars['%dtn' % m], s.vars['%dtm' % m]))
+        for a, m in (('x', 0), ('y', 1), ('z', 3)):
+            if not CONF_TN[str(m)] - 0.01 <= s.p[a] <= CONF_TM[str(m)] + 0.01: s.outside.append((a, round(s.p[a], 2)))
     def step(s):
+        s.check()
         moving = False
         for a in 'xyz':
             sc, p = s.c[a], s.p[a]
@@ -147,8 +153,11 @@ class State:
         return {'tm': {'x': 410, 'y': 410, 'z': 0}, 'tn': {'x': 0, 'y': 0, 'z': -133}}[var]
 
 class Config:
+    '''Like the controller's Config.values: the "motors-backup" list overwrites
+    the motor soft limits with 0 (what broke 1.34.5). The fence must not use it.'''
     def get(s, name, d=None):
-        return {'min-soft-limit': CONF_TN, 'max-soft-limit': CONF_TM}.get(name, d)
+        return {'min-soft-limit': {'0': 0, '1': 0, '2': 0, '3': 0},
+                'max-soft-limit': {'0': 0, '1': 0, '2': 0, '3': 0}}.get(name, d)
 
 class Sim:
     def __init__(s, pos, STALE=0.5, SEND=1.0, LAG=0.3):
@@ -168,6 +177,15 @@ class Sim:
         m._begin_cycle = lambda c: ctrl.state.set('cycle', c)
         m.planner = type('P', (), {'position_change': lambda self: None})()
         s.m = m
+        # Configuration reaches the board through Mach.set, as State.config does it
+        cfg = []
+        orig = Mach.__mro__[1].queue_command
+        Mach.__mro__[1].queue_command = lambda self, c: cfg.append(c)
+        try:
+            for mo in range(4):
+                m.set('%dtn' % mo, CONF_TN[str(mo)]); m.set('%dtm' % mo, CONF_TM[str(mo)])
+        finally: Mach.__mro__[1].queue_command = orig
+        for c in cfg: s.board.command(c)
     def seen(s):
         t = s.loop.t - s.STALE
         p = s.hist[0][1]
@@ -206,7 +224,7 @@ class Sim:
 
 low = TOP - 5
 # 1. Straight at the setter from every direction, every jog speed, held until it would be well past
-bad, n, jumps = [], 0, []
+bad, n, jumps, collapsed, outside = [], 0, [], [], []
 for style in ('gamepad', 'screen'):
     for pct in (0.8, 3.1, 10, 25, 50, 100):
         for ang in range(0, 360, 30):
@@ -217,11 +235,13 @@ for style in ('gamepad', 'screen'):
                 hold = (R + back + 60) / (vmax('x') * pct / 100) if pct >= 10 else 6.0
                 s = Sim({'x': sx, 'y': sy, 'z': low})
                 c = s.run({'x': pct / 100 * ux, 'y': pct / 100 * uy, 'z': 0}, min(hold, 30), resend=(style == 'screen'), total=min(hold, 30) + 4)
-                n += 1; jumps += s.board.jumps
+                n += 1; jumps += s.board.jumps; collapsed += s.board.collapsed; outside += s.board.outside
                 if c < R: bad.append((style, pct, ang, back, round(c, 2)))
 check('%d jogs straight at the setter with a slow Pi (commands 1 s late, positions 0.5 s old): '
       'none gets inside the keep-out' % n, not bad, bad[:6])
 check('the board never had to jump back to a limit', not jumps, jumps[:3])
+check('a soft limit pair is never collapsed (min >= max - 1 turns them off on the board)', not collapsed, collapsed[:3])
+check('no jog goes outside the configured travel', not outside, outside[:3])
 
 # 1a. From across the table at full speed: stops right at the fence, not far short
 s = Sim({'x': 5, 'y': CY, 'z': low})
