@@ -48,6 +48,7 @@ DEFAULTS = {
 # 100 ms and the command needs a moment to reach the motion board.
 JOG_LATENCY = 0.45   # s
 JOG_SLACK   = 2.0    # mm
+REF_FORMAT  = 2      # setter.js REF_FORMAT
 REF_TOL     = 0.01   # mm, Z offset change that invalidates the reference
 
 
@@ -80,7 +81,9 @@ def limit_z(cfg, offset_z, z_max):
     Returns (z, how): how is "ref" or "top".  z is None when Z travel isn't
     known (not homed), then the guard can't judge height.'''
     ref = cfg.get('ref')
-    if ref and _num(ref.get('ref')) and _num(ref.get('offZ')) and \
+    # f: reference format.  Before 1.34.3 the machine Z of the touch was stored instead of the
+    # work Z, which put the setter's top far too low: those records are never used.
+    if ref and ref.get('f') == REF_FORMAT and _num(ref.get('ref')) and _num(ref.get('offZ')) and \
             _num(offset_z) and abs(offset_z - ref['offZ']) <= REF_TOL:
         return ref['ref'] + offset_z + cfg['z_margin'], 'ref'
 

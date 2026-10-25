@@ -87,10 +87,22 @@ export function setterProgram(o) {
   return lines.join("\n") + "\n";
 }
 
-// Reference record kept on the controller: {ref, offZ, time, by}.
+// The touch height the controller reports (#5063) is in MACHINE coordinates, not work
+// coordinates (the CAMotics planner fills #5061-#5063 from the machine position; measured on the
+// machine in 1.34.2: a setter top at machine Z -61.8 read -61.792 with a Z offset of -111.782).
+// The reference is a work Z, so it is converted with the Z offset in force at the touch
+// (machine = work + offset). 1.34.3.
+export const REF_FORMAT = 2; // records made before 1.34.3 stored the machine Z: never used
+export function tripToWork(raw, offsetZ) {
+  if (typeof raw !== "number" || typeof offsetZ !== "number") return null;
+  return raw - offsetZ;
+}
+
+// Reference record kept on the controller: {ref, offZ, time, by, f}.
 // It is valid while the Z offset is still the one we left it at.
 export function refStatus(rec, state) {
   if (!rec || typeof rec.ref !== "number") return { ok: false, why: "none" };
+  if (rec.f !== REF_FORMAT) return { ok: false, why: "old" };
   if (typeof state.offset_z === "number" && typeof rec.offZ === "number" && Math.abs(state.offset_z - rec.offZ) > 0.01) {
     return { ok: false, why: "moved" };
   }
@@ -122,9 +134,9 @@ export function probeCorrection(probeRef, cutterRef) {
   return { ok: true, c };
 }
 
-// The reference to store after the probe touched the setter (raw = work Z at the trip).
+// The reference to store after the probe touched the setter (raw = work Z at the trip, from tripToWork).
 export function probeRefValue(raw, setter) {
-  const c = typeof setter?.corr?.c === "number" ? setter.corr.c : 0;
+  const c = setter?.corr?.f === REF_FORMAT && typeof setter.corr.c === "number" ? setter.corr.c : 0;
   return raw - c;
 }
 

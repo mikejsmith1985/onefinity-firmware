@@ -48,14 +48,14 @@ def probe_job(sim, stock_top):
     sim.P[2] = TOP
     sim.run(setter_prog('ref'))
     assert sim.vars['_ofs_ok'] == 1
-    return sim.vars['_ofs_ref']
+    return js('tripToWork', sim.vars['_ofs_ref'], sim.off[2])   # machine Z reported -> work Z (1.34.3)
 
 def cutter(sim, L):
     sim.L = L; sim.r = 0.01; sim.is_probe = False
 
 for PROBE_PT, SETTER_PT in ((0.4, 1.2), (1.5, 0.6), (0.0, 0.0)):
     tag = 'probe %.1f / setter %.1f mm' % (PROBE_PT, SETTER_PT)
-    sim = TripSim((52, 28, 26), 1.0, [])
+    sim = TripSim((52, 28, 26), 1.0, []); sim.probe_frame = 'machine'   # as on the machine
     sim.probe_pt, sim.setter_pt = PROBE_PT, SETTER_PT
 
     # One-time calibration: probe reference, then a cutter Probe Z'd on the same top, then its reference
@@ -64,13 +64,13 @@ for PROBE_PT, SETTER_PT in ((0.4, 1.2), (1.5, 0.6), (0.0, 0.0)):
     sim.off[2] = 20 + sim.L          # Probe Z with the touch plate: cutter tip on the top reads 0
     sim.P[2] = TOP
     sim.run(setter_prog('ref'))
-    corr = js('probeCorrection', raw, sim.vars['_ofs_ref'])
+    corr = js('probeCorrection', raw, js('tripToWork', sim.vars['_ofs_ref'], sim.off[2]))
     expect = SETTER_PT + PROBE_PT - min(PROBE_PT, SETTER_PT)
     check(tag + ': correction measured', corr['ok'] and abs(corr['c'] - expect) < 0.01, 'c=%.3f expected %.3f' % (corr.get('c', float('nan')), expect))
 
     # A later job: new stock (top at 31), probe reference stored corrected, a different cutter measured on the setter
     raw2 = probe_job(sim, 31)
-    ref = js('probeRefValue', raw2, {'corr': {'c': corr['c']}})
+    ref = js('probeRefValue', raw2, {'corr': {'c': corr['c'], 'f': 2}})
     cutter(sim, -8.0)
     sim.P[2] = TOP
     sim.run(setter_prog('tool', ref=ref))

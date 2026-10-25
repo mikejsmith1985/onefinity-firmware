@@ -4,7 +4,7 @@ import { ME, useUi, useDriver, uiGet, uiCas, uiUpdate, uiPatch, uiClose } from "
 import { api } from "./controller.js";
 import { computeAxis } from "./axis.js";
 import { getPrefs, setPrefs } from "./checkpoint.js";
-import { SETTER_DEFAULTS, SETTER_FAILS, CORR_MAX, setterProgram, refStatus, probeActive, probeCorrection, guardZone, guardText } from "./setter.js";
+import { SETTER_DEFAULTS, SETTER_FAILS, CORR_MAX, setterProgram, refStatus, probeActive, probeCorrection, guardZone, guardText, tripToWork, REF_FORMAT } from "./setter.js";
 import { programMoves, moveStatus } from "./progress.js";
 import { RunProgress, Outcome, useRunStep, StepBody } from "./steps.jsx";
 import { SetterArt } from "./art.jsx";
@@ -93,10 +93,10 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
   const located = s && typeof s.x === "number";
   const ref = s ? refStatus(s.ref, state) : { ok: false };
   const canMove = homed && idle && !touched && located && !busy;
-  const lp = s?.lastProbe;
+  const lp = s?.lastProbe?.f === REF_FORMAT ? s.lastProbe : null;
   // Calibrating needs a probe reference, then a cutter whose Z was set by Probe Z after it (so Z zero changed).
   const calibReady = !!lp && typeof state.offset_z === "number" && Math.abs(state.offset_z - lp.offZ) > 0.01;
-  const corr = s?.corr;
+  const corr = s?.corr?.f === REF_FORMAT ? s.corr : null; // calibrations before 1.34.3 used machine Z values
   // Setter guard (1.34.0): the controller refuses moves into the setter; this shows what it is doing.
   const zTop = (() => { try { const z = config ? computeAxis(state, config, "z", true) : null; return z && z.homed && isFinite(z.max) ? z.max : undefined; } catch { return undefined; } })();
   const zone = s ? guardZone(s, state, zTop) : { on: false, why: "unsaved" };
@@ -125,20 +125,23 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
     if (res.notFound) { setMsg({ ok: false, text: "A touch found nothing, so the controller stopped with an emergency stop (it always does when a probe move misses). Either the tool didn't reach the setter, or something else tripped the fast touch, such as a finger on the plunger, and the slow touch then found nothing. Nothing was saved. Clear the E-stop, home, check the setter position and try again." }); return; }
     if (res.estop) { setMsg({ ok: false, text: "Stopped by the E-stop. Nothing was saved. Clear the E-stop, home, and try again." }); return; }
     if (res.ofs_ok !== 1) { setMsg({ ok: false, text: SETTER_FAILS[res.ofs_fail] || "The setter routine didn't finish. Z zero was not changed." }); return; }
+    // The controller reports the touch in machine coordinates; the reference is a work Z (1.34.3).
+    const trip = tripToWork(res.ofs_ref, res.offset_z);
+    if (mode !== "tool" && trip === null) { setMsg({ ok: false, text: "The controller didn't report where the setter tripped, so nothing was saved. Try again." }); return; }
     if (mode === "calib") {
-      const c = probeCorrection(s.lastProbe?.ref, res.ofs_ref);
+      const c = probeCorrection(s.lastProbe?.f === REF_FORMAT ? s.lastProbe.ref : undefined, trip);
       if (!c.ok) {
         setMsg({ ok: false, text: c.why === "big"
           ? `The cutter and the probe differ by ${fmt(Math.abs(c.c))} ${unit}, more than ${fmt(CORR_MAX)} ${unit}. That's far more than the switches' travel, so the stock has probably moved, or Probe Z wasn't run on the same stock top. Nothing was saved. Run Measure stock again and repeat.`
           : "There's no probe reference to compare with. Run Measure stock with the tool setter step first." });
         return;
       }
-      update((x) => ({ ...x, corr: { c: c.c, time: Date.now() }, ref: { ref: res.ofs_ref, offZ: res.offset_z, time: Date.now(), by: "tool" } }));
+      update((x) => ({ ...x, corr: { c: c.c, time: Date.now(), f: REF_FORMAT }, ref: { ref: trip, offZ: res.offset_z, time: Date.now(), by: "tool", f: REF_FORMAT } }));
       setMsg({ ok: true, text: `Calibrated. The probe reads ${fmt(Math.abs(c.c))} ${unit} ${c.c >= 0 ? "higher" : "lower"} on the setter than a cutter does, and that's now taken off every reference Measure stock takes. This cutter's reference is saved too, so Measure tool works straight away.` });
       return;
     }
     if (mode === "ref") {
-      update((x) => ({ ...x, ref: { ref: res.ofs_ref, offZ: res.offset_z, time: Date.now(), by: "tool" } }));
+      update((x) => ({ ...x, ref: { ref: trip, offZ: res.offset_z, time: Date.now(), by: "tool", f: REF_FORMAT } }));
       setMsg({ ok: true, text: "Reference taken. From now on, measure each new tool here and Z zero follows it." });
     } else {
       update((x) => ({ ...x, ref: { ...x.ref, offZ: res.offset_z } }));
@@ -148,6 +151,7 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
 
   const status = !located ? "Setter position not saved yet."
     : ref.ok ? `Reference taken ${new Date(s.ref.time).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}${s.ref.by === "probe" ? ` with the 3D probe after Measure stock${s.ref.corrected ? ", corrected for the probe" : ""}` : ""}.`
+    : ref.why === "old" ? "The saved reference was taken with an older firmware that stored it wrongly, so it isn't used. Take a new one."
     : ref.why === "moved" ? "Z zero has been changed since the reference was taken (for example by Probe Z), so the reference no longer matches. Take a new one."
     : "No reference yet.";
 

@@ -2,14 +2,14 @@
 // Also writes test/keepout-parity.json for src/py/tests/test_setter_guard_parity.py, which checks
 // that the controller (SetterGuard.py) refuses exactly the moves this screen check finds.
 import { writeFileSync } from "fs";
-import { setterClash, setterChecks, guardZone, segmentHits, guardText } from "../src/setter.js";
+import { setterClash, setterChecks, guardZone, segmentHits, guardText, tripToWork, refStatus } from "../src/setter.js";
 let ok = true;
 const check = (name, cond, msg = "") => { console.log(`${cond ? "PASS" : "FAIL"} ${name} ${msg}`); ok &&= !!cond; };
 const P = (...pts) => new Float32Array(pts.flat());
 
 // Setter at machine X 400 Y 50. Work zero at machine X 300, Y 0, Z -50 -> setter at work X 100 Y 50.
 // Reference: setter top at work Z +8 -> machine -42; with 2 mm clearance moves must stay above machine -40.
-const setter = { x: 400, y: 50, keep: 30, ref: { ref: 8, offZ: -50, time: 0, by: "tool" } };
+const setter = { x: 400, y: 50, keep: 30, ref: { ref: 8, offZ: -50, time: 0, by: "tool", f: 2 } };
 const state = { offset_x: 300, offset_y: 0, offset_z: -50 };
 const opts = { zMax: 0 };
 
@@ -53,6 +53,12 @@ const z = guardZone({ ...setter, keep: 40, allow: 6.35 }, state, 0);
 check("keep-out and allowance settings set the radius", Math.abs(z.r - 46.35) < 1e-9, z.r);
 check("guard text: on with reference", /^On\. /.test(guardText(guardZone(setter, state, 0), setter, true)));
 check("guard text: removed", /^Off: the setter is marked removed/.test(guardText(guardZone({ ...setter, installed: false }, state, 0), setter, true)));
+
+// 1.34.3: the controller reports the touch in machine Z; the reference is stored as work Z
+check("machine touch -61.792 with offset -111.782 is work +49.99", Math.abs(tripToWork(-61.792, -111.782) - 49.99) < 1e-9);
+const { f, ...oldRef } = setter.ref;
+check("a reference saved before 1.34.3 is not used", refStatus(oldRef, state).why === "old");
+check("old reference: guard falls back to the top band", guardZone({ ...setter, ref: oldRef }, state, 0).how === "top");
 
 // Speed: 300k segments
 const big = new Float32Array(900003); for (let i = 0; i < big.length; i += 3) { big[i] = (i / 3) % 200; big[i + 1] = 0; big[i + 2] = -2; }

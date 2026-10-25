@@ -46,7 +46,7 @@ class Ctrl:
 
 # Setter at machine X 374.7, Y 374.7; reference: setter top at work Z +8 with Z offset -50
 SETTER = {'x': 374.7, 'y': 374.7, 'z': -40, 'keep': 30,
-          'ref': {'ref': 8.0, 'offZ': -50.0, 'time': 1, 'by': 'tool'}}
+          'ref': {'ref': 8.0, 'offZ': -50.0, 'time': 1, 'by': 'tool', 'f': 2}}
 def prefs(**kw): s = dict(SETTER); s.update(kw); return {'setter': s}
 
 
@@ -81,6 +81,15 @@ z, how = SG.limit_z(SG.settings_from_prefs(prefs()), -45.0, 0)
 check('Z zero changed: falls back to the top of Z travel', how == 'top' and z == -5, (z, how))
 z, how = SG.limit_z(SG.settings_from_prefs(prefs(ref=None)), -50.0, 0)
 check('no reference: top of Z travel', how == 'top' and z == -5)
+# 1.34.3: a reference saved before 1.34.3 holds the machine Z of the touch: never used
+old = dict(SETTER['ref']); old.pop('f')
+z, how = SG.limit_z(SG.settings_from_prefs(prefs(ref=old)), -50.0, 0)
+check('old-format reference is ignored (top of Z travel)', how == 'top' and z == -5, (z, how))
+# The machine's real numbers: touch at machine -61.792 with Z offset -111.782 -> work 49.99,
+# so nothing may pass lower than machine -59.792 (2 mm over the setter's top).
+real = {'ref': -61.792 - -111.782, 'offZ': -111.782, 'time': 1, 'by': 'tool', 'f': 2}
+z, how = SG.limit_z(SG.settings_from_prefs(prefs(ref=real)), -111.782, 0)
+check('real machine: limit 2 mm above the setter top', how == 'ref' and abs(z - -59.792) < 1e-9, (z, how))
 
 
 # ---------------------------------------------------------------- 3. guard on planned moves

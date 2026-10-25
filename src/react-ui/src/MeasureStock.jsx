@@ -5,7 +5,7 @@ import { api } from "./controller.js";
 import { remotePut } from "./store.js";
 import { getPrefs, setPrefs } from "./checkpoint.js";
 import { readSetup } from "./setup.js";
-import { probeActive, setterProgram, refStatus, probeRefValue } from "./setter.js";
+import { probeActive, setterProgram, refStatus, probeRefValue, tripToWork, REF_FORMAT } from "./setter.js";
 import { getSetter, saveSetter, setterArgs } from "./ToolSetter.jsx";
 import { MEASURE_DEFAULTS, FAILS, ORIGINS_XY, ORIGINS_X, checkOpts, measureProgram, calibratedBall } from "./measure.js";
 import { programMoves, moveStatus } from "./progress.js";
@@ -139,12 +139,14 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
     const r = await uiUpdate("measure", (d) => (d && d.id === openId && d.step === "setter" && d.driver === ME ? { ...d, step: "finishing" } : undefined)).catch(() => ({ ok: false }));
     if (!r.ok) return;
     const s = R.current.state;
-    const ok = s.ofs_ok === 1 && !R.current.failed && s.xx !== "ESTOPPED";
+    const ok = s.ofs_ok === 1 && !R.current.failed && s.xx !== "ESTOPPED" && typeof s.ofs_ref === "number" && typeof s.offset_z === "number";
     if (ok) {
       // Stored corrected for the probe-vs-cutter difference (if calibrated); the raw value is kept for calibrating.
       const now = Date.now();
-      const n = { ...setter, ref: { ref: probeRefValue(s.ofs_ref, setter), offZ: s.offset_z, time: now, by: "probe", corrected: typeof setter.corr?.c === "number" },
-        lastProbe: { ref: s.ofs_ref, offZ: s.offset_z, time: now } };
+      // The touch is reported in machine coordinates; the reference is a work Z (1.34.3)
+      const w = tripToWork(s.ofs_ref, s.offset_z);
+      const n = { ...setter, ref: { ref: probeRefValue(w, setter), offZ: s.offset_z, time: now, by: "probe", corrected: setter.corr?.f === REF_FORMAT && typeof setter.corr?.c === "number", f: REF_FORMAT },
+        lastProbe: { ref: w, offZ: s.offset_z, time: now, f: REF_FORMAT } };
       setSetter(n); saveSetter(n);
     }
     const notFound = R.current.failed || s.xx === "ESTOPPED";

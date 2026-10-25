@@ -2,7 +2,7 @@
 # to a cutter of a different length and measure that on the setter.  Checks
 # that Z zero ends up on the stock top for the cutter, and the safety stops.
 #   python3 src/react-ui/test/setter-sim.py
-import os, sys
+import os, sys, json, subprocess
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from simlib import *
 
@@ -11,6 +11,11 @@ setter = (147, 153, 22, 28, 0, 5)      # setter button, top at machine Z 5
 TOP = 120
 SET = dict(x=150, y=25, z=10)           # saved with the probe tip 5 mm above the button
 allok = True
+
+def js(fn, *args):
+    code = "const m=await import(process.argv[1]);process.stdout.write(JSON.stringify(m[%r](...JSON.parse(process.argv[2]))))" % fn
+    out = subprocess.run(['node', '--input-type=module', '-e', code, 'file://' + S + '/../src/setter.js', json.dumps(args)], capture_output=True, text=True, check=True).stdout
+    return json.loads(out)
 
 def check(name, cond, msg=''):
     global allok
@@ -22,12 +27,13 @@ def setter_prog(mode, ref=None, clear=30, back=(50, 30)):
     return gen(o, 'setter.js', 'setterProgram')
 
 def flow(cutter_longer_by, clear=30):
-    sim = Sim((52, 28, 26), 1.0, [stock, setter])
+    sim = Sim((52, 28, 26), 1.0, [stock, setter]); sim.probe_frame = 'machine'
     sim.run(gen(dict(w=100, probeY=True, l=60, origin='front-left')))
     assert sim.vars['_ofm_ok'] == 1
     sim.P[2] = TOP
     sim.run(setter_prog('ref'))
-    ref = sim.vars['_ofs_ref']
+    # The controller reports the touch in machine Z (1.34.3); the screen stores the work Z
+    ref = js('tripToWork', sim.vars['_ofs_ref'], sim.off[2])
     # tool change: the cutter sticks out further, so its tip is lower
     sim.L += cutter_longer_by; sim.r = 0.01
     sim.run(setter_prog('tool', ref=ref, clear=clear))
