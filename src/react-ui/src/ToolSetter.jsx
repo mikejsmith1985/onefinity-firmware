@@ -25,6 +25,13 @@ export function useProgramRunner(state, subscribe, send) {
   useEffect(() => subscribe((d) => {
     const r = R.current;
     if (d.log?.msg === "Switch not found" && r.running) r.notFound = true;
+    // 1.34.2: an E-stop never brings the cycle back to idle, so finish on it too (the screen
+    // used to sit on the running step with no message). "Switch not found" arrives just before it.
+    if (d.xx === "ESTOPPED" && r.running) {
+      r.running = false;
+      setTimeout(() => r.resolve({ ...R.current.state, notFound: r.notFound, estop: true }), 400);
+      return;
+    }
     if (d.cycle !== undefined && r.running) {
       if (d.cycle !== "idle") r.started = true;
       else if (r.started) { r.running = false; setTimeout(() => r.resolve({ ...R.current.state, notFound: r.notFound }), 400); }
@@ -115,7 +122,8 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
     const res = await run(setterProgram(setterArgs(state, config, s, mode === "calib" ? "ref" : mode, s.ref?.ref)));
     local.current = false;
     await uiPatch("setter", { busy: "" }).catch(() => {});
-    if (res.notFound) { setMsg({ ok: false, text: "The tool didn't reach the setter. The controller stopped with an emergency stop. Check the setter position and its cable, clear the E-stop and try again." }); return; }
+    if (res.notFound) { setMsg({ ok: false, text: "A touch found nothing, so the controller stopped with an emergency stop (it always does when a probe move misses). Either the tool didn't reach the setter, or something else tripped the fast touch, such as a finger on the plunger, and the slow touch then found nothing. Nothing was saved. Clear the E-stop, home, check the setter position and try again." }); return; }
+    if (res.estop) { setMsg({ ok: false, text: "Stopped by the E-stop. Nothing was saved. Clear the E-stop, home, and try again." }); return; }
     if (res.ofs_ok !== 1) { setMsg({ ok: false, text: SETTER_FAILS[res.ofs_fail] || "The setter routine didn't finish. Z zero was not changed." }); return; }
     if (mode === "calib") {
       const c = probeCorrection(s.lastProbe?.ref, res.ofs_ref);

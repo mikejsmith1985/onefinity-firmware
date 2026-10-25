@@ -179,6 +179,12 @@ function mdi(text) {
     const ref = text.includes("#<_ofs_ref> = #5063");
     broadcast({ xx: "RUNNING", cycle: "running", ofs_ok: 0, ofs_fail: 0 });
     playMarks(text, 1200 * SLOW);
+    // MOCK_SETTER_ESTOP=1: the slow touch finds nothing, as on the machine: the log says
+    // "Switch not found", the controller E-stops and the cycle never returns to idle.
+    if (process.env.MOCK_SETTER_ESTOP) {
+      setTimeout(() => { broadcast({ log: { level: "error", msg: "Switch not found" } }); broadcast({ xx: "ESTOPPED", er: "User triggered EStop" }); }, 900 * SLOW);
+      return;
+    }
     setTimeout(() => {
       if (process.env.MOCK_SETTER_FAIL) broadcast({ ofs_fail: 1 });
       else broadcast(ref ? { ofs_ref: -15.2, ofs_ok: 1 } : { ofs_ok: 1, offset_z: (state.offset_z || 0) + 12.7 });
