@@ -45,8 +45,10 @@ DEFAULTS = {
 }
 
 # Velocity jog: position reports are up to 250 ms old, the watcher runs every
-# 100 ms and the command needs a moment to reach the motion board.
-JOG_LATENCY = 0.45   # s
+# 100 ms, and the motion board runs its queue 250 ms behind (EXEC_DELAY).
+# 1.34.4: 0.45 s was too short on the machine; 0.8 s covers the sum with room.
+JOG_LATENCY = 0.8    # s
+JOG_MARGIN  = 1.25   # on the braking distance itself
 JOG_SLACK   = 2.0    # mm
 REF_FORMAT  = 2      # setter.js REF_FORMAT
 REF_TOL     = 0.01   # mm, Z offset change that invalidates the reference
@@ -251,7 +253,9 @@ class SetterGuard(object):
         if not _num(vm) or vm <= 0: return None
         v = vm * 1000 / 60
         a = am * 1e6 / 3600 if _num(am) and am > 0 else 500.0
-        j = jm * 1e9 / 216000 if _num(jm) and jm > 0 else 5000.0
+        # 1.34.4: km/min^3 -> mm/s^3 is 1e6 / 216000 (the motion board's
+        # JERK_MULTIPLIER is 1e6); 1e9 made braking look 1000x quicker than it is.
+        j = jm * 1e6 / 216000 if _num(jm) and jm > 0 else 5000.0
         return v, a, j
 
 
@@ -259,7 +263,20 @@ class SetterGuard(object):
     def stopping(v, a, j):
         '''Distance to stop from v (mm/s), with the latency allowance.'''
         if v <= 0: return 0
-        return v * JOG_LATENCY + v * v / (2 * a) + v * a / (2 * j) + JOG_SLACK
+        return v * JOG_LATENCY + JOG_MARGIN * SetterGuard.braking(v, a, j) + \
+            JOG_SLACK
+
+
+    @staticmethod
+    def braking(v, a, j):
+        '''Distance the motion board's jog S-curve takes to stop from v (mm/s)
+        with no acceleration (SCurve::stoppingDist, avr/src/SCurve.cpp).  With
+        the usual settings the deceleration never reaches the accel limit and
+        the jerk sets it.'''
+        if v <= 0: return 0
+        peak = math.sqrt(v * j)
+        if peak <= a: return v * math.sqrt(v / j)   # jerk-limited, triangle
+        return v * v / (2 * a) + v * a / (2 * j)    # reaches the accel limit
 
 
     def filter_jog(self, axes, position = None):
@@ -293,17 +310,26 @@ class SetterGuard(object):
                 if n in out: out[n] = 0
                 if n.upper() in out: out[n.upper()] = 0
 
-        # XY: moving toward the column while low
+        # XY: moving toward the column while low.  The jog runs in a straight
+        # line, so find where that line enters the circle and check the
+        # distance to it against the stopping distance at the jog's full speed
+        # (1.34.4; before, the distance straight to the edge was compared with
+        # only the part of the speed aimed at the center).
         vx, vy = vel['x'], vel['y']
-        if (vx or vy) and pz < zlim + JOG_SLACK:
-            if d > 1e-9:
-                closing = -((px - cx) * vx + (py - cy) * vy) / d   # mm/s toward center
-            else: closing = math.hypot(vx, vy)
-            if closing > 0:
+        speed = math.hypot(vx, vy)
+        if speed > 0 and pz < zlim + JOG_SLACK:
+            ux, uy = vx / speed, vy / speed
+            rx, ry = px - cx, py - cy
+            b = rx * ux + ry * uy            # < 0: heading toward the center
+            c = rx * rx + ry * ry - r * r    # <= 0: already inside the circle
+            hit = None
+            if c <= 0: hit = 0.0 if b < 0 else None
+            elif b < 0 and b * b - c >= 0: hit = -b - math.sqrt(b * b - c)
+            if hit is not None:
                 lx = lims['x'] or lims['y']; ly = lims['y'] or lims['x']
                 acc = min(lx[1], ly[1]) if lx and ly else 500.0
                 jrk = min(lx[2], ly[2]) if lx and ly else 5000.0
-                if d - r <= self.stopping(closing, acc, jrk):
+                if hit <= self.stopping(speed, acc, jrk):
                     zero('x', 'y')
                     reason = 'xy'
 

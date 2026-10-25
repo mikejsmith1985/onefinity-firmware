@@ -21,9 +21,10 @@ class State:
     def __init__(self, pos=(0, 0, 0), homed=True, offset_z=-50.0):
         self.pos = dict(zip('xyz', pos)); self.homed = homed
         self.vars = {'offset_z': offset_z, 'cycle': 'idle',
-                     # motors 0..2 = x, y, z: 10 m/min, 10 km/min^2, 50 km/min^3
-                     '0vm': 10, '0am': 10, '0jm': 50, '1vm': 10, '1am': 10, '1jm': 50,
-                     '2vm': 5, '2am': 10, '2jm': 50}
+                     # motors 0..2 = x, y, z, set as on the Onefinity (1.34.4):
+                     # 10 / 10 / 3 m/min, 750 km/min^2, 1000 km/min^3
+                     '0vm': 10, '0am': 750, '0jm': 1000, '1vm': 10, '1am': 750, '1jm': 1000,
+                     '2vm': 3, '2am': 750, '2jm': 1000}
     def is_axis_homed(self, a): return self.homed
     def get_position(self): return dict(self.pos)
     def get(self, k, d=None): return self.vars.get(k, d)
@@ -228,14 +229,22 @@ out, why = jog((374.7, 374.7, -38), {'z': -0.5})
 check('Z down onto the setter: stopped', out['z'] == 0 and why == 'z', (out, why))
 out, why = jog((374.7, 374.7, -38), {'z': 0.5})
 check('Z up over the setter: allowed', out['z'] == 0.5)
+out, why = jog((100, 374.7 + 60, low), {'x': 1.0})
+check('full speed past it, 60 mm to the side: allowed (the line misses it)', out['x'] == 1.0 and why is None, (out, why))
+out, why = jog((250, 374.7 + 25, low), {'x': 1.0})
+check('full speed with the line clipping its edge: stopped', out['x'] == 0 and why == 'xy', (out, why))
+out, why = jog((250, 250, low), {'x': 1.0, 'y': 1.0})
+check('full speed diagonally at it: stopped', out['x'] == 0 and out['y'] == 0, (out, why))
 out, why = jog((310, 374.7, low), {'x': 1.0, 'z': 0.3})
 check('only the offending axes are zeroed', out['x'] == 0 and out['z'] == 0.3, out)
 ctrl.write(prefs(installed=False)); g.reload()
 out, why = jog((310, 374.7, low), {'x': 1.0})
 check('marked removed: jog untouched', out['x'] == 1.0 and why is None)
 
-stop = SG.SetterGuard.stopping(10000 / 60, 10e6 / 3600, 50e9 / 216000)
-check('stopping distance at 10 m/min is sensible (70-90 mm)', 70 < stop < 90, stop)
+lim = g._axis_limits('x')
+check('jerk read as mm/s^3: 1000 km/min^3 is 4630 mm/s^3', abs(lim[2] - 1e9 / 216000) < 1e-6, lim)
+stop = SG.SetterGuard.stopping(*lim)
+check('stopping distance at full speed covers latency and braking (165-185 mm)', 165 < stop < 185, stop)
 
 
 # ---------------------------------------------------------------- 6. jog watcher in Mach
@@ -252,7 +261,7 @@ class Loop:
 
 sentq = []
 Mach.__mro__[1].queue_command = lambda self, cmd: sentq.append(cmd)  # Comm
-ctrl = Ctrl(prefs(), pos=(250, 374.7, low))
+ctrl = Ctrl(prefs(), pos=(100, 374.7, low))
 ctrl.ioloop = Loop(); ctrl.setter_guard = SG.SetterGuard(ctrl)
 m = Mach.__new__(Mach)
 m.ctrl = ctrl; m.mlog = ctrl.log
