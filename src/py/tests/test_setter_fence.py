@@ -119,6 +119,7 @@ class Board:
 
 class Loop:
     def __init__(s): s.t = 0.0; s.q = []; s.lag = 0.0
+    def time(s): return s.t
     def call_later(s, d, cb): h = [s.t + d + s.lag, cb]; s.q.append(h); return h
     def remove_timeout(s, h):
         if h in s.q: s.q.remove(h)
@@ -141,6 +142,8 @@ class State:
     def is_axis_homed(s, a): return True
     def get_position(s): return s.sim.seen()
     def get(s, k, d=None):
+        if k == 'xx': return 'JOGGING' if s.sim.seen_moving() else 'READY'
+        if k == 'v': return s.sim.seen_speed()
         if len(k) == 3 and k[0] in '0123' and k[1:] in ('vm', 'am', 'jm'):
             return {'vm': VM[AXIS_OF[int(k[0])]], 'am': AM, 'jm': JM}[k[1:]]
         if len(k) == 3 and k[0] in '0123' and k[1:] == 'an': return 'xyz'.index(AXIS_OF[int(k[0])])
@@ -162,7 +165,7 @@ class Config:
 class Sim:
     def __init__(s, pos, STALE=0.5, SEND=1.0, LAG=0.3):
         s.STALE, s.SEND = STALE, SEND
-        s.board = Board(pos); s.hist = [(0.0, dict(pos))]; s.inbox = []
+        s.board = Board(pos); s.hist = [(0.0, dict(pos), False, 0.0)]; s.inbox = []
         s.loop = Loop(); s.loop.lag = LAG
         s.dir = tempfile.mkdtemp()
         ref = {'ref': REF, 'offZ': OFFZ, 'time': 1, 'by': 'tool', 'f': 2}
@@ -174,7 +177,12 @@ class Sim:
         ctrl.setter_guard = SG.SetterGuard(ctrl)
         s.ctrl = ctrl
         m = Mach.__new__(Mach); m.ctrl = ctrl; m.mlog = ctrl.log
-        m._begin_cycle = lambda c: ctrl.state.set('cycle', c)
+        def begin(c):   # Mach._begin_cycle
+            cur = ctrl.state.vars.get('cycle', 'idle')
+            if cur == c: return
+            if cur != 'idle': raise Exception('Cannot enter %s cycle while in %s cycle' % (c, cur))
+            ctrl.state.set('cycle', c)
+        m._begin_cycle = begin
         m.planner = type('P', (), {'position_change': lambda self: None})()
         s.m = m
         # Configuration reaches the board through Mach.set, as State.config does it
@@ -186,38 +194,53 @@ class Sim:
                 m.set('%dtn' % mo, CONF_TN[str(mo)]); m.set('%dtm' % mo, CONF_TM[str(mo)])
         finally: Mach.__mro__[1].queue_command = orig
         for c in cfg: s.board.command(c)
-    def seen(s):
+    def _seen(s):
         t = s.loop.t - s.STALE
-        p = s.hist[0][1]
-        for tt, pp in s.hist:
-            if tt <= t: p = pp
+        h = s.hist[0]
+        for x in s.hist:
+            if x[0] <= t: h = x
             else: break
-        return dict(p)
+        return h
+    def seen(s): return dict(s._seen()[1])
+    def seen_moving(s): return s._seen()[2]
+    def seen_speed(s): return s._seen()[3]
     def run(s, axes, hold, resend=False, total=8.0):
         '''Jog with axes for hold seconds, then release; run on to total.'''
+        zero = dict((k, 0) for k in axes)
+        return s.play([(0.0, axes), (hold, zero)], total, resend)
+    def play(s, events, total, resend=False):
+        '''events: [(time, axes)] sent to Mach.jog (a stick or button changing).
+        The Pi ends the jogging cycle when a report shows the board stopped, as
+        Mach._end_cycle does, even if a new jog is still on its way to the board.'''
         cmds = []
         orig = Mach.__mro__[1].queue_command
         Mach.__mro__[1].queue_command = lambda self, c: cmds.append(c)
         MachMod.Cmd.jog = lambda a: ('jog', dict(a))
-        closest = math.hypot(s.board.p['x'] - CX, s.board.p['y'] - CY)
-        low_closest = closest
+        low_closest = math.hypot(s.board.p['x'] - CX, s.board.p['y'] - CY)
+        events = sorted(events, key=lambda e: e[0]); cur = None; last = 0.0; nrep = 0.25
         try:
-            s.m.jog(dict(axes)); last = 0.0; released = False
             while s.loop.t < total:
+                while events and events[0][0] <= s.loop.t:
+                    cur = dict(events.pop(0)[1]); last = s.loop.t
+                    try: s.m.jog(dict(cur))
+                    except Exception as e: s.ctrl.log.lines.append(('refused', str(e)))
+                if resend and cur and any(cur.values()) and s.loop.t - last >= 0.2:
+                    last = s.loop.t
+                    try: s.m.jog(dict(cur))
+                    except Exception as e: s.ctrl.log.lines.append(('refused', str(e)))
                 while cmds: s.inbox.append((s.loop.t + s.SEND, cmds.pop(0)))
                 while s.inbox and s.inbox[0][0] <= s.loop.t: s.board.command(s.inbox.pop(0)[1])
                 moving = s.board.step()
                 s.loop.t += SEG
-                s.hist.append((s.loop.t, dict(s.board.p)))
+                sp = math.sqrt(sum(c.v * c.v for c in s.board.c.values()))
+                s.hist.append((s.loop.t, dict(s.board.p), moving, sp))
                 d = math.hypot(s.board.p['x'] - CX, s.board.p['y'] - CY)
                 if s.board.p['z'] < TOP: low_closest = min(low_closest, d)
+                if s.loop.t >= nrep:     # a report reaches the Pi
+                    nrep += 0.25
+                    if s.ctrl.state.vars.get('cycle') == 'jogging' and not s.seen_moving():
+                        s.ctrl.state.vars['cycle'] = 'idle'
                 s.loop.run()
-                if not released and resend and s.loop.t - last >= 0.2:
-                    last = s.loop.t; s.m.jog(dict(axes))
-                if not released and s.loop.t >= hold:
-                    released = True; s.m.jog(dict((k, 0) for k in axes))
-                if released and not moving and not s.inbox and not cmds and s.loop.t > hold + s.SEND + 0.5:
-                    s.ctrl.state.set('cycle', 'idle')
         finally:
             Mach.__mro__[1].queue_command = orig
         return low_closest
@@ -260,6 +283,44 @@ try:
 finally: SG.SetterGuard.jog_fence = keep
 check('without the fence the same slow Pi lets 50%% / 100%% jogs into the keep-out (%s mm from center)' % worst,
       all(w < R for w in worst), worst)
+
+# 1c. Rock back: run into the fence, pull back a hair, push straight back in (seen on the machine
+#     with 1.34.6: the Pi ended the jogging cycle on a stale "stopped" report while the new jog
+#     was on its way, took the fence down and stopped watching, and the jog ran through)
+bad = []
+for pct in (25, 100):
+    for back_t in (0.15, 0.3, 0.6):
+        for gap in (0.0, 0.1, 0.3):
+            for STALE, SEND in ((0.25, 0.05), (0.5, 1.0)):
+                s = Sim({'x': CX, 'y': CY - (R + 120), 'z': low}, STALE=STALE, SEND=SEND, LAG=0.05)
+                f = pct / 100
+                hit = 120 / (vmax('y') * f) + 1.5           # long enough to reach the fence
+                ev = [(0.0, {'x': 0, 'y': f, 'z': 0}), (hit, {'x': 0, 'y': -f, 'z': 0}),
+                      (hit + back_t, {'x': 0, 'y': 0, 'z': 0}),
+                      (hit + back_t + gap, {'x': 0, 'y': f, 'z': 0}), (hit + back_t + gap + 4, {'x': 0, 'y': 0, 'z': 0})]
+                c = s.play(ev, hit + back_t + gap + 8)
+                if c < R: bad.append((pct, back_t, gap, STALE, SEND, round(c, 1)))
+check('rocking back and pushing straight in again stays outside the keep-out', not bad, bad[:6])
+
+# 1d. Reversing a fast jog while the board is already braking for the fence: the board still has
+#     to finish braking the old way, so the fence has to stay up (an unfenced reverse lets it coast in)
+FENCE_Y = CY - R - SG.FENCE_BACK
+bad = []
+for pct in (50, 100):
+    for before in (2, 10, 25):
+        for STALE, SEND in ((0.25, 0.05), (0.5, 1.0)):
+            f = pct / 100
+            # pass 1: when does the board get within 'before' mm of the fence?
+            s = Sim({'x': CX, 'y': CY - (R + 200), 'z': low}, STALE=STALE, SEND=SEND, LAG=0.05)
+            s.play([(0.0, {'x': 0, 'y': f, 'z': 0}), (8, {'x': 0, 'y': 0, 'z': 0})], 9)
+            tc = next(tt for tt, p, mv, sp in s.hist if p['y'] >= FENCE_Y - before)
+            # pass 2: the reverse reaches the board right then
+            s = Sim({'x': CX, 'y': CY - (R + 200), 'z': low}, STALE=STALE, SEND=SEND, LAG=0.05)
+            trev = max(0.05, tc - SEND)
+            c = s.play([(0.0, {'x': 0, 'y': f, 'z': 0}), (trev, {'x': 0, 'y': -f, 'z': 0}),
+                        (trev + 0.4, {'x': 0, 'y': f, 'z': 0}), (trev + 3, {'x': 0, 'y': 0, 'z': 0})], trev + 8)
+            if c < R: bad.append((pct, before, STALE, SEND, round(c, 1)))
+check('reversing while the board brakes for the fence, then pushing in again, stays outside', not bad, bad[:6])
 
 # 2. Glancing and diagonal past it at full speed
 bad = []

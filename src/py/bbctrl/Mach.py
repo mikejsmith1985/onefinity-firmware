@@ -89,6 +89,8 @@ def overrides(interface_class):
 
 import sys as _sys
 
+UNFENCE_WAIT = 1.5   # s after a jog is released before the setter fence comes down
+
 class Mach(Comm):
     def __init__(self, ctrl, avr):
         super().__init__(ctrl, avr)
@@ -333,8 +335,10 @@ class Mach(Comm):
             if   cmd[0] == '$':  self._query_var(cmd)
             elif cmd[0] == '\\': super().queue_command(cmd[1:])
             else:
+                if getattr(self, '_fenced', None) and self._board_moving():
+                    raise Exception('Wait for the jog to stop')
                 self._begin_cycle('mdi')
-                self._unfence()   # after: refused while jogging leaves it
+                self._unfence_for('command')
                 self.planner.mdi(cmd, with_limits)
                 super().resume()
         except BaseException as err:
@@ -448,6 +452,12 @@ class Mach(Comm):
             self.mlog.exception('Tool setter guard: jog fence failed')
             return {}
 
+        # 1.34.7: a fence already up stays up (the tighter one wins) until the
+        # jog is released and the board has stopped: when a jog toward the
+        # setter is reversed, the board still has to brake the old direction.
+        for v, x in fenced.items():
+            if v not in want: want[v] = x
+            else: want[v] = min(want[v], x) if v.endswith('tm') else max(want[v], x)
         self._set_fence(want)
         if want and not getattr(self, '_jog_warned', False):
             self._jog_warned = True
@@ -470,17 +480,40 @@ class Mach(Comm):
         if getattr(self, '_fenced', None): self._set_fence({})
 
 
+    def _board_moving(self):
+        state = self.ctrl.state
+        try: v = abs(float(state.get('v', 0) or 0))
+        except (TypeError, ValueError): v = 0
+        return state.get('xx', '') == 'JOGGING' or v > 0
+
+
     def _unfence_later(self):
-        '''After the jog is released: restore the limits once the board has
-        stopped (restoring them mid-brake would let it coast on).'''
+        '''After the jog is released: restore the limits only once the board
+        has really stopped.  Reports run late, so it waits at least UNFENCE_WAIT
+        after the release and then for the board to report stopped, and a new
+        jog cancels it (1.34.7: 1.34.6 went by the Pi's cycle, which can read
+        idle while the board is still moving or about to).'''
         if not getattr(self, '_fenced', None): return
+        self._release_seq = getattr(self, '_release_seq', 0) + 1
+        loop = self.ctrl.ioloop
+        seq, t0 = self._release_seq, loop.time()
+        def held():
+            w = getattr(self, '_jog_want', None) or {}
+            return any(w.get(a, 0) for a in 'xyzabcXYZABC')
         def check():
-            if getattr(self, '_jog_want', None) and any(
-                    self._jog_want.get(a, 0) for a in 'xyzabcXYZABC'): return
-            if self._get_cycle() == 'jogging':
+            if seq != self._release_seq or held(): return   # a newer jog owns it
+            if loop.time() - t0 < UNFENCE_WAIT or self._board_moving():
                 self.ctrl.ioloop.call_later(0.1, check)
             else: self._unfence()
         self.ctrl.ioloop.call_later(0.1, check)
+
+
+    def _unfence_for(self, what):
+        '''Before a typed command or a program: the configured limits must be
+        back, which is only safe once the board has stopped.'''
+        if getattr(self, '_fenced', None) and self._board_moving():
+            raise Exception('Wait for the jog to stop before starting a %s' % what)
+        self._unfence()
 
 
     def _guard_jog(self, axes):
@@ -513,12 +546,18 @@ class Mach(Comm):
 
         def tick():
             self._jog_timer = None
-            if self._get_cycle() != 'jogging':
-                self._unfence()
-                return
+            # 1.34.7: keep watching while the jog is held, even if the cycle
+            # went idle.  The Pi ends the jogging cycle on any report that shows
+            # the board stopped, and that can be an old report while the next
+            # jog is still on its way to the board.  1.34.6 stopped watching
+            # and took the fence down then, and the jog ran through the setter.
+            cycle = self._get_cycle()
+            if cycle not in ('jogging', 'idle'): return   # something else took over
             send = dict(self._guard_jog(self._jog_want))
             send.update(getattr(self, '_fence_decided', {}) or {})
             if send != self._jog_sent:
+                try: self._begin_cycle('jogging')
+                except Exception: return
                 self._jog_sent = send
                 super(Mach, self).queue_command(Cmd.jog(send))
             self._jog_watch()
@@ -596,8 +635,10 @@ class Mach(Comm):
         filename = self.ctrl.state.get('selected', '')
         if not filename: return
         if dry_lift: dry_lift = self._check_dry_lift(dry_lift)
+        if getattr(self, '_fenced', None) and self._board_moving():
+            raise Exception('Wait for the jog to stop before starting the program')
         self._begin_cycle('running')
-        self._unfence()
+        self._unfence_for('program')
         self.planner.load(filename, dry_lift, dry_path if dry_lift else None)
         if dry_lift and dry_note: self.ctrl.state.set('dry_note', dry_note)
         super().resume()
