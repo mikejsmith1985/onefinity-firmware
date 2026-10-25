@@ -50,6 +50,11 @@ DEFAULTS = {
 JOG_LATENCY = 0.8    # s
 JOG_MARGIN  = 1.25   # on the braking distance itself
 JOG_SLACK   = 2.0    # mm
+# 1.34.5: the motion board fence.  A jog toward the setter gets a temporary
+# soft limit just outside the square around the keep-out circle; the motion
+# board brakes against soft limits itself every 4 ms, so no Pi delay matters.
+FENCE_BACK  = 1.0    # mm outside the square's face
+FENCE_STALE = 0.6    # s; a moving axis is only fenced this far ahead of its reported position
 REF_FORMAT  = 2      # setter.js REF_FORMAT
 REF_TOL     = 0.01   # mm, Z offset change that invalidates the reference
 
@@ -121,6 +126,52 @@ def segment_hits(p, q, cx, cy, r, zlim):
     z0, z1 = pz + dz * t0, pz + dz * t1
     low = min(z0, z1)
     return low if low < zlim else None
+
+
+def jog_fence(pos, frac, cx, cy, r, zlim):
+    '''Temporary soft limits for a velocity jog (1.34.5).
+
+    pos: machine x, y, z; frac: jog velocity fractions x, y, z.  The fence is
+    the square around the keep-out circle (half side r): a fence on one axis at
+    a face of the square keeps the cutter out of the circle whatever the other
+    axes do, so the motion board can brake each axis on its own.  Returns
+    {axis: ('min' | 'max', value)}.
+
+    - XY, while low (or Z is coming down): the face the jog's line enters
+      through gets fenced, on the axis crossing it.
+    - Z, coming down over the square: Z stops at the guard height.
+    A cutter already inside the square (low) gets no XY fence here; the Pi
+    side stops it (filter_jog).'''
+    px, py, pz = pos
+    fx, fy, fz = frac
+    out = {}
+    low = pz < zlim + JOG_SLACK
+    inside = abs(px - cx) < r and abs(py - cy) < r
+
+    if (fx or fy) and (low or fz < 0) and not inside:
+        # Slab test against the square [cx-r, cx+r] x [cy-r, cy+r]
+        t_in, t_out, face = -math.inf, math.inf, None
+        ok = True
+        for a, p, f, c in (('x', px, fx, cx), ('y', py, fy, cy)):
+            lo, hi = c - r, c + r
+            if not f:
+                if not (lo < p < hi): ok = False
+                continue
+            t1, t2 = (lo - p) / f, (hi - p) / f
+            near, far = min(t1, t2), max(t1, t2)
+            if near > t_in: t_in, face = near, a
+            t_out = min(t_out, far)
+        if ok and face and t_in <= t_out and t_in >= 0:
+            f = fx if face == 'x' else fy
+            c = cx if face == 'x' else cy
+            out[face] = ('max', c - r - FENCE_BACK) if f > 0 else \
+                ('min', c + r + FENCE_BACK)
+
+    if fz < 0 and abs(px - cx) < r + FENCE_BACK and \
+            abs(py - cy) < r + FENCE_BACK:
+        out['z'] = ('min', zlim)
+
+    return out
 
 
 def leaving_ok(p, q, cx, cy, zlim):
@@ -277,6 +328,23 @@ class SetterGuard(object):
         peak = math.sqrt(v * j)
         if peak <= a: return v * math.sqrt(v / j)   # jerk-limited, triangle
         return v * v / (2 * a) + v * a / (2 * j)    # reaches the accel limit
+
+
+    def jog_fence(self, axes, position = None):
+        '''Temporary soft limits for this jog, see jog_fence().'''
+        z = self.zone()
+        if z is None: return {}
+        cx, cy, r, zlim, how = z
+        pos = position or self.ctrl.state.get_position()
+        if not all(a in pos for a in 'xyz'): return {}
+
+        def frac(a):
+            v = axes.get(a, axes.get(a.upper(), 0)) or 0
+            try: return float(v)
+            except (TypeError, ValueError): return 0.0
+
+        return jog_fence((pos['x'], pos['y'], pos['z']),
+                         (frac('x'), frac('y'), frac('z')), cx, cy, r, zlim)
 
 
     def filter_jog(self, axes, position = None):

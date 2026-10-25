@@ -86,6 +86,8 @@ def overrides(interface_class):
     return overrider
 
 
+import sys as _sys
+
 class Mach(Comm):
     def __init__(self, ctrl, avr):
         super().__init__(ctrl, avr)
@@ -331,6 +333,7 @@ class Mach(Comm):
             elif cmd[0] == '\\': super().queue_command(cmd[1:])
             else:
                 self._begin_cycle('mdi')
+                self._unfence()   # after: refused while jogging leaves it
                 self.planner.mdi(cmd, with_limits)
                 super().resume()
         except BaseException as err:
@@ -351,10 +354,113 @@ class Mach(Comm):
         # check, so the parts of it heading into the setter are zeroed early
         # enough to stop short, and re-checked while the jog runs.
         self._jog_want = dict(axes)
-        send = self._guard_jog(axes)
+        # 1.34.5: the motion board gets a temporary soft limit in front of the
+        # setter, which it brakes against itself every 4 ms with no Pi delay.
+        # The limits go first in the same queue, so they are in place before
+        # the jog runs.  Axes it doesn't fence keep the Pi-side check.
+        self._fence_decided = self._fence_jog(axes)
+        send = dict(self._guard_jog(axes))
+        send.update(self._fence_decided)
         self._jog_sent = send
         super().queue_command(Cmd.jog(send))
         self._jog_watch()
+
+
+    # Tool setter fence (1.34.5) -----------------------------------------
+    def _axis_motors(self, axis):
+        state = self.ctrl.state
+        out = []
+        for m in range(4):
+            an = state.get('%dan' % m, None)
+            if an is None or not state.get('%dme' % m, 0): continue
+            if 'xyzabc'[int(an)] == axis: out.append(m)
+        return out
+
+
+    def _config_limit(self, code, motor):
+        name = 'min-soft-limit' if code == 'tn' else 'max-soft-limit'
+        v = (self.ctrl.config.get(name, {}) or {}).get(str(motor), None)
+        try: return float(v)
+        except (TypeError, ValueError): return None
+
+
+    def _fence_jog(self, axes):
+        '''Set the motion board's soft limits for this jog (see
+        SetterGuard.jog_fence).  Returns {axis key: value} for the axes it
+        decided: a fenced axis runs as asked (the board stops it at the fence),
+        and an axis that is already moving too close to its fence to set one
+        safely is stopped (0) the normal way: a soft limit behind the cutter
+        would make the board jump back.'''
+        guard = getattr(self.ctrl, 'setter_guard', None)
+        if guard is None: return {}
+        fenced = getattr(self, '_fenced', {})
+        want, decided = {}, {}
+        try:
+            fence = guard.jog_fence(axes)
+            pos = self.ctrl.state.get_position()
+            prev = getattr(self, '_jog_sent', {}) or {}
+            stale = _sys.modules['bbctrl.SetterGuard'].FENCE_STALE
+            for axis, (kind, value) in fence.items():
+                code = 'tm' if kind == 'max' else 'tn'
+                keys = [k for k in (axis, axis.upper()) if k in axes]
+                motors = self._axis_motors(axis)
+                if not motors: continue
+                vals = {}
+                for m in motors:
+                    base = self._config_limit(code, m)
+                    vals['%d%s' % (m, code)] = value if base is None else \
+                        (min(base, value) if kind == 'max' else max(base, value))
+                if all(fenced.get(v) == x for v, x in vals.items()):
+                    want.update(vals)            # already in place
+                    for k in keys: decided[k] = axes[k]
+                    continue
+                lim = guard._axis_limits(axis)
+                v_now = abs(float(prev.get(axis, prev.get(axis.upper(), 0)) or 0)) \
+                    * (lim[0] if lim else 0)
+                ahead = (value - pos[axis]) if kind == 'max' else (pos[axis] - value)
+                if ahead < 0 or ahead < stale * v_now:
+                    for k in keys: decided[k] = 0   # too late to fence: stop it
+                    continue
+                want.update(vals)
+                for k in keys: decided[k] = axes[k]
+        except Exception:
+            self.mlog.exception('Tool setter guard: jog fence failed')
+            return {}
+
+        self._set_fence(want)
+        if want and not getattr(self, '_jog_warned', False):
+            self._jog_warned = True
+            self.mlog.warning('Tool setter guard: this jog stops at the tool '
+                              'setter\'s keep-out. Raise Z to move over it.')
+        return decided
+
+
+    def _set_fence(self, want):
+        fenced = getattr(self, '_fenced', {})
+        for v in fenced:
+            if v not in want:
+                base = self._config_limit(v[1:], int(v[0]))
+                if base is not None: self.set(v, base)
+        for v, value in want.items():
+            if fenced.get(v) != value: self.set(v, value)
+        self._fenced = dict(want)
+
+
+    def _unfence(self):
+        if getattr(self, '_fenced', None): self._set_fence({})
+
+
+    def _unfence_later(self):
+        '''After the jog is released: restore the limits once the board has
+        stopped (restoring them mid-brake would let it coast on).'''
+        if not getattr(self, '_fenced', None): return
+        def check():
+            if getattr(self, '_jog_want', None) and any(
+                    self._jog_want.get(a, 0) for a in 'xyzabcXYZABC'): return
+            if self._get_cycle() == 'jogging':
+                self.ctrl.ioloop.call_later(0.1, check)
+            else: self._unfence()
+        self.ctrl.ioloop.call_later(0.1, check)
 
 
     def _guard_jog(self, axes):
@@ -382,12 +488,16 @@ class Mach(Comm):
         want = getattr(self, '_jog_want', {}) or {}
         if not any(want.get(a, 0) or want.get(a.upper(), 0) for a in 'xyzabc'):
             self._jog_warned = False
+            self._unfence_later()
             return
 
         def tick():
             self._jog_timer = None
-            if self._get_cycle() != 'jogging': return
-            send = self._guard_jog(self._jog_want)
+            if self._get_cycle() != 'jogging':
+                self._unfence()
+                return
+            send = dict(self._guard_jog(self._jog_want))
+            send.update(getattr(self, '_fence_decided', {}) or {})
             if send != self._jog_sent:
                 self._jog_sent = send
                 super(Mach, self).queue_command(Cmd.jog(send))
@@ -467,6 +577,7 @@ class Mach(Comm):
         if not filename: return
         if dry_lift: dry_lift = self._check_dry_lift(dry_lift)
         self._begin_cycle('running')
+        self._unfence()
         self.planner.load(filename, dry_lift, dry_path if dry_lift else None)
         if dry_lift and dry_note: self.ctrl.state.set('dry_note', dry_note)
         super().resume()
