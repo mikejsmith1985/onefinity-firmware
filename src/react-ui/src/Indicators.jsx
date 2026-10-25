@@ -33,7 +33,8 @@ export default function Indicators({ state, send }) {
   ];
   return (
     <div className="indicators">
-      <p className="legend"><span className="io active">−</span> green: active (pressed, touched, triggered) · <span className="io inactive">+</span> grey: inactive · <span className="io">○</span> disabled · <span className="io warn">!</span> unknown. The sign is the pin voltage (+ high, − low), not whether it's active: a normally-open switch reads + at rest and − when pressed. Hover a dot for details.</p>
+      <p className="legend"><span className="io active">−</span> green: active · <span className="io inactive">+</span> grey: inactive · <span className="io">○</span> disabled · <span className="io warn">!</span> unknown</p>
+      <p className="legend-note">The sign is the pin's voltage, not whether it's active: a normally-open switch shows + at rest and − when pressed. Watch the colour.</p>
       <div className="cols">
         <section className="group"><h2>Inputs</h2>
           <table className="grid-table"><thead><tr><th>Name</th><th>Pin</th><th>State</th></tr></thead><tbody>

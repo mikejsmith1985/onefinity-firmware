@@ -79,7 +79,10 @@ export function parseSetup(text) {
   for (const k of Object.keys(raw)) if (!HIDDEN.has(k) && k !== "sheet") fields.push({ key: k, label: LABELS[k] || k.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase()), text: raw[k] });
   const stock = raw.stock ? { x: parseRange(raw.stock, "x"), y: parseRange(raw.stock, "y") } : null;
   const stockOk = !!(stock && stock.x && stock.y);
-  const corner = raw["probe-corner"] ? normCorner(raw["probe-corner"]) : null;
+  // "NONE" (or N/A, MANUAL, BY HAND), optionally followed by a note: the program sets its own XY zero or
+  // the zero isn't a probed corner, so there is nothing to compare with the last probe (1.34.1).
+  const noCorner = /^\s*(none|n\/?a|manual|by hand)\b/i.test(raw["probe-corner"] || "");
+  const corner = raw["probe-corner"] && !noCorner ? normCorner(raw["probe-corner"]) : null;
   return {
     stockTop: sheetStockTop(raw),
     fields, stock: stockOk ? stock : null, toolD: raw["tool-d"] ? num(raw["tool-d"]) : null,

@@ -16,6 +16,13 @@ const sheet = (lines) => parseSetup(lines.join("\n") + "\nG21\nG0 X0 Y0\n");
 // 1. A good sheet
 let s = sheet(["(SETUP stock: x=0..300 y=0..200 z=-19..0)", "(SETUP tool-d: 6.35)", "(SETUP probe-corner: front-left)", "(SETUP tool: T1 FLAT 1/4in [6.35mm])"]);
 check("good sheet", s.stock && s.stock.x.max === 300 && s.corner === "front-left" && !s.stockBad && !s.cornerBad && s.bad.length === 0, JSON.stringify(s.bad));
+
+// 1.34.1: "NONE" means the program sets its own XY zero: no corner to check, no warning
+for (const v of ["NONE - XY ZERO IS SET BY THIS FILE", "none", "N/A", "Manual - zeroed by hand"]) {
+  const n = sheet(["(SETUP probe-corner: " + v + ")"]);
+  check(`probe-corner "${v}": no corner, not reported as unknown`, n.corner === null && n.cornerBad === null && probeChecks(n, null, {}).length === 0);
+}
+check("an unknown corner is still reported", sheet(["(SETUP probe-corner: top-middle)"]).cornerBad === "top-middle");
 // 1b. Stock top for the Depth view (1.32.1)
 check("stock top from the stock line", sheet(["(SETUP stock: x=0..152.4 y=0..304.8 z=0..24.3)"]).stockTop === 24.3);
 check("stock top from plate when Z0 is on the stock bottom", sheet(["(SETUP plate: 152.4 X 304.8 X 24.3 MM)", "(SETUP zero: FRONT-LEFT CORNER, Z0 ON STOCK BOTTOM, +Y IS THE BACK)"]).stockTop === 24.3);

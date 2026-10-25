@@ -220,6 +220,8 @@ input[type=checkbox]:not(.switch), input[type=radio] { width: 20px; height: 20px
 .io.active { background: var(--green); border-color: var(--green); color: #07140d; } .io.inactive { color: var(--dim); }
 .io.warn { color: var(--yellow); border-color: var(--yellow); } .io.ok { color: var(--green); border-color: transparent; } .io.bad { color: var(--red); border-color: transparent; }
 .legend { color: var(--dim); font-size: 14px; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+/* The Depth view's colour-scale legend (above) is pinned to the bottom of its stage; this one sits in the flow (1.34.1) */
+.indicators .legend { position: static; left: auto; right: auto; bottom: auto; margin: 0 0 10px; }
 .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; margin: 12px 0 14px; }
 .stats.one { grid-template-columns: 1fr; }
 .stat { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--rule); }
@@ -472,3 +474,4 @@ svg.art { width: 100%; height: auto; display: block; background: var(--bed); bor
 .block-note { margin-top: 10px; font-weight: 600; }
 .setter-guard .check { display: flex; align-items: center; gap: 8px; }
 .setter-guard small { display: block; margin-top: 2px; }
+.indicators .legend-note { margin: 0 0 12px; color: var(--dim); font-size: 13px; }
