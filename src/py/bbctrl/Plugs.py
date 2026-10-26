@@ -241,9 +241,9 @@ class Plugs(object):
             if not self.prefs[name]['ip']: s = 'unset'
             elif not self.online(name): s = 'offline'
             else: s = 'on' if self.output[name] else 'off'
-            if st.get('plug_' + name, None) != s: st.set('plug_' + name, s)
+            if st.vars.get('plug_' + name) != s: st.set('plug_' + name, s)
             auto = self.active(name)
-            if st.get('plug_%s_auto' % name, None) != auto:
+            if st.vars.get('plug_%s_auto' % name) != auto:
                 st.set('plug_%s_auto' % name, auto)
 
 
@@ -255,7 +255,7 @@ class Plugs(object):
                 self.output[name] = bool(status.get('output'))
                 w = round(float(status.get('apower', 0) or 0))
             except Exception: w = 0
-            if self.ctrl.state.get('plug_%s_w' % name, None) != w:
+            if self.ctrl.state.vars.get('plug_%s_w' % name) != w:
                 self.ctrl.state.set('plug_%s_w' % name, w)
             if self.lost_said[name]:
                 self.log.info('%s plug answering again' % name.capitalize())

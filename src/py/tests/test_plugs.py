@@ -46,7 +46,9 @@ class Log:
 
 class State:
     def __init__(self): self.vars = {'cycle': 'idle'}
-    def get(self, k, d = None): return self.vars.get(k, d)
+    def get(self, k, d = None):
+        assert k in self.vars or d is not None or not k.startswith('plug_'), 'logs a warning: ' + k
+        return self.vars.get(k, d)
     def set(self, k, v): self.vars[k] = v
 
 
