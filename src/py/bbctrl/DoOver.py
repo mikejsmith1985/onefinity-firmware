@@ -964,7 +964,7 @@ class DoOver(object):
         tool_now = s.get('tool', None)
         try: tool_now = int(tool_now) if tool_now not in (None, '') else run.get('tool')
         except (TypeError, ValueError): tool_now = run.get('tool')
-        manual = manual_spindle(self.ctrl.config)
+        manual = manual_spindle(self.ctrl.config, self.ctrl)
 
         zlim = None
         try:

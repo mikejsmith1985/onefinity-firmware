@@ -64,6 +64,12 @@ class Ctrl(object):
             if not args.demo: self.jog = bbctrl.Jog(self)
             self.pwr = bbctrl.Pwr(self)
 
+            # Router and shop vac power plugs (1.35.0)
+            try: self.plugs = bbctrl.Plugs(self)
+            except Exception:
+                self.plugs = None
+                self.log.get('Ctrl').exception('Power plugs unavailable')
+
             try: self.checkpoint = bbctrl.Checkpoint(self)
             except Exception:
                 self.checkpoint = None
@@ -130,6 +136,8 @@ class Ctrl(object):
 
     def close(self):
         self.log.get('Ctrl').info('Closing %s' % self.id)
+        plugs = getattr(self, 'plugs', None)
+        if plugs is not None: plugs.close()
         self.ioloop.close()
         self.avr.close()
         self.mach.planner.close()

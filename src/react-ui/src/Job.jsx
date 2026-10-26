@@ -14,6 +14,7 @@ import { useUi, uiSet, uiCas, uiOpen, uiClose, uiPatch, usePref, setPref, getPre
 import { useCheckpoint } from "./checkpoint.js";
 import { useFinished } from "./doover.js";
 import DoOverDialog from "./DoOverDialog.jsx";
+import { PlugStrip } from "./Plugs.jsx";
 
 function Override({ label, kind, hint, value }) {
   // Shows the controller's override (the same on every screen) except while this slider is being dragged.
@@ -205,6 +206,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         <button className="halt" disabled={!active} onClick={() => { markStopped(); api.put("stop"); }}>Stop</button>
         {active && <button className="park" title="Stop here, lift Z and switch the machine off. Finish the job later with Resume." onClick={() => setParkAsk(true)}>Park…</button>}
       </div>
+      <PlugStrip state={state} />
       <dl className="stats">
         <Stat k="Progress" v={`${active ? pct : 0}%`} />
         <Stat k={active ? "Remaining" : "Run time"} v={total ? fmtTime(remaining) : "—"} title="Time left, then total program time" />

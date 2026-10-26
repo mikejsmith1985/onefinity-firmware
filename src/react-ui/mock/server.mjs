@@ -27,6 +27,9 @@ const state = {
   log: [], 1: 0,
   feed: 0, speed: 0, s: 17000, v: 0, tool: 5, plan_time: 0, metric: true,
   imperial: false, power_shutdown: false,
+  // Router and vac plugs (1.35.0). MOCK_PLUG_OFFLINE=1: the router plug does not answer.
+  plug_router: process.env.MOCK_PLUG_OFFLINE ? "offline" : "off", plug_router_auto: true, plug_router_w: 0,
+  plug_vac: "off", plug_vac_auto: true, plug_vac_w: 0,
   path_min_x: 0, path_max_x: 150, path_min_y: 0, path_max_y: 90, path_min_z: -15, path_max_z: 15,
 };
 // MOCK_START_UNHOMED=1 starts with no axis homed (as after a controller restart).
@@ -366,7 +369,16 @@ const server = http.createServer((req, res) => {
   if (p === "/api/pause") { broadcast({ xx: "HOLDING", pr: "User pause" }); return json(res, "ok"); }
   if (p === "/api/unpause") { broadcast({ xx: "RUNNING", pr: "" }); return json(res, "ok"); }
   if (p === "/api/stop") { clearInterval(timer); broadcast({ xx: "READY", cycle: "idle", feed: 0, speed: 0, pr: "" }); return json(res, "ok"); }
-  if (p === "/api/estop") { clearInterval(timer); broadcast({ xx: "ESTOPPED", er: "User triggered EStop", feed: 0, speed: 0 }); return json(res, "ok"); }
+  if (p === "/api/estop") { clearInterval(timer); broadcast({ xx: "ESTOPPED", er: "User triggered EStop", feed: 0, speed: 0, plug_router: state.plug_router === "offline" ? "offline" : "off", plug_router_w: 0, plug_vac: "off", plug_vac_w: 0 }); return json(res, "ok"); }
+  if (p === "/api/plugs") {
+    let s = ""; req.on("data", (d) => (s += d)); req.on("end", () => {
+      let b = {}; try { b = JSON.parse(s); } catch {}
+      if (state[`plug_${b.plug}`] === "offline") { res.writeHead(400, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ message: "The plug is not answering", code: 400 })); }
+      broadcast({ [`plug_${b.plug}`]: b.on ? "on" : "off", [`plug_${b.plug}_w`]: b.on ? (b.plug === "vac" ? 980 : 412) : 0 });
+      json(res, "ok");
+    });
+    return;
+  }
   if (p === "/api/clear") { broadcast({ xx: "READY", er: "" }); return json(res, "ok"); }
   if (p.startsWith("/api/home")) {
     broadcast({ xx: "HOMING", cycle: "homing" });

@@ -3,6 +3,7 @@ import { useDrops, clearDrops } from "./drops.js";
 import { getPrefs, setPrefs, useCheckpoint, isInterrupted } from "./checkpoint.js";
 import { api, MACRO_PREFIX, DELETE_LIST_PREFIX } from "./controller.js";
 import { Page, Group, Modal, Confirm, SubTabs } from "./ui.jsx";
+import { PlugPrefs } from "./Plugs.jsx";
 
 /* ------------------------------------------------------------------ Macros */
 const DEFAULTS = Array.from({ length: 8 }, (_, i) => ({ name: `Macro ${i + 1}`, color: "#dedede", file_name: "default", alert: true }));
@@ -267,6 +268,9 @@ function General({ cfg, ver, state }) {
         </Group>
         <Group title="Mist">
           <MistPref />
+        </Group>
+        <Group title="Router and vac plugs">
+          <PlugPrefs state={state} />
         </Group>
         <Group title="Connection">
           <Drops />

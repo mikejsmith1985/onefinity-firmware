@@ -500,6 +500,20 @@ class StartHandler(bbctrl.APIHandler):
     def put(self):
         ctrl = self.get_ctrl()
         body = self.json if isinstance(self.json, dict) else {}
+
+        # Router plug (1.35.0): never start a real run that would switch on
+        # a router the controller can't reach.  "Run anyway" doesn't skip it.
+        plugs = getattr(ctrl, 'plugs', None)
+        if plugs is not None and not body.get('dry_lift') and \
+                plugs.router_auto() and not plugs.online('router'):
+            msg = ('Not started: the Router plug (%s) is not answering, so '
+                   'the controller could not switch the router on. Check the '
+                   'plug, or turn off Auto for the Router plug in Settings '
+                   'to use the router\'s own switch.'
+                   % plugs.prefs['router']['ip'])
+            ctrl.log.get('Web').info(msg)
+            raise HTTPError(409, '%s', msg)
+
         if not body.get('ack'):
             filename = ctrl.state.get('selected', '')
             if filename:
@@ -627,6 +641,16 @@ class ModbusReadHandler(bbctrl.APIHandler):
         self.get_ctrl().mach.modbus_read(int(self.json['address']))
 
 
+class PlugsHandler(bbctrl.APIHandler):
+    # {"plug": "router"|"vac", "on": true|false}: switch from the screen
+    def put_ok(self):
+        plugs = getattr(self.get_ctrl(), 'plugs', None)
+        if plugs is None: raise HTTPError(503, 'Power plugs are not available')
+        body = self.json if isinstance(self.json, dict) else {}
+        try: plugs.set_manual(str(body.get('plug', '')), bool(body.get('on')))
+        except ValueError as e: raise HTTPError(400, '%s', str(e))
+
+
 class ModbusWriteHandler(bbctrl.APIHandler):
     def put_ok(self):
         self.get_ctrl().mach.modbus_write(int(self.json['address']),
@@ -686,6 +710,8 @@ class NextStoreHandler(bbctrl.APIHandler):
             if cp: cp.reload()
             guard = getattr(self.get_ctrl(), 'setter_guard', None)
             if guard: guard.reload()
+            plugs = getattr(self.get_ctrl(), 'plugs', None)
+            if plugs: plugs.reload()
 
 
 class ResumeHandler(bbctrl.APIHandler):
@@ -1189,6 +1215,7 @@ class Web(tornado.web.Application):
             (r'/api/start', StartHandler),
             (r'/api/lint/([^/]+)', LintHandler),
             (r'/api/estop', EStopHandler),
+            (r'/api/plugs', PlugsHandler),
             (r'/api/clear', ClearHandler),
             (r'/api/stop', StopHandler),
             (r'/api/pause', PauseHandler),

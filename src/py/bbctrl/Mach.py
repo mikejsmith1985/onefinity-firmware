@@ -141,9 +141,22 @@ class Mach(Comm):
     def _set_mist(self, on): self._i2c_set('1oa', 1 if on else 0)
 
 
+    def _plugs(self): return getattr(self.ctrl, 'plugs', None)
+
+
+    def _plug_call(self, fn, *args):
+        # Power plugs (1.35.0) must never get in the way of the machine
+        plugs = self._plugs()
+        if plugs is None: return
+        try: getattr(plugs, fn)(*args)
+        except Exception as e: self.mlog.error('Power plugs: %s' % e)
+
+
     def _set_cycle(self, cycle):
         # A dry run never outlives its cycle
         if cycle == 'idle': self.planner.end_dry()
+        if cycle == 'idle' and self._get_cycle() == 'running':
+            self._plug_call('job_end')
         self.ctrl.state.set('cycle', cycle)
 
 
@@ -225,6 +238,9 @@ class Mach(Comm):
         # Handle EStop
         if state_changed and state == 'ESTOPPED':
             self.planner.reset(stop = False)
+            self._plug_call('estop', True)
+        elif state_changed and state:
+            self._plug_call('estop', False)
 
         # Exit cycle if state changed to READY
         if (state_changed and self._get_cycle() != 'idle' and
@@ -257,6 +273,9 @@ class Mach(Comm):
                 bool(self.ctrl.state.get('1oa', False)))
         except BaseException as e:
             self.mlog.error('Coolant hold: %s' % e)
+
+        # Router and vac plugs off while paused (1.35.0)
+        self._plug_call('on_update', self._is_resumable_pause())
 
         # Automatically unpause after seek or stop hold
         # Must be after holding commands above
@@ -611,6 +630,7 @@ class Mach(Comm):
     def unhome(self, axis): self.mdi('G28.2 %c0' % axis)
     def estop(self):
         self.coolant_hold.cancel()
+        self._plug_call('estop', True)
         super().estop()
 
 
@@ -638,6 +658,7 @@ class Mach(Comm):
         if getattr(self, '_fenced', None) and self._board_moving():
             raise Exception('Wait for the jog to stop before starting the program')
         self._begin_cycle('running')
+        self._plug_call('job_start', bool(dry_lift))
         self._unfence_for('program')
         self.planner.load(filename, dry_lift, dry_path if dry_lift else None)
         if dry_lift and dry_note: self.ctrl.state.set('dry_note', dry_note)
@@ -652,6 +673,7 @@ class Mach(Comm):
 
     def stop(self):
         self.coolant_hold.cancel()
+        self._plug_call('stop')
         if self._get_state() != 'jogging': self.stopping = True
         super().i2c_command(Cmd.STOP)
         
@@ -661,7 +683,10 @@ class Mach(Comm):
     def unpause(self):
         if self._is_paused():
             self.ctrl.state.set('optional_pause', False)
-            self.coolant_hold.resume(self._unpause)
+            proceed = lambda: self.coolant_hold.resume(self._unpause)
+            plugs = self._plugs()
+            if plugs is None: proceed()
+            else: plugs.resume(proceed)
 
 
     def optional_pause(self, enable = True):

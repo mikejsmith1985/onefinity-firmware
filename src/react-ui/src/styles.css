@@ -475,3 +475,16 @@ svg.art { width: 100%; height: auto; display: block; background: var(--bed); bor
 .setter-guard .check { display: flex; align-items: center; gap: 8px; }
 .setter-guard small { display: block; margin-top: 2px; }
 .indicators .legend-note { margin: 0 0 12px; color: var(--dim); font-size: 13px; }
+
+/* Router and vac plugs (1.35.0) */
+.plugs { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.plug { flex: 1 1 200px; display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; border-radius: 8px; background: var(--steel2); border: 1px solid var(--rule); border-left: 4px solid var(--dim); }
+.plug.on { border-left-color: var(--green); }
+.plug.offline { border-left-color: var(--red); }
+.plug-name { font-weight: 700; }
+.plug-state { flex: 1; color: var(--dim); font-variant-numeric: tabular-nums; }
+.plug.on .plug-state { color: var(--chalk); }
+.plug.offline .plug-state { color: var(--red); }
+.plug button { min-width: 64px; }
+.plug-err { flex-basis: 100%; margin: 0; color: var(--red); }
+.plug-pref { margin-bottom: 12px; }

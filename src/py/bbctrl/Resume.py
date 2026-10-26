@@ -401,10 +401,15 @@ def output_name(source):
     return name
 
 
-def manual_spindle(config):
+def manual_spindle(config, ctrl = None):
     '''True when the controller can't switch the spindle itself: a router
     with its own switch and speed dial (tool type Disabled, or the Router
-    tool), so M3 and M5 do nothing.'''
+    tool), so M3 and M5 do nothing.  A router on a power plug in Auto
+    (1.35.0) is switched by M3 and M5.'''
+    plugs = getattr(ctrl, 'plugs', None) if ctrl is not None else None
+    try:
+        if plugs is not None and plugs.router_auto(): return False
+    except Exception: pass
     try:
         tool_type = str(config.get('tool-type', 'Disabled') or 'Disabled')
         selected = str(config.get('selected-tool', '') or '')
@@ -488,7 +493,7 @@ class Resume(object):
             notes.append('%s was changed after the job was interrupted. The restart point '
                          'was found from where the tool is, not from the saved line.' % src)
 
-        manual = manual_spindle(self.ctrl.config)
+        manual = manual_spindle(self.ctrl.config, self.ctrl)
         router = GCodeText.setup_fields(lines[:400]).get('router', '')
         text, info = build(lines, line, src, opts, self._top_mm(),
                            manual = manual, router = router)
@@ -565,7 +570,7 @@ class Resume(object):
         top = self._top_mm()
 
         self.parking = True
-        s.set('park_manual', manual_spindle(ctrl.config))
+        s.set('park_manual', manual_spindle(ctrl.config, ctrl))
         s.set('park', 'parking')
         ctrl.mach.stop()
         self._wait(lambda: s.get('cycle') == 'idle' and s.get('xx') == 'READY',

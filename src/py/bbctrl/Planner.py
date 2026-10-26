@@ -426,11 +426,25 @@ class Planner():
             if name in ['line', 'tool']: self._enqueue_set_cmd(id, name, value)
 
             if name == 'speed':
+                was = self.spindle
                 try: self.spindle = float(value)
                 except (TypeError, ValueError): pass
                 if self.is_dry(): value = 0 # Spindle stays off
                 self._enqueue_set_cmd(id, name, value)
-                return Cmd.speed(value)
+                cmd = Cmd.speed(value)
+
+                # Router plug (1.35.0): switched when this command reaches
+                # the machine, and the machine waits for the router to come
+                # up to speed before it moves on.
+                plugs = getattr(self.ctrl, 'plugs', None)
+                if plugs is not None and not self.is_dry():
+                    try: on = bool(float(value))
+                    except (TypeError, ValueError): on = False
+                    if bool(was) != on:
+                        self.cmdq.enqueue(id, plugs.spindle_cmd, on)
+                        if on and plugs.router_auto() and plugs.spinup() > 0:
+                            cmd += '\n' + Cmd.dwell(plugs.spinup())
+                return cmd
 
             if len(name) and name[0] == '_':
                 # Don't queue axis positions, can be triggered by new position

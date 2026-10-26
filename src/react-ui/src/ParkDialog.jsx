@@ -6,6 +6,7 @@ import { errText } from "./checkpoint.js";
 // "Park and power down": stop, spindle off, lift Z, then it is safe to switch off.
 // A router the controller cannot switch (no VFD or PWM spindle) keeps running after M5 (1.29.0).
 const manualRouter = (state, config) => {
+  if (state.plug_router_auto) return false; // the router plug (1.35.0) is switched off by M5
   const t = config?.tool;
   if (t) return String(t["tool-type"] || "Disabled").toLowerCase() === "disabled" || ["router", "disabled"].includes(String(t["selected-tool"] || "").toLowerCase());
   return !!state.park_manual; // set by the controller when it parks (Resume.py)
