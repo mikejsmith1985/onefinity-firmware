@@ -4,8 +4,8 @@ import { computeAxis, fmtLen } from "./axis.js";
 import { status_to_string } from "./modbus.js";
 import { stockChecks, probeChecks, sheetLineChecks } from "./setup.js";
 import SheetView from "./SheetView.jsx";
-import { lintChecks } from "./lint-checks.js";
-export { lintChecks };
+import { lintChecks, toolChecks } from "./lint-checks.js";
+export { lintChecks, toolChecks };
 
 import { getPref, setPref } from "./shared.js";
 // "Don't show this check again" is a shared setting (it was per browser before 1.28).

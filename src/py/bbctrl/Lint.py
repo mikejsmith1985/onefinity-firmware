@@ -193,6 +193,7 @@ def lint_lines(lines, setup = None):
     rapids = []           # (line, from_z, to_z, xy_moved) rapid moves
     min_z = None
     spin_dir, spin_speed = None, 0.0
+    max_speed = 0.0       # highest S word (1.35.1: router program on the laser)
     deepest = {}          # (x, y) rounded -> lowest Z reached there (1.31.5)
     ext = [None, None, None, None]   # min x, max x, min y, max y of the moves
     ext_ok = True         # False once a move can't be followed (G91, expressions)
@@ -261,7 +262,9 @@ def lint_lines(lines, setup = None):
             elif g == 80: motion = None
             elif 73 <= g <= 89: motion = g     # canned cycle: not tracked
 
-        if 'S' in vals: spin_speed = vals['S']
+        if 'S' in vals:
+            spin_speed = vals['S']
+            max_speed = max(max_speed, abs(spin_speed))
         for mc in ms:
             if mc == 7: mist_on_line = mist_on_line or n
             elif mc == 9: mist_on_line = None
@@ -407,6 +410,7 @@ def lint_lines(lines, setup = None):
         'warnings': sum(1 for i in items if i['level'] == 'warn'),
         'issues': items,
         'stock_top': top,
+        'max_speed': max_speed,
     }
 
 
@@ -454,7 +458,7 @@ def _cache():
     global _results
     if _results is None:
         from bbctrl import Work
-        _results = Work.FileCache(_lint_path, CACHE_MAX, 'lint-2')
+        _results = Work.FileCache(_lint_path, CACHE_MAX, 'lint-3')
     return _results
 
 
@@ -536,10 +540,36 @@ def start_stops_async(ctrl, filename):
     return _stops(ctrl, res)
 
 
+def tool_mismatch(config, res):
+    '''A router program while the laser (or PWM spindle) is the selected
+    tool (1.35.1): its S words are above the tool's maximum, or its setup
+    sheet names a router.  M3 would then drive the laser output and the
+    router plug would stay off.  The message, or None.'''
+    try:
+        sel = str(config.get('selected-tool', '') or '').lower()
+        if sel not in ('laser', 'pwm'): return None
+        top = float(config.get('max-spin', 0) or 0)
+    except Exception: return None
+    s = float(res.get('max_speed', 0) or 0)
+    router = 'router' in (res.get('setup') or {})
+    if not ((top and s > top) or router): return None
+    why = ('it asks for S%g, above the %s maximum of %g' %
+           (s, sel, top)) if top and s > top else 'its setup sheet names a router'
+    return ('WRONG TOOL: the Tool is set to %s, but this looks like a router '
+            'program (%s). M3 would switch the %s output on, and the router '
+            'plug would stay off. Set the Tool to Router on the Tool tab, '
+            'then run again.' % ('Laser' if sel == 'laser' else 'PWM spindle',
+                                 why, 'laser' if sel == 'laser' else 'PWM'))
+
+
 def _stops(ctrl, res):
     stops = []
     if res['errors']:
         stops.append({'key': 'lint', 'msg': 'G-code check: ' + summary(res)})
+
+    cfg = getattr(ctrl, 'config', None)
+    msg = tool_mismatch(cfg, res) if cfg is not None else None
+    if msg: stops.append({'key': 'tool', 'msg': msg})
 
     want = GCodeText.norm_corner(res.get('setup', {}).get('probe-corner'))
     if want in GCodeText.CORNERS:

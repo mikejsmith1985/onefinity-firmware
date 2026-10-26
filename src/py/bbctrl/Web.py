@@ -518,6 +518,9 @@ class StartHandler(bbctrl.APIHandler):
             filename = ctrl.state.get('selected', '')
             if filename:
                 stops = yield bbctrl.Lint.start_stops_async(ctrl, filename)
+                # A dry run keeps the spindle off, so the tool doesn't matter
+                if body.get('dry_lift'):
+                    stops = [s for s in stops if s.get('key') != 'tool']
                 if not stops and ctrl.state.get('selected', '') != filename:
                     stops = [{'key': 'changed', 'msg': 'Another program was '
                               'selected while %s was being checked. Press Run '

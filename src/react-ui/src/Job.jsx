@@ -4,7 +4,7 @@ import { fmtTime, computeAxis } from "./axis.js";
 import { useNote } from "./notes.js";
 import { markStopped } from "./history.js";
 import ParkDialog from "./ParkDialog.jsx";
-import Checklist, { buildChecks, skipChecklist, SheetView, lintChecks } from "./Checklist.jsx";
+import Checklist, { buildChecks, skipChecklist, SheetView, lintChecks, toolChecks } from "./Checklist.jsx";
 import { readSetup, stockChecks, probeChecks, sheetLineChecks } from "./setup.js";
 import { remoteGet } from "./store.js";
 import { getSetter } from "./ToolSetter.jsx";
@@ -100,19 +100,22 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
         // The G-code check only changes with the program (1.31.2: it was asked for again every 3 s while
         // a warning showed). A failed read is not kept, so it is tried again on the next pass.
         let lint = lintCache.current.file === key ? lintCache.current.lint : undefined;
+        let raw = lintCache.current.file === key ? lintCache.current.raw : null;
         if (lint === undefined) {
           try {
-            lint = lintChecks(await api.get(`lint/${encodeURIComponent(state.selected)}`)).filter((c) => c.level === "stop");
-            lintCache.current = { file: key, lint };
+            raw = await api.get(`lint/${encodeURIComponent(state.selected)}`);
+            lint = lintChecks(raw).filter((c) => c.level === "stop");
+            lintCache.current = { file: key, lint, raw };
           } catch { lint = []; /* checked again at Run */ }
         }
+        if (!dry) lint = [...lint, ...toolChecks(raw, config)]; // the Tool can change without the program changing; a dry run keeps the spindle off
         const nested = lint.some((c) => c.key === "comment-nested");
         const bad = [...probeChecks(setup, rec, state), ...stockChecks(setup, metric), ...(nested ? [] : sheetLineChecks(setup)), ...lint, ...sc].filter((c) => c.level !== "ok");
         if (!gone) setLive(bad);
       } catch { if (!gone) setLive([]); }
     })();
     return () => { gone = true; };
-  }, [state.selected, state.selected_time, state.offset_x, state.offset_y, state.offset_z, metric, probeTick, path, dry, liftMm]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.selected, state.selected_time, state.offset_x, state.offset_y, state.offset_z, metric, probeTick, path, dry, liftMm, config?.tool?.["selected-tool"]]); // eslint-disable-line react-hooks/exhaustive-deps
   // Cut deeper (1.30.0): offered once the selected program has run to the end
   const { cp } = useCheckpoint(state);
   const doover = useUi(state, "doover").v;
@@ -134,7 +137,7 @@ export default function Job({ state, mach, path, metric, config, changes = [] })
     catch (e) { setErr(`Not started: the controller could not check ${file} (${String(e.message || e).replace(/^\{"message":"|","code":\d+\}$/g, "")}). Press Run again.`); return; }
     let extra = [];
     try { extra = setterChecks(path, await getSetter(), state, setup?.toolD, metric, guardOpts(dry)); } catch { /* no setter saved */ }
-    extra = [...lintChecks(lint), ...extra];
+    extra = [...lintChecks(lint), ...(dry ? [] : toolChecks(lint, config)), ...extra];
     const checks = buildChecks(state, config, metric, file, setup, rec, extra);
     // A program with a setup sheet always shows it. A move outside the plate is never skipped.
     const stopped = checks.some((c) => c.level === "stop");

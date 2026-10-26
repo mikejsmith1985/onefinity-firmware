@@ -53,8 +53,9 @@ const config = rj("onefinity_defaults.json"); const variant = rj("onefinity_mach
 config.motors = config.motors.map((m, i) => ({ ...m, ...(variant.motors[i] || {}), axis: ["X", "Y", "Y", "Z"][i] }));
 config.motors[3]["max-soft-limit"] = 133; config.motors[3]["homing-mode"] = "stall-max";
 const TOOL = process.env.MOCK_TOOL || "custom-modbus-vfd";
-const TNAME = { "custom-modbus-vfd": "Custom Modbus VFD", "delta-vfd": "Delta VFD015M21A (Beta)", "redline-vfd": "Redline VFD" }[TOOL];
+const TNAME = { "custom-modbus-vfd": "Custom Modbus VFD", "delta-vfd": "Delta VFD015M21A (Beta)", "redline-vfd": "Redline VFD", laser: "PWM Spindle", router: "Disabled" }[TOOL];
 config.tool["selected-tool"] = TOOL; config.tool["tool-type"] = TNAME;
+if (TOOL === "laser") config.tool["max-spin"] = 1000; // MOCK_TOOL=laser: the router program below asks for S17000
 const regs = config["modbus-spindle"].regs = Array.from({ length: 32 }, () => ({ "reg-type": "disabled", "reg-addr": 0, "reg-value": 0 }));
 regs[0] = { "reg-type": "connect-write", "reg-addr": 8192, "reg-value": 1 }; regs[1] = { "reg-type": "freq-set", "reg-addr": 8193, "reg-value": 0 }; regs[2] = { "reg-type": "status-read", "reg-addr": 8448, "reg-value": 0 };
 const TY = ["disabled","connect-write","max-freq-read","max-freq-fixed","freq-set","freq-signed-set","freq-scaled-set","stop-write","forward-write","reverse-write","freq-read","freq-signed-read","freq-actech-read","status-read","disconnect-write"];
@@ -274,7 +275,7 @@ const server = http.createServer((req, res) => {
   // Pre-run G-code check (Lint.py, 1.29.0). MOCK_LINT_ERROR=1 reports one error.
   if (p.startsWith("/api/lint/")) {
     const issues = process.env.MOCK_LINT_ERROR ? [{ key: "g83", level: "error", msg: "G83 (peck drill) runs as a plain G81 drill: one plunge to full depth, no pecking, which can snap a small bit.", lines: [12], count: 1 }] : [];
-    return json(res, { lines: 16, errors: issues.length, warnings: 0, issues, stock_top: null });
+    return json(res, { lines: 16, errors: issues.length, warnings: 0, issues, stock_top: null, max_speed: 17000, setup: {} });
   }
   if (p.startsWith("/api/file/")) {
     const fname = decodeURIComponent(p.slice("/api/file/".length));
