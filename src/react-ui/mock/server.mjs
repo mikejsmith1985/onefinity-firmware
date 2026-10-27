@@ -134,8 +134,40 @@ function playMarks(text, ms) {
   broadcast({ of_step: 0 });
   n.forEach((v, i) => setTimeout(() => broadcast({ of_step: v }), ((i + 0.5) * ms) / Math.max(1, n.length)));
 }
+// Bed camera (1.36.0): a fake overhead camera over a fake bed (mock/bedscene.py)
+const BED_Z = -100, STOCK = { cx: 300, cy: 250, w: 150, l: 90, t: 19, ang: (4 * Math.PI) / 180 };
+let stockOn = false, camSize = { width: 1280, height: 720 };
+const onStock = (x, y) => {
+  const dx = x - STOCK.cx, dy = y - STOCK.cy, u = dx * Math.cos(STOCK.ang) + dy * Math.sin(STOCK.ang), v = -dx * Math.sin(STOCK.ang) + dy * Math.cos(STOCK.ang);
+  return stockOn && Math.abs(u) <= STOCK.w / 2 && Math.abs(v) <= STOCK.l / 2;
+};
+function runFake(fn, ms = 500) { broadcast({ xx: "RUNNING", cycle: "running" }); setTimeout(() => broadcast({ ...fn(), xx: "READY", cycle: "idle" }), ms); }
+function bedcamMdi(text) {
+  const num = (re) => { const m = re.exec(text); return m ? +m[1] : null; };
+  if (text.startsWith("mock:stock ")) { stockOn = text.endsWith("on"); return true; }
+  if (text.startsWith("mock:pos ")) { const [x, y, z] = text.slice(9).split(" ").map(Number); broadcast({ xp: x, yp: y, zp: z }); return true; }
+  if (text.includes("(Bed camera: touch the bed)")) {
+    const floor = onStock(state.xp, state.yp) ? BED_Z + STOCK.t : BED_Z;
+    runFake(() => ({ zp: floor + 0.2, ofc_z: floor, ofc_ok: 1 })); return true;
+  }
+  if (text.includes("(Bed camera: lift)")) { const dz = num(/G0 Z(-?[\d.]+)/); runFake(() => ({ zp: +(state.zp + dz).toFixed(3) })); return true; }
+  if (text.includes("(Bed camera: park)")) {
+    const z = num(/G53 G0 Z(-?[\d.]+)/), x = num(/G53 G0 X(-?[\d.]+)/), y = num(/ Y(-?[\d.]+)/);
+    runFake(() => ({ xp: x, yp: y, zp: z }), 800); return true;
+  }
+  if (text.includes("(Measure stock: move over the stock")) {
+    const z = num(/G53 G0 Z(-?[\d.]+)/), x = num(/G53 G0 X(-?[\d.]+)/), y = num(/ Y(-?[\d.]+)/);
+    const hit = onStock(x, y), top = BED_Z + STOCK.t;
+    runFake(() => (hit ? { xp: x, yp: y, zp: top + 8, ofb_top: top, ofb_ok: 1, ofb_hit: 1 } : { xp: x, yp: y, zp: z, ofb_ok: 0, ofb_hit: 0 }), 1200);
+    return true;
+  }
+  const mv = /^G21\nG90 G53 G0 X(-?[\d.]+) Y(-?[\d.]+)/.exec(text);
+  if (mv) { runFake(() => ({ xp: +mv[1], yp: +mv[2] }), 300); return true; }
+  return false;
+}
 function mdi(text) {
   mdiLog.push(text);
+  if (bedcamMdi(text)) return;
   // Probing (Probe XYZ / Z): run for a second, then set an offset
   if (/G38\.2/.test(text) && !text.includes("#<_ofm_ok>") && !text.includes("#<_ofs_ok>")) {
     broadcast({ xx: "RUNNING", cycle: "mdi" });
@@ -252,11 +284,17 @@ const server = http.createServer((req, res) => {
     if (!fs.existsSync(f)) { res.writeHead(404); return res.end(); }
     res.writeHead(200, { "Content-Type": "image/jpeg" }); return res.end(fs.readFileSync(f));
   }
+  if (p === "/api/camera/frame") {
+    const r = spawnSync("python3", [path_.join(path_.dirname(fileURLToPath(import.meta.url)), "bedscene.py")],
+      { input: JSON.stringify({ x: state.xp, y: state.yp, z: state.zp, stock: stockOn, seed: Date.now() % 1000 }) });
+    if (r.status !== 0) { console.error("bedscene:", String(r.stderr)); res.writeHead(503); return res.end(); }
+    res.writeHead(200, { "Content-Type": "image/jpeg" }); return res.end(r.stdout);
+  }
   if (p === "/api/camera") {
     let b = ""; req.on("data", (d) => (b += d));
     req.on("end", () => {
-      if (req.method === "PUT") { const q = JSON.parse(b || "{}"); camFocus = q.focus; }
-      json(res, { connected: true, locked: camFocus !== null, focus: camFocus ?? 30, range: { min: 0, max: 250, step: 5, default: 0 } });
+      if (req.method === "PUT") { const q = JSON.parse(b || "{}"); if ("width" in q) camSize = { width: q.width, height: q.height }; else camFocus = q.focus; }
+      json(res, { connected: true, locked: camFocus !== null, focus: camFocus ?? 30, range: { min: 0, max: 250, step: 5, default: 0 }, ...camSize, sizes: [[640, 480], [1280, 720]] });
     });
     return;
   }

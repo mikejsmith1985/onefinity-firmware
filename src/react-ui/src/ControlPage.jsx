@@ -72,7 +72,7 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
       </section>
       <section className="band job-band"><Job state={state} mach={mach} path={path} metric={metric} config={cfg.config} changes={changes} /></section>
       <section className="band work-band">
-        <Workspace lines={lines} state={state} path={path} pathBusy={pathBusy} send={send} mach={mach} cfg={cfg} idle={idle && !estopped} logs={logs} clearLogs={clearLogs} />
+        <Workspace lines={lines} state={state} path={path} pathBusy={pathBusy} send={send} mach={mach} cfg={cfg} idle={idle && !estopped} logs={logs} clearLogs={clearLogs} subscribe={subscribe} onMeasure={() => setProbe("measure")} />
       </section>
       {homeFirst && (
         <Modal title="Home the machine first" onClose={homing ? undefined : () => setHomeFirst(null)} dismissable={!homing}

@@ -6,7 +6,10 @@ import { remotePut } from "./store.js";
 import { getPrefs, setPrefs } from "./checkpoint.js";
 import { readSetup } from "./setup.js";
 import { probeActive, setterProgram, refStatus, probeRefValue, tripToWork, REF_FORMAT } from "./setter.js";
-import { getSetter, saveSetter, setterArgs } from "./ToolSetter.jsx";
+import { getSetter, saveSetter, setterArgs, useProgramRunner } from "./ToolSetter.jsx";
+import { loadBedcam, saveBedcam, freshLocated } from "./BedCam.jsx";
+import { moveOverProgram, stockInMachine, revive } from "./bedcam.js";
+import { computeAxis } from "./axis.js";
 import { MEASURE_DEFAULTS, FAILS, ORIGINS_XY, ORIGINS_X, checkOpts, measureProgram, calibratedBall } from "./measure.js";
 import { programMoves, moveStatus } from "./progress.js";
 import { StepRail, StepBody, RunProgress, Outcome, useRunStep } from "./steps.jsx";
@@ -58,10 +61,20 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
           hintText = `Size and zero filled in from the setup sheet of ${state.selected}.`;
         }
       } catch {}
+      // 1.36.0: stock the bed camera found in the last 30 minutes
+      let camLoc = null;
+      try {
+        const bc = await loadBedcam(), loc = freshLocated(bc);
+        if (loc) {
+          camLoc = { cx: loc.cx, cy: loc.cy, w: loc.w, l: loc.l, angle: loc.angle, t: loc.t, time: loc.time };
+          w = Math.round(loc.w); l = Math.round(loc.l);
+          hintText = `Size and position from the bed camera (found ${new Date(loc.time).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}). The probe still measures it exactly.`;
+        }
+      } catch {}
       const cur = await uiGet("measure");
       if (cur.v && cur.v.id === openId) return;
       await uiCas("measure", { id: openId, driver: ME, step: "setup", calib: false, p: m, form: { w: w ? show(w, 2) : "", l: l ? show(l, 2) : "", trueW: "" },
-        adv: false, hint: hintText, result: null, jogStep: 10, useSetter: true, seenOpen: false, phase: null, started: false }, cur.rev);
+        adv: false, hint: hintText, result: null, jogStep: 10, useSetter: true, seenOpen: false, phase: null, started: false, cam: camLoc, camMove: null }, cur.rev);
     })().catch(() => {});
   }, [openId, !!D]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -83,6 +96,30 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
     return () => clearTimeout(t);
   }, [isDriver, runningStep, step, D && D.started]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => subscribe((d) => { if (d.log?.msg === "Switch not found" && R.current.D?.driver === ME) R.current.failed = true; }), [subscribe]);
+
+  // 1.36.0: move over the stock the bed camera found, find its top, size it again at the real height
+  const runCam = useProgramRunner(state, subscribe, send);
+  const camMove = async () => {
+    const c = D.cam;
+    patch({ camMove: { state: "moving" }, driver: ME });
+    try {
+      const bc = await loadBedcam(), cal = revive(bc.cal), loc = bc.located;
+      if (!cal || !loc) throw new Error("The bed camera's result is gone. Find the stock again, or jog by hand.");
+      const z = computeAxis(state, config, "z", true);
+      const r = await runCam(moveOverProgram({ top: z.max - 1, x: c.cx, y: c.cy, zStop: cal.zBed + 2, travel: p.travel, fast: config.probe["probe-fast-seek"], slow: config.probe["probe-slow-seek"], above: 8 }));
+      if (r.estop || r.xx === "ESTOPPED") throw new Error("The machine stopped (E-stop) while moving over the stock.");
+      if (r.ofb_ok !== 1) { patch({ camMove: { state: "missed" } }); return; }
+      const t = r.ofb_top - cal.zBed;
+      const again = stockInMachine(cal, { outline: loc.pxOutline, contour: loc.pxContour }, t).rect;
+      const shift = Math.hypot(again.cx - c.cx, again.cy - c.cy);
+      if (shift > 1 && shift < 30) await runCam(`G21\nG90 G53 G0 X${again.cx.toFixed(3)} Y${again.cy.toFixed(3)}\nG90\nM2\n`);
+      const fixed = shift < 30 ? again : { ...again, cx: c.cx, cy: c.cy };
+      await saveBedcam({ located: { ...loc, cx: fixed.cx, cy: fixed.cy, w: fixed.w, l: fixed.l, angle: fixed.angle, t } });
+      patch((d) => ({ camMove: { state: "ready", t, w: fixed.w, l: fixed.l, angle: fixed.angle, odd: t < 1 || t > 3 * (c.t || 19) + 10 },
+        cam: { ...d.cam, cx: fixed.cx, cy: fixed.cy, w: fixed.w, l: fixed.l, t },
+        form: { ...(d.form || {}), w: show(fixed.w, 1), l: show(fixed.l, 1) } }));
+    } catch (e) { patch({ camMove: { state: "error", text: e.message } }); }
+  };
 
   const edit = (k, v) => setP((x) => ({ ...x, [k]: v }));
   const mmOf = (s) => { const v = parseFloat(s); return Number.isFinite(v) ? v * u : NaN; };
@@ -121,6 +158,14 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
     if (ok && calib) {
       res.ball = calibratedBall(s.ofm_rxa, s.ofm_rxb, opts.w);
       res.ballOk = res.ball > 0.3 && res.ball < 10;
+    }
+    if (ok && !calib && D.cam) {
+      // The stock is measured: the camera's result is used up; keep its outline at the measured height
+      loadBedcam().then((bc) => {
+        const cal = revive(bc.cal), t = typeof s.ofm_zt === "number" && cal ? s.ofm_zt - cal.zBed : null;
+        const outline = bc.outline && t !== null && bc.outline.pxOutline ? { ...bc.outline, pts: stockInMachine(cal, { outline: bc.outline.pxOutline }, t).outline, t } : bc.outline;
+        return saveBedcam({ located: null, outline });
+      }).catch(() => {});
     }
     if (ok && !calib) {
       remotePut("probe", { loc: opts.origin, time: Date.now(), off: { x: s.offset_x ?? null, y: opts.probeY ? s.offset_y ?? null : null, z: s.offset_z ?? null }, measured: { w: s.ofm_w, l: opts.probeY ? s.ofm_l : null } });
@@ -207,7 +252,7 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
       actions={<>
         {step !== "done" && <button className={running || step === "finishing" ? "danger" : ""} onClick={stop}>{running || step === "finishing" ? "Stop" : "Cancel"}</button>}
         {step === "setup" && <button className="primary" data-autofocus disabled={!p || errs.length > 0} onClick={() => setStep("check")}>Next</button>}
-        {step === "place" && <button className="primary" data-autofocus disabled={touched} onClick={start}>{calib ? "Measure the block" : "Start measuring"}</button>}
+        {step === "place" && <button className="primary" data-autofocus disabled={touched || D.camMove?.state === "moving" || (!!D.cam && !calib && !D.camMove)} onClick={start}>{calib ? "Measure the block" : "Start measuring"}</button>}
         {(running || step === "finishing") && <button className="primary" disabled>Measuring…</button>}
         {step === "done" && result?.ok && calib && result.ballOk && <button className="primary" data-autofocus onClick={saveBall}>Save {show(result.ball)} {unit}</button>}
         {step === "done" && <button className={result?.ok && !calib ? "primary" : ""} onClick={done}>Done</button>}
@@ -260,6 +305,19 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
           </StepBody>}
 
           {step === "place" && <StepBody title="Position the stylus" art={<MeasureArt moves={planMoves} probeY={!!opts?.probeY} />}>
+            {D.cam && !calib && <div className="why">
+              <b>The bed camera found the stock</b>
+              {!D.camMove && <><p>The machine can go over its middle by itself: up to the top, across, then down slowly until the stylus touches the top. It stops {show(8, 0)} {unit} above it.</p>
+                <div className="row-start"><button className="primary" disabled={touched || state.cycle !== "idle"} onClick={camMove}>Move over the stock</button>
+                  <button className="quiet" onClick={() => patch({ camMove: { state: "manual" } })}>Jog by hand instead</button></div></>}
+              {D.camMove?.state === "moving" && <p>Moving over the stock and finding its top… Keep a hand near the E-stop.</p>}
+              {D.camMove?.state === "ready" && <p>Ready: the stylus is over the middle, {show(8, 0)} {unit} above the top. The stock is about {show(D.camMove.t, 1)} {unit} thick and {show(D.camMove.w, 0)} × {show(D.camMove.l, 0)} {unit}.
+                {D.camMove.odd && <span className="err"> That height looks odd: the stylus may have landed on a clamp. Check before measuring.</span>}
+                {Math.abs(D.camMove.angle || 0) >= 5 && <span className="err"> The stock is turned {D.camMove.angle.toFixed(1)}°: straighten it, or the sizes will read large.</span>}</p>}
+              {D.camMove?.state === "missed" && <p className="err">The stylus came down to just above the bed without touching anything, so the stock isn't where the camera saw it. It went back up. Jog by hand below, or find the stock again.</p>}
+              {D.camMove?.state === "error" && <p className="err">{D.camMove.text}</p>}
+            </div>}
+            {(!D.cam || calib || ["missed", "error", "manual"].includes(D.camMove?.state)) && <>
             <p>Jog the stylus over the <b>middle</b> of the {calib ? "block" : "stock"}, about 3 to 15 {metric ? "mm" : "mm (⅛ to ½ in)"} above the top. It doesn't need to be exact.</p>
             <div className="probe-jog">
               <div className="radios inline">Step: {[10, 1].map((v) => <label key={v}><input type="radio" name="mjs" checked={jogStep === v} onChange={() => setJogStep(v)} /> {v} {unit}</label>)}</div>
@@ -269,6 +327,7 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
                 <span /><button onClick={() => jog("Y", -1)}>Y− (front)</button><span /><button onClick={() => jog("Z", -1)}>Z− (down)</button>
               </div>
             </div>
+            </>}
             <div className="why"><b>What happens next</b><p>The stylus touches the top, lifts {show(opts.clear, 0)} {unit}, then drops {show(opts.margin, 0)} {unit} outside each {calib || !opts.probeY ? "end" : "edge"} and touches it {show(opts.depth, 0)} {unit} below the top. Any unexpected touch stops it. Keep a hand near the E-stop.</p></div>
           </StepBody>}
 

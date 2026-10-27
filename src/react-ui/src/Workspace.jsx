@@ -13,7 +13,7 @@ import { useNote } from "./notes.js";
 
 const TABS = [["depth", "Depth view"], ["path", "Tool path"], ["gcode", "G-code"], ["files", "Files"], ["mdi", "MDI"], ["notes", "Notes"], ["history", "History"], ["messages", "Messages"], ["indicators", "Indicators"], ["camera", "Camera"]];
 
-export default function Workspace({ lines, state, path, pathBusy, send, mach, cfg, idle, logs, clearLogs }) {
+export default function Workspace({ lines, state, path, pathBusy, send, mach, cfg, idle, logs, clearLogs, subscribe, onMeasure }) {
   const [tab, setTab] = useState(() => { try { return localStorage.getItem("next-work") || "depth"; } catch { return "depth"; } });
   const hasNote = !!useNote(state.selected);
   const pick = (t) => { setTab(t); try { localStorage.setItem("next-work", t); } catch {} };
@@ -36,7 +36,7 @@ export default function Workspace({ lines, state, path, pathBusy, send, mach, cf
         {tab === "history" && <History />}
         {tab === "messages" && <Messages logs={logs} clear={clearLogs} />}
         {tab === "indicators" && <Indicators state={state} send={send} />}
-        {tab === "camera" && <Camera state={state} cfg={cfg} idle={idle} />}
+        {tab === "camera" && <Camera state={state} cfg={cfg} idle={idle} send={send} subscribe={subscribe} path={path} onMeasure={onMeasure} />}
       </div>
     </div>
   );

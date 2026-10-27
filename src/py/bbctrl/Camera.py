@@ -35,6 +35,8 @@ import pyudev
 import base64
 import socket
 import ctypes
+import json
+import time
 from tornado import gen, web, iostream
 import bbctrl
 
@@ -309,6 +311,22 @@ class Camera(object):
         self.width = args.width
         self.height = args.height
         self.fps = args.fps
+        self.sizes = []
+
+        # Resolution chosen in the Camera tab (1.36.0) wins over the
+        # command line.  Kept next to the other UI data.
+        self.settings_path = os.path.join('.', 'next-data', 'camera.json')
+        try:
+            with open(self.settings_path, 'r') as f: saved = json.load(f)
+            w, h = int(saved['width']), int(saved['height'])
+            if 160 <= w <= 4096 and 120 <= h <= 4096: self.width, self.height = w, h
+        except Exception: pass
+
+        # Still pictures for the bed camera: the newest frame is kept while
+        # someone has asked for one in the last few seconds.
+        self.last_frame = None
+        self.last_frame_time = 0
+        self.want_frames_until = 0
         self.fourcc = 'MJPG'
         self.max_clients = args.camera_clients
 
@@ -369,8 +387,10 @@ class Camera(object):
 
     def _fd_handler(self, fd, events):
         try:
-            if len(self.clients):
+            if len(self.clients) or time.time() < self.want_frames_until:
                 frame = self.dev.read_frame()
+                self.last_frame = frame
+                self.last_frame_time = time.time()
                 self._send_frame(frame)
 
             else: self.dev.flush_frame()
@@ -411,6 +431,11 @@ class Camera(object):
 
             self.log.info('Formats: %s', formats)
             self.log.info('Sizes: %s', sizes)
+            self.sizes = [s for s in sizes if len(s) == 2]
+            if self.sizes and (self.width, self.height) not in self.sizes:
+                self.log.warning('Camera has no %dx%d, using %dx%d' %
+                                 ((self.width, self.height) + tuple(self.sizes[0])))
+                self.width, self.height = self.sizes[0]
             self.log.info('Audio: %s', self.dev.get_audio())
 
             hasFormat = False
@@ -460,9 +485,41 @@ class Camera(object):
         self._apply_focus()
 
 
+    @gen.coroutine
+    def get_frame(self, timeout = 3):
+        """A JPEG taken after this call started (None if the camera is off)."""
+        asked = time.time()
+        self.want_frames_until = asked + 5
+        while time.time() - asked < timeout:
+            if self.dev is None: return None
+            if self.last_frame is not None and asked < self.last_frame_time:
+                return self.last_frame
+            yield gen.sleep(0.05)
+        return None
+
+
+    def set_resolution(self, width, height):
+        width, height = int(width), int(height)
+        if self.sizes and (width, height) not in self.sizes:
+            raise ValueError('The camera does not offer %dx%d' % (width, height))
+        self.width, self.height = width, height
+        try:
+            d = os.path.dirname(self.settings_path)
+            if not os.path.exists(d): os.makedirs(d)
+            with open(self.settings_path, 'w') as f:
+                json.dump({'width': width, 'height': height}, f)
+        except OSError as e: self.log.warning('Could not save camera size: %s' % e)
+        path = self.path
+        if self.dev is not None:
+            self.close()
+            self.last_frame = None
+        if path is not None and self.have_camera: self.open(path)
+
+
     def get_status(self):
         st = {'connected': self.dev is not None, 'locked': self.focus is not None,
-              'focus': None, 'range': None}
+              'focus': None, 'range': None, 'width': self.width,
+              'height': self.height, 'sizes': [list(s) for s in self.sizes]}
         if self.dev is None: return st
         try:
             st['range'] = self.dev.query_ctrl(v4l2.V4L2_CID_FOCUS_ABSOLUTE)

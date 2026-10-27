@@ -3,6 +3,7 @@ import { api } from "./controller.js";
 import { computeAxis, fmtLen } from "./axis.js";
 import { getPrefs, setPrefs, errText } from "./checkpoint.js";
 import { debounce } from "./store.js";
+import BedCam from "./BedCam.jsx";
 
 // Camera alignment.  The camera sits on the toolhead at a fixed offset from
 // the tool.  Once that offset is known, the crosshair can pick points on a
@@ -65,9 +66,10 @@ function Focus({ saved, onSave }) {
   );
 }
 
-export default function Camera({ state, cfg, idle }) {
+export default function Camera({ state, cfg, idle, send, subscribe, path, onMeasure }) {
   const [cross, setCross] = useState(true);
   const [broken, setBroken] = useState(false);
+  const [bedKey, setBedKey] = useState(0);
   const [cam, update] = useCamPrefs();
   const [calib, setCalib] = useState(null);      // null | {step: 1} | {step: 2, t0}
   const [busy, setBusy] = useState(false);
@@ -139,9 +141,29 @@ export default function Camera({ state, cfg, idle }) {
 
   const P = ({ p }) => p ? <span className="num">X {len(p.x)} · Y {len(p.y)}</span> : <span className="dim">not captured</span>;
 
+  // 1.36.0: the camera can sit above the bed instead of on the toolhead
+  const mount = cam?.mount || "toolhead";
+  const mountSel = cam && (
+    <label className="cam-mount">Camera is
+      <select value={mount} onChange={(e) => update((c) => ({ ...c, mount: e.target.value }))}>
+        <option value="toolhead">on the toolhead</option><option value="bed">above the bed</option>
+      </select></label>
+  );
+  if (cam && mount === "bed") return (
+    <div className="camera">
+      <div className="files-head">
+        {mountSel}
+        <button onClick={() => setBedKey((k) => k + 1)}>Reconnect</button>
+        <Focus saved={cam.focus} onSave={(v) => update((c) => ({ ...c, focus: v }))} />
+      </div>
+      {<BedCam key={bedKey} state={state} cfg={cfg} idle={idle} send={send} subscribe={subscribe} path={path} onMeasure={onMeasure} />}
+    </div>
+  );
+
   return (
     <div className="camera">
       <div className="files-head">
+        {mountSel}
         <button onClick={() => setCross((c) => !c)}>{cross ? "Hide crosshair" : "Show crosshair"}</button>
         <button onClick={() => setBroken(false)}>Reconnect</button>
         <button disabled={broken} onClick={snap}>Save snapshot</button>

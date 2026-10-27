@@ -664,7 +664,7 @@ class NextStoreHandler(bbctrl.APIHandler):
     # Small JSON documents for the new UI (run history, file notes), kept on
     # the controller so every browser sees the same data.  Only whitelisted
     # names are accepted and each document is capped in size.
-    NAMES = ('runs', 'notes', 'prefs', 'checkpoint', 'probe', 'uiprefs')
+    NAMES = ('runs', 'notes', 'prefs', 'checkpoint', 'probe', 'uiprefs', 'bedcam')
     MAX_BYTES = 1000000
 
     def _path(self, name):
@@ -756,10 +756,29 @@ class CameraHandler(bbctrl.APIHandler):
     def put(self):
         cam = self.application.camera
         if cam is None: raise HTTPError(503, 'Camera is disabled')
-        focus = self.json.get('focus') if isinstance(self.json, dict) else None
+        j = self.json if isinstance(self.json, dict) else {}
+        # {"width": w, "height": h} changes the picture size (1.36.0)
+        if 'width' in j or 'height' in j:
+            try: cam.set_resolution(j.get('width'), j.get('height'))
+            except (TypeError, ValueError) as e: raise HTTPError(400, '%s', str(e))
+            self.write_json(cam.get_status())
+            return
+        focus = j.get('focus')
         try: cam.set_focus(None if focus is None else int(focus))
         except (TypeError, ValueError): raise HTTPError(400, 'Bad focus value')
         self.write_json(cam.get_status())
+
+
+class CameraFrameHandler(bbctrl.RequestHandler):
+    # One still JPEG from the camera, taken after the request arrived (bed camera, 1.36.0)
+    @gen.coroutine
+    def get(self):
+        cam = self.application.camera
+        frame = (yield cam.get_frame()) if cam else None
+        if frame is None: raise HTTPError(503, 'No camera picture')
+        self.set_header('Content-Type', 'image/jpeg')
+        self.set_header('Cache-Control', 'no-store')
+        self.write(frame)
 
 
 class AlignHandler(bbctrl.APIHandler):
@@ -1188,12 +1207,13 @@ class Web(tornado.web.Application):
 
         handlers = [
             (r'/websocket', WSConnection),
-            (r'/api/next-store/(runs|notes|prefs|checkpoint|probe|uiprefs)', NextStoreHandler),
+            (r'/api/next-store/(runs|notes|prefs|checkpoint|probe|uiprefs|bedcam)', NextStoreHandler),
             (r'/api/ui/([a-z0-9._-]+)', SessionHandler),
             (r'/api/next-resume', ResumeHandler),
             (r'/api/next-doover', DoOverHandler),
             (r'/api/next-align', AlignHandler),
             (r'/api/camera', CameraHandler),
+            (r'/api/camera/frame', CameraFrameHandler),
             (r'/api/log', LogHandler),
             (r'/api/message/(\d+)/ack', MessageAckHandler),
             (r'/api/home-prompt', HomePromptHandler),
