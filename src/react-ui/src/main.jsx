@@ -8,7 +8,9 @@ import "@fontsource/barlow-semi-condensed/600.css";
 import "./styles.css";
 import App from "./App.jsx";
 import { installVirtualKeyboardFix } from "./vkbd.js";
+import { installClientLog } from "./clientlog.js";
 
+installClientLog();
 installVirtualKeyboardFix();
 
 createRoot(document.getElementById("root")).render(<App />);

@@ -1,0 +1,31 @@
+// Screen diagnostics (1.37.0): a phone screen reports taps on the probe buttons and script errors.
+//   (cd src/react-ui && npx vite build && PORT=8099 node mock/server.mjs &) ; node test/client-log.mjs
+import { chromium, devices } from "playwright";
+const BASE = process.env.BASE || "http://localhost:8099";
+let ok = true;
+const check = (n, c, m = "") => { console.log(`${c ? "PASS" : "FAIL"} ${n} ${m}`); ok &&= !!c; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const logs = () => fetch(BASE + "/api/mock/client-log").then((r) => r.json());
+const browser = await chromium.launch({ executablePath: process.env.CHROME, args: ["--no-sandbox"] });
+const ctx = await browser.newContext({ ...devices["iPhone 13"] });
+const p = await ctx.newPage();
+await p.goto(BASE + "/"); await p.waitForSelector(".chip"); await sleep(1500);
+let l = await logs();
+check("the screen says it loaded, with its browser", l.some((x) => x.kind === "start" && /iPhone/.test(x.ua)), JSON.stringify(l.slice(-1)));
+const n0 = l.length;
+await p.getByRole("button", { name: "Tool setter" }).first().tap(); await sleep(1500);
+l = (await logs()).slice(n0).map((x) => x.msg);
+check("finger landing on Tool setter is reported", l.some((m) => /^(touchstart|pointerdown) on "Tool setter"/.test(m)), JSON.stringify(l));
+check("the click is reported", l.some((m) => /^click on "Tool setter"/.test(m)));
+check("the button's handler is reported with homed and state", l.some((m) => /^handler: Tool setter: homed (true|false), state READY/.test(m)), JSON.stringify(l));
+check("and the dialog opened", await p.getByText("Collision guard").first().isVisible());
+await p.getByRole("button", { name: "Close" }).last().click(); await sleep(800);
+const n1 = (await logs()).length;
+await p.evaluate(() => setTimeout(() => { throw new Error("test boom"); }, 0)); await sleep(800);
+l = (await logs()).slice(n1);
+check("a script error is reported with its message", l.some((x) => x.kind === "error" && /test boom/.test(x.msg)), JSON.stringify(l));
+await p.evaluate(() => { Promise.reject(new Error("test reject")); }); await sleep(800);
+l = (await logs()).slice(n1);
+check("an unhandled promise rejection is reported", l.some((x) => x.kind === "error" && /test reject/.test(x.msg)));
+await browser.close();
+console.log(ok ? "ALL PASS" : "SOME FAILED"); process.exit(ok ? 0 : 1);

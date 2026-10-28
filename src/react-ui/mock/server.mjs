@@ -128,6 +128,7 @@ const storeChanged = (name) => broadcast({ store_rev: { ...state.store_rev, [nam
 const tokOf = (text, v) => [...text.matchAll(new RegExp(`#<_${v}>\\s*=\\s*(\\d+)`, "g"))].map((m) => +m[1]).filter(Boolean).pop() ?? 0;
 // The program's progress marks (#<_of_step> = N, 1.31.1), reported one after the other over ms
 // MOCK_SLOW=k stretches the measure / setter runs k times (for screenshots taken mid-run)
+const clientLog = [];
 const SLOW = +(process.env.MOCK_SLOW || 1);
 function playMarks(text, ms) {
   const n = [...text.matchAll(/^#<_of_step> = (\d+) \(/gm)].map((m) => +m[1]);
@@ -267,6 +268,9 @@ const server = http.createServer((req, res) => {
   }
   if (p === "/config-template.json" || /^\/onefinity.*\.json$/.test(p)) { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(fs.readFileSync(path_.join(R, p.slice(1)))); }
   if (p === "/mock/set") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { const d = JSON.parse(b); Object.assign(state, d); broadcast(d); } catch {} json(res, "ok"); }); return; }
+  // Screen diagnostics (1.37.0): what screens report; GET /api/mock/client-log reads it back for tests
+  if (p === "/api/client-log") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { clientLog.push(JSON.parse(b)); } catch {} json(res, "ok"); }); return; }
+  if (p === "/api/mock/client-log") return json(res, clientLog);
   if (p === "/api/config/load") return json(res, config);
   if (p === "/api/config/save") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { const c = JSON.parse(b); Object.assign(config, c); const d = {}; for (const k of ["gcode_list", "non_macros_list"]) if (c[k]) d[k] = c[k]; if (Object.keys(d).length) broadcast(d); } catch {} storeChanged("config"); json(res, "ok"); }); return; }
   if (p.startsWith("/api/ui/")) {

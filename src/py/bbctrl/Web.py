@@ -102,6 +102,32 @@ class SessionHandler(bbctrl.APIHandler):
         self.write_json(dict(ok = ok, v = cur['v'], rev = cur['rev']))
 
 
+class ClientLogHandler(bbctrl.APIHandler):
+    # 1.37.0: screens report their own script errors and taps on the probe
+    # buttons here, so a problem on one browser (an iPhone, say) shows up in the
+    # controller log.  Each line names the screen's address.  Bounded: long
+    # text is cut and each address gets at most RATE lines a minute.
+    RATE = 60
+    seen = {}
+
+    def put_ok(self):
+        import time
+        ip = self.request.headers.get('X-Real-IP', self.request.remote_ip)
+        now = time.time()
+        times = [t for t in ClientLogHandler.seen.get(ip, []) if now - t < 60]
+        if len(times) >= ClientLogHandler.RATE: return
+        times.append(now)
+        ClientLogHandler.seen[ip] = times
+        j = self.json if isinstance(self.json, dict) else {}
+        kind = str(j.get('kind', 'log'))[:20]
+        msg = str(j.get('msg', ''))[:600].replace('\n', ' | ')
+        ua = str(j.get('ua', ''))[:160]
+        log = self.get_ctrl().log.get('Client')
+        line = 'Screen %s %s: %s%s' % (ip, kind, msg, (' [%s]' % ua) if ua else '')
+        if kind == 'error': log.warning(line)
+        else: log.info(line)
+
+
 class MessageAckHandler(bbctrl.APIHandler):
     def put_ok(self, id):
         self.get_ctrl().state.ack_message(int(id))
@@ -1209,6 +1235,7 @@ class Web(tornado.web.Application):
             (r'/websocket', WSConnection),
             (r'/api/next-store/(runs|notes|prefs|checkpoint|probe|uiprefs|bedcam)', NextStoreHandler),
             (r'/api/ui/([a-z0-9._-]+)', SessionHandler),
+            (r'/api/client-log', ClientLogHandler),
             (r'/api/next-resume', ResumeHandler),
             (r'/api/next-doover', DoOverHandler),
             (r'/api/next-align', AlignHandler),

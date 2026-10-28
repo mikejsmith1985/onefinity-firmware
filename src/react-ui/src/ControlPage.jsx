@@ -1,3 +1,4 @@
+import { traceTap } from "./clientlog.js";
 import React, { useEffect, useState } from "react";
 import { loadPath, api } from "./controller.js";
 import Dro from "./Dro.jsx";
@@ -24,7 +25,11 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
   // "tool" holds {kind}; each tool keeps its own steps under its own name ("probe", "measure", "setter").
   const toolUi = useUi(state, "tool").v;
   const probe = toolUi?.kind || null, openId = toolUi?.id || null;
-  const setProbe = (k) => (k ? uiOpen("tool", { kind: k, id: `${Date.now()}-${ME}` }) : uiClose("tool"));
+  const setProbe = (k) => (k
+    ? uiOpen("tool", { kind: k, id: `${Date.now()}-${ME}` })
+        .then((ok) => { if (!ok) traceTap(`${PROBE_NAMES[k] || k}: not opened, the controller says a tool is already open`); return ok; })
+        .catch((e) => { traceTap(`${PROBE_NAMES[k] || k}: open failed: ${e && e.message ? e.message : e}`); return false; })
+    : uiClose("tool"));
   useEffect(() => {
     const f = state.selected;
     setPath(null);
@@ -55,6 +60,7 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
   const [homeErr, setHomeErr] = useState("");
   const requestProbe = (t) => {
     if (!t) { setProbe(null); return; }
+    traceTap(`${PROBE_NAMES[t] || t}: homed ${homed}, state ${mach}, open now ${probe || "none"}`);
     if (homed) setProbe(t); else { setHomeErr(""); setHomeFirst(t); }
   };
   useEffect(() => {
