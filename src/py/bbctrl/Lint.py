@@ -330,7 +330,9 @@ def lint_lines(lines, setup = None):
             # Down again inside a hole already cut at least this deep (a peck
             # drill going back to just above the last depth) is not into the
             # material (1.31.5)
-            low = deepest.get(_xy_key(new))
+            # (1.39.0: X or Y can be unknown here, after a G53 move)
+            low = deepest.get(_xy_key(new)) \
+                if new['X'] is not None and new['Y'] is not None else None
             if low is None or new['Z'] < low - EPS:
                 plunges.append((n, pos['Z'], new['Z']))
 

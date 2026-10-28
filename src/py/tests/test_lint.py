@@ -165,4 +165,7 @@ check('no extent for incremental moves (the screen measures it itself)', r['exte
 k, r = keys("G20 G90\nG0 X1 Y2\nM30")
 check('extent in mm for an inch program', abs(r['extent']['maxx'] - 25.4) < 1e-6 and abs(r['extent']['maxy'] - 50.8) < 1e-6, r['extent'])
 
+# 1.39.0: a plunge right after a machine-coordinate (G53) move used to crash the check
+r = Lint.lint_lines(['G21 G90', 'G53 G0 Z-1', 'G53 G0 X20 Y30', 'G0 Z3', 'G1 Z-1.2 F300', 'G1 X40 F1000', 'M2'])
+check('plunge after a G53 move checks without crashing', r['errors'] == 0, r)
 done()
