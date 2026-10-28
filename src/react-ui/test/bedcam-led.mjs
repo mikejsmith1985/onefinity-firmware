@@ -1,7 +1,7 @@
 // Hands-off bed camera calibration (1.38.0): finding the probe's LED ring in pictures,
 // and calibrating from it, against a simulated pinhole camera.
 //   node src/react-ui/test/bedcam-led.mjs
-import { calibrateLed, calibrate, toMachine, detectLedFlip, detectLedMoved, awayMove, autoSpots, autoTouchProgram, LED_H } from "../src/bedcam.js";
+import { calibrateLed, calibrate, toMachine, detectLedFlip, detectLedMoved, awayMove, autoSpots, autoTouchProgram, LED_H, LED_R } from "../src/bedcam.js";
 
 let ok = true;
 const check = (name, cond, msg = "") => { console.log(`${cond ? "PASS" : "FAIL"} ${name} ${msg}`); ok = ok && !!cond; };
@@ -47,9 +47,9 @@ function picture(probe, color, gain = 1) {
     const rgb = color === "red" ? [240, 50, 40] : [50, 235, 90];
     // A dim glow on the bed under it
     if (probe.z < 5) for (let a = 0; a < 360; a += 6) for (const rr of [6, 12, 18]) paint(cam({ x: probe.x + rr * Math.cos(a * Math.PI / 180), y: probe.y + rr * Math.sin(a * Math.PI / 180), z: 0 }), color === "red" ? [190, 120, 95] : [140, 175, 110], 1);
-    // The probe body (dark) and the ring, 16 mm radius, LED_H above the tip
+    // The probe body (dark) and the ring, LED_R radius, LED_H above the tip
     for (let h = LED_H + 2; h < LED_H + 22; h += 1) paint(cam({ x: probe.x, y: probe.y, z: probe.z + h }), [30, 30, 32], 6);
-    for (let a = 0; a < 360; a += 2) paint(cam({ x: probe.x + 16 * Math.cos(a * Math.PI / 180), y: probe.y + 16 * Math.sin(a * Math.PI / 180), z: probe.z + LED_H }), rgb, 2);
+    for (let a = 0; a < 360; a += 2) paint(cam({ x: probe.x + LED_R * Math.cos(a * Math.PI / 180), y: probe.y + LED_R * Math.sin(a * Math.PI / 180), z: probe.z + LED_H }), rgb, 2);
   }
   return { width: W, height: H, data };
 }
