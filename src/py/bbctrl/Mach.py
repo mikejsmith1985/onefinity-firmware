@@ -88,6 +88,7 @@ def overrides(interface_class):
 
 
 import sys as _sys
+import time as _time
 
 UNFENCE_WAIT = 1.5   # s after a jog is released before the setter fence comes down
 
@@ -515,13 +516,15 @@ class Mach(Comm):
         if not getattr(self, '_fenced', None): return
         self._release_seq = getattr(self, '_release_seq', 0) + 1
         loop = self.ctrl.ioloop
-        seq, t0 = self._release_seq, loop.time()
+        # 1.39.1: any clock will do; never let a missing one leave the fence up
+        now = getattr(loop, 'time', None) or _time.monotonic
+        seq, t0 = self._release_seq, now()
         def held():
             w = getattr(self, '_jog_want', None) or {}
             return any(w.get(a, 0) for a in 'xyzabcXYZABC')
         def check():
             if seq != self._release_seq or held(): return   # a newer jog owns it
-            if loop.time() - t0 < UNFENCE_WAIT or self._board_moving():
+            if now() - t0 < UNFENCE_WAIT or self._board_moving():
                 self.ctrl.ioloop.call_later(0.1, check)
             else: self._unfence()
         self.ctrl.ioloop.call_later(0.1, check)

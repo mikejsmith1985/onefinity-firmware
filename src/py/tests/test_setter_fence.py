@@ -376,4 +376,35 @@ f = SG.jog_fence((CX - 100, CY, TOP + 10), (1, 0, 0), CX, CY, R, TOP + 2)
 check('fence: above the top -> none', f == {}, f)
 f = SG.jog_fence((CX - 100, CY, TOP + 10), (1, 0, -0.3), CX, CY, R, TOP + 2)
 check('fence: above but coming down while heading at it -> fenced', 'x' in f, f)
+
+# 8. 1.39.1: the same with the controller's own IOLoop wrapper (bbctrl/IOLoop.py) between Mach
+# and the loop, as on the machine. The fake loop above had time(); the wrapper didn't, so on the
+# machine every release raised "'IOLoop' object has no attribute 'time'" and the fence stayed up:
+# Y stopped at the setter's face (machine Y 340.6) even at the far left of the bed.
+from bbctrl.IOLoop import IOLoop as RealIOLoop
+class H(list): __hash__ = object.__hash__   # tornado's handles are hashable
+class HLoop(Loop):
+    def call_later(s, d, cb): h = H([s.t + d + s.lag, cb]); s.q.append(h); return h
+    def remove_timeout(s, h):
+        for i, x in enumerate(s.q):
+            if x is h: del s.q[i]; return
+    def run(s):
+        for h in [h for h in s.q if h[0] <= s.t]:
+            if any(x is h for x in s.q): s.remove_timeout(h); h[1]()
+s = Sim({'x': CX - 30, 'y': 150, 'z': low})
+hl = HLoop(); hl.t, hl.lag = s.loop.t, s.loop.lag; s.loop = hl
+s.ctrl.ioloop = RealIOLoop(hl)
+s.play([(0.0, {'x': 0, 'y': 1.0, 'z': 0}), (1.0, {'x': 0, 'y': 0, 'z': 0})], 5.0)
+v = s.board.vars
+check('real IOLoop: the release does not fail', not [l for l in s.ctrl.log.lines if l[0] == 'refused'],
+      [l for l in s.ctrl.log.lines if l[0] == 'refused'])
+check('real IOLoop: the limits come back after the release',
+      all(v['%dtm' % m] == CONF_TM[str(m)] and v['%dtn' % m] == CONF_TN[str(m)] for m in range(4)),
+      dict((k, v[k]) for k in sorted(v)))
+# then, at the far left of the bed, Y goes all the way to the back
+s.board.p['x'] = 3.4; s.hist.append((s.loop.t, dict(s.board.p), False, 0.0))
+s.loop.t += 1.0
+s.play([(s.loop.t, {'x': 0, 'y': 1.0, 'z': 0}), (s.loop.t + 4.0, {'x': 0, 'y': 0, 'z': 0})], s.loop.t + 8.0)
+check('real IOLoop: at the left of the bed Y reaches the back (not stopped at the setter\'s face)',
+      s.board.p['y'] > 400, round(s.board.p['y'], 2))
 done()

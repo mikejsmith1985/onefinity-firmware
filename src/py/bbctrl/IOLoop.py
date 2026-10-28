@@ -78,6 +78,12 @@ class IOLoop(object):
     def update_handler(self, fd, events): self.ioloop.update_handler(fd, events)
 
 
+    # 1.39.1: the setter fence's release timer (Mach._unfence_later) reads the
+    # loop's clock. Without this it raised on every jog release, so the fence
+    # never came down (the jog limits stayed tightened until the next command).
+    def time(self): return self.ioloop.time()
+
+
     def call_later(self, delay, callback, *args, **kwargs):
         cb = CB(self, delay, callback, *args, **kwargs)
         return cb.h
