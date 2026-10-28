@@ -483,9 +483,9 @@ export const thin = (pts, max = 400) => { const k = Math.max(1, Math.ceil(pts.le
 // The ring sits ledH mm above the stylus tip, so its pixels describe the plane
 // ledH above the bed. calibrateLed() fits that plane like calibrate() fits the
 // bed, then moves the result down to the bed along the rays from the camera.
-export const LED_H = 31;  // mm, LED ring above the stylus tip (EasyTouch: 26 mm stylus + ~5 mm)
+export const LED_H = 31.5; // mm, LED ring above the stylus tip (EasyTouch drawing: 26 mm stylus + 5.6 mm to the ring groove)
 
-export const LED_R = 16;  // mm, radius of the LED ring (the probe body is 33 mm across)
+export const LED_R = 16.5; // mm, radius of the LED ring (the probe body is 33 mm across)
 
 // The middle of a ring seen at an angle isn't quite where its centre is in the
 // picture (perspective). Once there is a first calibration, work out that
