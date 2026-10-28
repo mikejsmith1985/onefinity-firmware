@@ -3,8 +3,8 @@ import { api } from "./controller.js";
 import { remoteGet, remotePut } from "./store.js";
 import { computeAxis, fmtLen } from "./axis.js";
 import { errText } from "./checkpoint.js";
-import { probeActive, setterProgram, REF_FORMAT } from "./setter.js";
-import { useProgramRunner, getSetter, setterArgs } from "./ToolSetter.jsx";
+import { probeActive, setterProgram, setterCentreProgram, setterCentre, REF_FORMAT } from "./setter.js";
+import { useProgramRunner, getSetter, saveSetter, setterArgs } from "./ToolSetter.jsx";
 import { readSetup } from "./setup.js";
 import {
   calibrate, revive, toPixel, findStock, stockInMachine, fitCheck, travelArea, thin,
@@ -338,6 +338,16 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
     if (r.ofs_ok !== 1 || typeof r.ofs_ref !== "number") throw new Error("The touch on the tool setter didn't finish.");
     return { trip: r.ofs_ref, setter };
   };
+  // 1.40.0: with the probe in, the setter's centre is found (and saved) rather than trusted
+  const centreSetter = async () => {
+    const setter = await getSetter();
+    if (!setter || !Number.isFinite(setter.x)) throw new Error("Save the tool setter's position first (Tool setter screen), roughly is fine.");
+    const r = await runOk(setterCentreProgram(setterArgs(state, config, setter, "ref")));
+    const c = setterCentre(r, setter);
+    if (c.error) throw new Error(c.error);
+    await saveSetter({ ...setter, x: c.x, y: c.y });
+    return { trip: c.top, setter: { ...setter, x: c.x, y: c.y }, moved: c.moved };
+  };
   const markProbe = async () => {
     const spots = planned.spots, zMin = zAx.min + 1, z = {};
     const step = (o) => setMk((m) => ({ ...m, ...o }));
@@ -353,10 +363,10 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
       }
       const zs = Object.values(z), spread = Math.max(...zs) - Math.min(...zs);
       if (spread > 3) throw new Error(`The board heights at the three spots differ by ${len(spread, 1)}. One of them is probably in a T-track slot or on something. Check the corners and start again.`);
-      step({ doing: "touching the tool setter with the probe" });
-      const { trip, setter } = await touchSetter();
+      step({ doing: "finding the tool setter's centre with the probe" });
+      const { trip, setter, moved } = await centreSetter();
       const corr = setter?.corr?.f === REF_FORMAT && typeof setter.corr.c === "number" ? setter.corr.c : 0;
-      step({ phase: "swap", z, probeTrip: trip, corr, spread });
+      step({ phase: "swap", z, probeTrip: trip, corr, spread, moved });
     } catch (e) { step({ phase: "error", err: errText(e) }); }
     setBusy("");
   };
@@ -675,12 +685,12 @@ function MarkersPanel({ mk, corners, planned, touched, canMove, busy, len, homed
       <div className="row-end">{cancel}</div>
     </>}
     {mk.phase === "ready" && <>
-      <p>The probe works. Take your hand away. The machine touches the board at the three spots, then touches the tool setter.</p>
+      <p>The probe works. Take your hand away. The machine touches the board at the three spots, then finds the tool setter's centre with the probe (its top, then its four sides).</p>
       <div className="row-end">{cancel}<button className="primary" data-autofocus disabled={!canMove || touched} onClick={onProbe}>Start</button></div>
     </>}
     {(mk.phase === "probing" || mk.phase === "vbit" || mk.phase === "carving") && <p>{mk.phase === "probing" ? `Measuring: ${mk.doing || "starting"}…` : mk.phase === "vbit" ? "Measuring the V-bit on the tool setter…" : "Carving…"}</p>}
     {mk.phase === "swap" && <>
-      <p>Board measured{mk.spread > 0.05 ? ` (the three spots are within ${len(mk.spread, 2)} of each other)` : ""}.</p>
+      <p>Board measured{mk.spread > 0.05 ? ` (the three spots are within ${len(mk.spread, 2)} of each other)` : ""}. Tool setter centre found{mk.moved > 0.2 ? ` and saved (it was ${len(mk.moved, 1)} off)` : ""}.</p>
       <p><b>Take the probe out and put the V-bit in.</b> Then it touches the tool setter with the V-bit to find how long it is.</p>
       <div className="row-end">{cancel}<button className="primary" disabled={!canMove} onClick={onVbit}>The V-bit is in: measure it</button></div>
     </>}

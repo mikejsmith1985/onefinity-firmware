@@ -87,6 +87,86 @@ export function setterProgram(o) {
   return lines.join("\n") + "\n";
 }
 
+// Find the setter's centre with the 3D probe (1.40.0). It touches the cap from
+// above (that height is also the probe's trip height on the setter, the same
+// as a reference touch), then, from `ro` out on each side and `drop` below the
+// cap, probes the setter's round body inwards from +X, -X, +Y and -Y. The
+// middle of each pair of touches is the centre: for a round body that is true
+// on any line across it, so the saved position only has to be roughly right.
+// Everything is guarded (G38.3); a step that touches too soon or finds nothing
+// stops it with _ofx_fail set:
+//   1 nothing under the probe, 2 something beside the setter, 3 the side not found.
+// o: {setter: {x, y, z}, top, clear, travel, fast, slow, ro, drop}
+export const CENTRE = { ro: 25, drop: 6 };
+export function setterCentreProgram(o) {
+  const { x, y, z } = o.setter;
+  const ro = o.ro ?? CENTRE.ro, drop = o.drop ?? CENTRE.drop;
+  const down = o.top - (z - 25), up = 10; // between sides: 10 mm over the cap
+  const L = [
+    "(Tool setter: find centre)", "G21", "M5",
+    "#<_ofx_ok> = 0", "#<_ofx_fail> = 0",
+    `G90 G53 G0 Z${n(o.top)}`, `G53 G0 X${n(x)} Y${n(y)}`,
+    `G91 G38.3 Z${n(-down)} F${Math.min(o.travel, 800)}`,
+    "o610 if [#5070 EQ 1]",
+    `G91 G1 Z1 F${o.fast}`, `G91 G38.2 Z-2 F${o.slow}`,
+    "#<_ofx_top> = #5063",
+    `G91 G0 Z${up}`,
+    "o610 else", "#<_ofx_fail> = 1", "o610 endif",
+  ];
+  const sides = [["xp", "X", 1], ["xm", "X", -1], ["yp", "Y", 1], ["ym", "Y", -1]];
+  sides.forEach(([k, A, sg], i) => {
+    const sx = A === "X" ? x + sg * ro : x, sy = A === "Y" ? y + sg * ro : y;
+    const o_ = 620 + i * 10;
+    L.push(`o${o_} if [#<_ofx_fail> EQ 0]`,
+      `G90 G53 G0 X${n(sx)} Y${n(sy)}`,
+      `G91 G38.3 Z${n(-(up + drop))} F${o.fast}`,
+      `o${o_ + 1} if [#5070 EQ 1]`, "#<_ofx_fail> = 2", `o${o_ + 1} else`,
+      `G91 G38.3 ${A}${n(-sg * ro)} F${o.fast}`,
+      `o${o_ + 2} if [#5070 EQ 1]`,
+      `G91 G1 ${A}${n(sg)} F${o.fast}`, `G91 G38.2 ${A}${n(-2 * sg)} F${o.slow}`,
+      `#<_ofx_${k}> = #${A === "X" ? 5061 : 5062}`,
+      `o${o_ + 2} else`, "#<_ofx_fail> = 3", `o${o_ + 2} endif`,
+      `G90 G53 G0 ${A}${n(A === "X" ? sx : sy)}`,
+      `o${o_ + 1} endif`,
+      `G90 G53 G0 Z[#<_ofx_top> + ${up}]`,
+      `o${o_} endif`);
+  });
+  // Then touch the cap again over the centre: the first touch may have landed
+  // on the body's rim when the saved position was well off. This is the
+  // probe's trip height on the setter, the same as a reference touch.
+  L.push("o680 if [#<_ofx_fail> EQ 0]",
+    `G90 G53 G0 X[[#<_ofx_xp> + #<_ofx_xm>] / 2] Y[[#<_ofx_yp> + #<_ofx_ym>] / 2]`,
+    `G91 G38.3 Z${n(-(up + 15))} F${o.fast}`,
+    "o681 if [#5070 EQ 1]",
+    `G91 G1 Z1 F${o.fast}`, `G91 G38.2 Z-2 F${o.slow}`,
+    "#<_ofx_cap> = #5063",
+    "o681 else", "#<_ofx_fail> = 1", "o681 endif",
+    "o680 endif",
+    `G90 G53 G0 Z${n(o.top)}`,
+    "o690 if [#<_ofx_fail> EQ 0]", "#<_ofx_ok> = 1", "o690 endif", "G90", "M2");
+  return L.join("\n") + "\n";
+}
+export const CENTRE_FAILS = {
+  1: "The probe came down over the saved setter position without touching anything. Jog over the setter and save its position roughly first.",
+  2: "The probe touched something beside the setter on the way down. The saved position may be far off, or something is next to the setter.",
+  3: "The probe didn't find a side of the setter. The saved position may be far off.",
+};
+// The centre from the touches (machine positions of the spindle at each trip:
+// the stylus ball's size cancels out). Checks it looks like one round body.
+export function setterCentre(r, from) {
+  const v = (k) => r[`ofx_${k}`];
+  if (r.ofx_ok !== 1 || !["xp", "xm", "yp", "ym", "cap"].every((k) => typeof v(k) === "number")) return { error: CENTRE_FAILS[r.ofx_fail] || "Finding the centre didn't finish." };
+  const x = (v("xp") + v("xm")) / 2, y = (v("yp") + v("ym")) / 2;
+  // The X touches were on the line through the saved Y, the Y touches on the saved X: all four
+  // should be the same distance from the centre if they were all on the one round body.
+  const sx = from ? from.x : x, sy = from ? from.y : y;
+  const rs = [Math.hypot(v("xp") - x, sy - y), Math.hypot(v("xm") - x, sy - y), Math.hypot(sx - x, v("yp") - y), Math.hypot(sx - x, v("ym") - y)];
+  const spread = Math.max(...rs) - Math.min(...rs);
+  if (!(v("xp") > v("xm")) || !(v("yp") > v("ym")) || spread > 1) return { error: `The four touches aren't on one round body (they differ by ${spread.toFixed(1)} mm), so something else was touched. Nothing was saved.` };
+  const moved = from ? Math.hypot(x - from.x, y - from.y) : 0;
+  return { x, y, d: 2 * rs.reduce((a, b) => a + b, 0) / 4, top: v("cap"), moved };
+}
+
 // The touch height the controller reports (#5063) is in MACHINE coordinates, not work
 // coordinates (the CAMotics planner fills #5061-#5063 from the machine position; measured on the
 // machine in 1.34.2: a setter top at machine Z -61.8 read -61.792 with a Z offset of -111.782).

@@ -4,7 +4,7 @@ import { ME, useUi, useDriver, uiGet, uiCas, uiUpdate, uiPatch, uiClose } from "
 import { api } from "./controller.js";
 import { computeAxis } from "./axis.js";
 import { getPrefs, setPrefs } from "./checkpoint.js";
-import { SETTER_DEFAULTS, SETTER_FAILS, CORR_MAX, setterProgram, refStatus, probeActive, probeCorrection, guardZone, guardText, tripToWork, REF_FORMAT } from "./setter.js";
+import { SETTER_DEFAULTS, SETTER_FAILS, CORR_MAX, setterProgram, setterCentreProgram, setterCentre, refStatus, probeActive, probeCorrection, guardZone, guardText, tripToWork, REF_FORMAT } from "./setter.js";
 import { programMoves, moveStatus } from "./progress.js";
 import { RunProgress, Outcome, useRunStep, StepBody } from "./steps.jsx";
 import { SetterArt } from "./art.jsx";
@@ -109,6 +109,25 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
   }, [busy, s, !!config]); // eslint-disable-line react-hooks/exhaustive-deps
   const runStep = useRunStep(state.of_step, busy && D?.runAt ? `${busy}:${D.runAt}` : null);
 
+  // 1.40.0: find the centre with the 3D probe. The probe has to be shown to work first
+  // (push the stylus), since it goes down beside the setter.
+  const [cen, setCen] = useState(null); // null | {phase: "check", seenOpen} | {phase: "ready"} | {phase: "run"}
+  useEffect(() => {
+    if (!cen || cen.phase !== "check") return;
+    if (!touched && !cen.seenOpen) setCen({ ...cen, seenOpen: true });
+    else if (touched && cen.seenOpen) setCen({ phase: "ready" });
+  }, [cen, touched]);
+  const centre = async () => {
+    setCen({ phase: "run" }); setMsg(null);
+    const res = await run(setterCentreProgram(setterArgs(state, config, s, "ref")));
+    setCen(null);
+    if (res.notFound || res.estop) { setMsg({ ok: false, text: "Stopped by the E-stop. Nothing was saved." }); return; }
+    const c = setterCentre(res, s);
+    if (c.error) { setMsg({ ok: false, text: c.error }); return; }
+    update((x) => ({ ...x, x: c.x, y: c.y }));
+    setMsg({ ok: true, text: `Centre found and saved: machine X ${fmt(c.x)}, Y ${fmt(c.y)}${c.moved > 0.05 ? ` (it was ${fmt(c.moved)} ${unit} off)` : ""}. The reference and calibration are kept: the setter didn't move.` });
+  };
+
   const saveLocation = () => {
     update((x) => ({ ...x, x: state.xp, y: state.yp, z: state.zp, ref: null, lastProbe: null, installed: true }));
     setMsg({ ok: true, text: "Setter position saved. The old reference was cleared: take a new one with a tool whose Z zero is right." });
@@ -174,9 +193,15 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
             <button disabled={!canMove} onClick={() => go("ref")}>{busy === "ref" ? "Measuring…" : "Take reference with this tool"}</button>
             <small>Only when this tool's Z zero is right, for example straight after Probe Z. Measure stock does this for you with the 3D probe.</small>
           </div>
+          {located && <div>
+            {cen?.phase === "check" ? <p><b>Push the stylus sideways</b> to show the probe works.{touched && !cen.seenOpen ? " (It already reads as touched: check the probe.)" : ""} <button className="quiet" onClick={() => setCen(null)}>Cancel</button></p>
+              : cen?.phase === "ready" ? <button className="primary" disabled={!canMove} onClick={centre}>Start: find the centre</button>
+              : <button disabled={!canMove || !!cen} onClick={() => setCen({ phase: "check", seenOpen: false })}>{cen?.phase === "run" ? "Finding the centre…" : "Find the centre with the probe"}</button>}
+            <small>With the 3D probe in: it touches the top, then the four sides, and saves the exact centre. The saved position only needs to be roughly right.</small>
+          </div>}
           <div>
             <button disabled={!homed || !idle || !!busy} onClick={saveLocation}>{located ? "Save setter position again" : "Save setter position"}</button>
-            <small>Jog the tool over the middle of the setter, about 5 {metric ? "mm" : "mm (¼ in)"} above it, then save. Do this once, and again if you move the setter.</small>
+            <small>Jog the tool roughly over the middle of the setter, about 5 {metric ? "mm" : "mm (¼ in)"} above it, then save. Do this once, and again if you move the setter. Then Find the centre with the probe makes it exact.</small>
           </div>
         </div>
 

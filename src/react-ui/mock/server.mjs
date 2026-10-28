@@ -137,6 +137,7 @@ function playMarks(text, ms) {
 }
 // Bed camera (1.36.0): a fake overhead camera over a fake bed (mock/bedscene.py)
 const BED_Z = -100, STOCK = { cx: 300, cy: 250, w: 150, l: 90, t: 19, ang: (4 * Math.PI) / 180 };
+const MOCK_SETTER = [763.2, 757.9]; // where the mock's tool setter really is (1.40.0)
 let mockTool = 0; // 1.39.0: how much longer the tool in the spindle is than the probe (mock:tool N)
 let stockOn = false, camSize = { width: 1280, height: 720 };
 const onStock = (x, y) => {
@@ -169,6 +170,14 @@ function bedcamMdi(text) {
   }
   if (text.includes("(Bed markers: carve)")) { runFake(() => ({ zp: num(/G53 G0 Z(-?[\d.]+)/) }), 1200); return true; }
   if (text.startsWith("mock:tool ")) { mockTool = +text.slice(10); return true; }
+  // 1.40.0: the probe finds the setter's centre (round body, 13.35 mm to the spindle at a touch)
+  if (text.includes("(Tool setter: find centre)")) {
+    const sx = num(/G53 G0 X(-?[\d.]+) Y/), sy = num(/G53 G0 X-?[\d.]+ Y(-?[\d.]+)/), R = 13.355;
+    const [cx, cy] = MOCK_SETTER, hx = Math.sqrt(Math.max(0, R * R - (sy - cy) ** 2)), hy = Math.sqrt(Math.max(0, R * R - (sx - cx) ** 2));
+    const far = Math.hypot(sx - cx, sy - cy) > 12;
+    runFake(() => (far ? { ofx_ok: 0, ofx_fail: 1 } : { ofx_ok: 1, ofx_fail: 0, ofx_top: -15.2, ofx_cap: -15.2, ofx_xp: cx + hx, ofx_xm: cx - hx, ofx_yp: cy + hy, ofx_ym: cy - hy, xp: cx, yp: cy }), 1500);
+    return true;
+  }
   if (text.includes("(Bed camera: park)")) {
     const z = num(/G53 G0 Z(-?[\d.]+)/), x = num(/G53 G0 X(-?[\d.]+)/), y = num(/ Y(-?[\d.]+)/);
     runFake(() => ({ xp: x, yp: y, zp: z }), 800); return true;
