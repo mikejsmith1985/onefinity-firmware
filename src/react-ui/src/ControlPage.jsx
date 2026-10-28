@@ -77,7 +77,7 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
     <>
     <Interrupted cp={ckpt.cp} busy={mach === "RUNNING" || mach === "HOLDING" || mach === "STOPPING" || mach === "HOMING"} onDismiss={ckpt.dismiss} state={state} config={cfg.config} metric={metric} />
     <main className="grid">
-      <section className="band dro-band"><Dro state={state} config={cfg.config} metric={metric} idle={idle && !estopped} /></section>
+      <section className="band dro-band"><Dro state={state} config={cfg.config} metric={metric} idle={idle && !estopped} send={send} /></section>
       <section className="band jog-band">
         <Jog state={state} config={cfg.config} send={send} metric={metric} locked={busy || estopped} idle={idle && !estopped} ready={ready} onProbe={requestProbe} />
       </section>

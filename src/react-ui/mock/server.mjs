@@ -137,6 +137,7 @@ function playMarks(text, ms) {
 }
 // Bed camera (1.36.0): a fake overhead camera over a fake bed (mock/bedscene.py)
 const BED_Z = -100, STOCK = { cx: 300, cy: 250, w: 150, l: 90, t: 19, ang: (4 * Math.PI) / 180 };
+let mockTool = 0; // 1.39.0: how much longer the tool in the spindle is than the probe (mock:tool N)
 let stockOn = false, camSize = { width: 1280, height: 720 };
 const onStock = (x, y) => {
   const dx = x - STOCK.cx, dy = y - STOCK.cy, u = dx * Math.cos(STOCK.ang) + dy * Math.sin(STOCK.ang), v = -dx * Math.sin(STOCK.ang) + dy * Math.cos(STOCK.ang);
@@ -161,6 +162,13 @@ function bedcamMdi(text) {
   }
   if (text.includes("(Bed camera: sideways)")) { const dx = num(/G0 X(-?[\d.]+)/); runFake(() => ({ xp: +(state.xp + dx).toFixed(3) }), 300); return true; }
   if (text.includes("(Bed camera: lift)")) { const dz = num(/G0 Z(-?[\d.]+)/); runFake(() => ({ zp: +(state.zp + dz).toFixed(3), pw: probeRest() })); return true; }
+  // 1.39.0: bed markers
+  if (text.includes("(Bed markers: show)")) {
+    const x = num(/G53 G0 X(-?[\d.]+)/), y = num(/ Y(-?[\d.]+)/);
+    runFake(() => ({ xp: x, yp: y, zp: num(/G53 G0 Z(-?[\d.]+)/) }), 300); return true;
+  }
+  if (text.includes("(Bed markers: carve)")) { runFake(() => ({ zp: num(/G53 G0 Z(-?[\d.]+)/) }), 1200); return true; }
+  if (text.startsWith("mock:tool ")) { mockTool = +text.slice(10); return true; }
   if (text.includes("(Bed camera: park)")) {
     const z = num(/G53 G0 Z(-?[\d.]+)/), x = num(/G53 G0 X(-?[\d.]+)/), y = num(/ Y(-?[\d.]+)/);
     runFake(() => ({ xp: x, yp: y, zp: z }), 800); return true;
@@ -233,7 +241,7 @@ function mdi(text) {
     }
     setTimeout(() => {
       if (process.env.MOCK_SETTER_FAIL) broadcast({ ofs_fail: 1 });
-      else broadcast(ref ? { ofs_ref: -15.2, ofs_ok: 1 } : { ofs_ok: 1, offset_z: (state.offset_z || 0) + 12.7 });
+      else broadcast(ref ? { ofs_ref: +(-15.2 + mockTool).toFixed(3), ofs_ok: 1 } : { ofs_ok: 1, offset_z: (state.offset_z || 0) + 12.7 });
       broadcast({ xx: "READY", cycle: "idle" });
     }, 1200 * SLOW);
     return;

@@ -669,3 +669,73 @@ export function awayMove(spot, lim) {
   return spot.x < mx ? AWAY : -AWAY;
 }
 export const sidewaysProgram = (dx) => ["(Bed camera: sideways)", "G21", `G91 G0 X${n4(dx)}`, "G90", "M2"].join("\n") + "\n";
+
+// ----- Bed markers (1.39.0) -----
+// Three small crosses carved with a V-bit near the corners of the spoilboard
+// that don't have the tool setter, at positions the controller picks and
+// saves. Later pictures look for them, so a camera that got bumped is noticed.
+// You only show it the board: jog over three of its corners. The outer pieces
+// of a slatted spoilboard are MDF, so a spot a little in from a corner is MDF.
+export const MARK = { inset: 25, size: 20, depth: 1.2, plunge: 300, feed: 1000, rpm: 18000 };
+const CORNERS = ["fl", "fr", "bl"];  // front left, front right, back left
+export const CORNER_NAMES = { fl: "front-left", fr: "front-right", bl: "back-left" };
+
+// corners: {fl, fr, bl} machine {x, y} (the fourth corner is where the setter is).
+// Returns {spots: [{id, x, y}], error}. The spots sit `inset` in from both edges
+// of the board at each corner, along the board's own edges (it may be a little
+// turned), kept inside the machine's reach and clear of the setter.
+export function markerSpots(corners, lim, setter, o = {}) {
+  const inset = o.inset ?? MARK.inset, half = (o.size ?? MARK.size) / 2;
+  const { fl, fr, bl } = corners || {};
+  if (!fl || !fr || !bl) return { error: "Save all three corners first." };
+  const ux = fr.x - fl.x, uy = fr.y - fl.y, vx = bl.x - fl.x, vy = bl.y - fl.y;
+  const lu = Math.hypot(ux, uy), lv = Math.hypot(vx, vy);
+  if (lu < 4 * inset || lv < 4 * inset) return { error: `The corners are only ${Math.round(lu)} × ${Math.round(lv)} mm apart. Check you jogged to the right corners.` };
+  const u = { x: ux / lu, y: uy / lu }, v = { x: vx / lv, y: vy / lv };
+  const dot = u.x * v.x + u.y * v.y;
+  if (Math.abs(dot) > 0.1) return { error: "Those three corners aren't square to each other. Front-left, front-right, then back-left." };
+  if (u.x * v.y - u.y * v.x < 0) return { error: "The corners look swapped: front-right should be to the right of front-left, and back-left behind it." };
+  const at = (c, su, sv) => ({ x: c.x + su * inset * u.x + sv * inset * v.x, y: c.y + su * inset * u.y + sv * inset * v.y });
+  const raw = { fl: at(fl, 1, 1), fr: at(fr, -1, 1), bl: at(bl, 1, -1) };
+  const notes = [];
+  const spots = CORNERS.map((id) => {
+    let { x, y } = raw[id];
+    const m = half + 2;
+    if (lim) {
+      const cx = Math.min(Math.max(x, lim.x0 + m), lim.x1 - m), cy = Math.min(Math.max(y, lim.y0 + m), lim.y1 - m);
+      if (Math.hypot(cx - x, cy - y) > 0.5) notes.push(`The ${CORNER_NAMES[id]} cross moved ${Math.round(Math.hypot(cx - x, cy - y))} mm in, to stay inside the machine's reach.`);
+      x = cx; y = cy;
+    }
+    if (setter && Number.isFinite(setter.x) && Math.hypot(x - setter.x, y - setter.y) < (setter.r || 33) + m)
+      return { id, x, y, clash: true };
+    return { id, x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10 };
+  });
+  const bad = spots.find((s) => s.clash);
+  if (bad) return { error: `The ${CORNER_NAMES[bad.id]} cross would be on the tool setter. The setter should be at the back-right corner.` };
+  return { spots, notes };
+}
+
+// The bed height at each spot comes from the probe; the V-bit's length from
+// both touching the tool setter: V-bit tip on the bed when the machine is at
+// z + (vbitTrip - probeTrip) + corr, where corr is the probe-vs-cutter
+// correction (setter.corr.c: the probe trips the setter a little differently
+// from a rigid cutter; see setter.js). spots: [{x, y, z}] (z: machine Z the probe touched).
+export function markerCarveProgram({ top, spots, probeTrip, vbitTrip, corr = 0, depth = MARK.depth, size = MARK.size, plunge = MARK.plunge, feed = MARK.feed, rpm = MARK.rpm }) {
+  const d = vbitTrip - probeTrip + corr, h = size / 2, above = 3;
+  const lines = ["(Bed markers: carve)", "G21", "G90", `G53 G0 Z${n4(top)}`, `M3 S${rpm}`];
+  for (const s of spots) {
+    const surf = s.z + d;
+    for (const [sx, sy, mv] of [[s.x - h, s.y, `X${n4(size)}`], [s.x, s.y - h, `Y${n4(size)}`]]) {
+      lines.push(`G53 G0 X${n4(sx)} Y${n4(sy)}`, `G53 G0 Z${n4(Math.min(top, surf + above))}`,
+        `G91 G1 Z${n4(-(Math.min(top, surf + above) - (surf - depth)))} F${plunge}`, `G1 ${mv} F${feed}`, `G90 G53 G0 Z${n4(top)}`);
+    }
+  }
+  lines.push("M5", "G90", "M2");
+  return lines.join("\n") + "\n";
+}
+
+// The router off, just above each spot, so you can see where they'll go
+export function markerShowProgram({ top, spot, above }) {
+  return ["(Bed markers: show)", "G21", "G90", `G53 G0 Z${n4(top)}`, `G53 G0 X${n4(spot.x)} Y${n4(spot.y)}`,
+    ...(Number.isFinite(above) ? [`G53 G0 Z${n4(above)}`] : []), "M2"].join("\n") + "\n";
+}

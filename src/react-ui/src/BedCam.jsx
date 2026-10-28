@@ -3,13 +3,14 @@ import { api } from "./controller.js";
 import { remoteGet, remotePut } from "./store.js";
 import { computeAxis, fmtLen } from "./axis.js";
 import { errText } from "./checkpoint.js";
-import { probeActive } from "./setter.js";
-import { useProgramRunner, getSetter } from "./ToolSetter.jsx";
+import { probeActive, setterProgram, REF_FORMAT } from "./setter.js";
+import { useProgramRunner, getSetter, setterArgs } from "./ToolSetter.jsx";
 import { readSetup } from "./setup.js";
 import {
   calibrate, revive, toPixel, findStock, stockInMachine, fitCheck, travelArea, thin,
   bedTouchProgram, liftProgram, parkProgram,
   calibrateLed, detectLedFlip, detectLedMoved, autoSpots, autoTouchProgram, awayMove, sidewaysProgram, LED_H,
+  markerSpots, markerCarveProgram, markerShowProgram, MARK, CORNER_NAMES,
 } from "./bedcam.js";
 
 // Bed camera (1.36.0): a camera above the table looking down.
@@ -159,6 +160,7 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
   const [pp, setPp] = useState(null);           // park position (saved, or the tool setter)
   const [auto, setAuto] = useState(null);      // hands-off calibration: {phase, spot, of, points, note, seenOpen, err}
   const [guard, setGuard] = useState(null);    // tool setter, to keep the calibration spots clear of it
+  const [mk, setMk] = useState(null);          // bed markers (1.39.0): {phase, spots, z, probeTrip, vbitTrip, notes, err}
 
   useEffect(() => { loadBedcam().then((d) => { setDoc(d); if (d.tGuess) setTGuess(d.tGuess); }); api.get("camera").then(setCamSt).catch(() => setCamSt({ connected: false })); }, []);
   useEffect(() => { readSetup(state.selected).then((s) => { if (s?.toolD) setToolD(s.toolD); }).catch(() => {}); }, [state.selected]);
@@ -314,6 +316,77 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
   };
   const endAuto = () => { setMode(null); setAuto(null); setPic(null); };
 
+  // ----- bed markers (1.39.0) -----
+  const corners = doc?.markCorners || {};
+  const planned = useMemo(() => markerSpots(corners, lim, guard), [doc?.markCorners, lim?.x0, lim?.x1, lim?.y0, lim?.y1, guard]); // eslint-disable-line react-hooks/exhaustive-deps
+  const saveCorner = (id) => save({ markCorners: { ...corners, [id]: { x: state.xp, y: state.yp } } });
+  const startMarkers = () => { setMsg(null); setPic(null); setMode("markers"); setMk({ phase: "corners", notes: [] }); };
+  useEffect(() => {
+    if (mode !== "markers" || !mk || mk.phase !== "check") return;
+    if (!touched && !mk.seenOpen) setMk((m) => ({ ...m, seenOpen: true }));
+    else if (touched && mk.seenOpen) setMk((m) => ({ ...m, phase: "ready" }));
+  }, [mode, mk?.phase, mk?.seenOpen, touched]); // eslint-disable-line react-hooks/exhaustive-deps
+  const showSpot = async (sp) => {
+    setBusy("show");
+    try { await runOk(markerShowProgram({ top, spot: sp })); } catch (e) { fail(e); return; }
+    setBusy("");
+  };
+  const touchSetter = async () => {
+    const setter = await getSetter();
+    if (!setter || !Number.isFinite(setter.x)) throw new Error("Save the tool setter's position first (Tool setter screen).");
+    const r = await runOk(setterProgram(setterArgs(state, config, setter, "ref")));
+    if (r.ofs_ok !== 1 || typeof r.ofs_ref !== "number") throw new Error("The touch on the tool setter didn't finish.");
+    return { trip: r.ofs_ref, setter };
+  };
+  const markProbe = async () => {
+    const spots = planned.spots, zMin = zAx.min + 1, z = {};
+    const step = (o) => setMk((m) => ({ ...m, ...o }));
+    setBusy("markers"); step({ phase: "probing", doing: "" });
+    try {
+      let zRef = null;
+      for (const sp of spots) {
+        step({ doing: `touching the bed at the ${CORNER_NAMES[sp.id]} spot` });
+        const r = await runOk(autoTouchProgram({ top, x: sp.x, y: sp.y, approach: zRef === null ? undefined : zRef + 12, zMin, travel: 1000, fast, slow }));
+        if (r.ofa_ok !== 1) throw new Error(`The probe came down at the ${CORNER_NAMES[sp.id]} spot without touching anything. Is the probe plugged in, and is that corner over the board?`);
+        await runOk(liftProgram(10));
+        z[sp.id] = r.ofa_z; if (zRef === null) zRef = r.ofa_z;
+      }
+      const zs = Object.values(z), spread = Math.max(...zs) - Math.min(...zs);
+      if (spread > 3) throw new Error(`The board heights at the three spots differ by ${len(spread, 1)}. One of them is probably in a T-track slot or on something. Check the corners and start again.`);
+      step({ doing: "touching the tool setter with the probe" });
+      const { trip, setter } = await touchSetter();
+      const corr = setter?.corr?.f === REF_FORMAT && typeof setter.corr.c === "number" ? setter.corr.c : 0;
+      step({ phase: "swap", z, probeTrip: trip, corr, spread });
+    } catch (e) { step({ phase: "error", err: errText(e) }); }
+    setBusy("");
+  };
+  const markVbit = async () => {
+    const step = (o) => setMk((m) => ({ ...m, ...o }));
+    setBusy("markers"); step({ phase: "vbit" });
+    try {
+      const { trip } = await touchSetter();
+      const d = trip - mk.probeTrip;
+      if (Math.abs(d) > 120) throw new Error(`The V-bit measured ${len(Math.abs(d), 0)} ${d > 0 ? "longer" : "shorter"} than the probe, which can't be right. Measure it again.`);
+      const lowest = Math.min(...Object.values(mk.z)) + d + mk.corr - MARK.depth;
+      if (lowest < zAx.min + 0.5) throw new Error("With this V-bit the crosses would be below the bottom of Z's travel. Put the V-bit further out of the collet.");
+      step({ phase: "carve", vbitTrip: trip });
+    } catch (e) { step({ phase: "error", err: errText(e) }); }
+    setBusy("");
+  };
+  const markCarve = async () => {
+    const step = (o) => setMk((m) => ({ ...m, ...o }));
+    setBusy("markers"); step({ phase: "carving" });
+    try {
+      const spots = planned.spots.map((sp) => ({ ...sp, z: mk.z[sp.id] }));
+      await runOk(markerCarveProgram({ top, spots, probeTrip: mk.probeTrip, vbitTrip: mk.vbitTrip, corr: mk.corr }));
+      await save({ markers: { spots: spots.map(({ id, x, y, z }) => ({ id, x, y, z })), size: MARK.size, depth: MARK.depth, time: Date.now() } });
+      if (pp) await park().catch(() => {});
+      step({ phase: "done" });
+    } catch (e) { step({ phase: "error", err: errText(e) }); }
+    setBusy("");
+  };
+  const endMarkers = () => { setMode(null); setMk(null); };
+
   // ----- empty bed -----
   const takeBase = async () => {
     setMsg(null); setBusy("base");
@@ -422,7 +495,10 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
         {msg && <div className={msg.ok ? "why" : "why bad"}><p>{msg.text}</p></div>}
         {!homed && <p className="err">Home the machine first. The bed camera works in machine coordinates.</p>}
 
-        {mode === "auto" && auto ? <AutoPanel {...{ auto, touched, canMove, busy, len, ledH }} onStart={runAuto} onClose={endAuto}
+        {mode === "markers" && mk ? <MarkersPanel {...{ mk, corners, planned, touched, canMove, busy, len, homed }} onSaveCorner={saveCorner}
+          onShow={showSpot} onNext={() => setMk((m) => ({ ...m, phase: "check", seenOpen: false }))} onProbe={markProbe} onVbit={markVbit}
+          onCarve={markCarve} onClose={endMarkers} onRestart={() => setMk({ phase: "corners", notes: [] })} />
+        : mode === "auto" && auto ? <AutoPanel {...{ auto, touched, canMove, busy, len, ledH }} onStart={runAuto} onClose={endAuto}
           onTapInstead={() => { setAuto(null); setMode("calib"); setPic(null); }} />
         : mode === "calib" ? <CalibPanel {...{ cal, setCal, touched, canMove, busy, needUp, touchBed, acceptTap, liftForTap, skipLift, finishCal, len }}
           onCancel={() => { setMode(null); setCal({ points: [], phase: "jog", cur: null, tap: null }); setPic(null); }} />
@@ -457,6 +533,10 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
           <label className="stack">Probe light height above the stylus tip ({metric ? "mm" : "in"})
             <input type="number" step="any" value={metric ? ledH : +(ledH / 25.4).toFixed(3)} disabled={!!busy} onChange={(e) => { const v = (+e.target.value || 0) * (metric ? 1 : 25.4); if (v > 0) save({ ledH: v }); }} />
             <small>With calipers: from the bottom of the stylus ball to the middle of the light ring.</small></label>
+
+          <h3>Bed markers</h3>
+          <p className="dim">{doc.markers ? `Carved ${new Date(doc.markers.time).toLocaleDateString()}: three small crosses near the corners.` : "Three small crosses carved with a V-bit near the board's corners, so the controller can tell if the camera gets bumped."} You show it the board's corners; it picks the spots, measures the bed and the V-bit, and carves.</p>
+          <button disabled={!canMove || !lim} onClick={startMarkers}>{doc.markers ? "Carve the markers again" : "Carve bed markers"}</button>
 
           <h3>Empty-bed picture</h3>
           <p className="dim">{doc.base ? `Taken ${new Date(doc.baseTime).toLocaleString()}.` : "Not taken yet."} Calibrating takes it too. Retake it with a clear bed if the bed or the light changes (the vise can stay if it always sits in the same place).</p>
@@ -566,6 +646,52 @@ function AutoPanel({ auto, touched, canMove, busy, len, ledH, onStart, onClose, 
     {auto.note.length > 0 && <ul className="plain dim">{auto.note.map((n, i) => <li key={i}>{n}</li>)}</ul>}
     {(auto.phase === "done" || auto.phase === "error") && <div className="row-end">
       {auto.phase === "error" && <button disabled={!!busy} onClick={onTapInstead}>Calibrate by tapping</button>}
+      <button className="primary" disabled={!!busy} onClick={onClose}>Done</button></div>}
+  </>;
+}
+
+function MarkersPanel({ mk, corners, planned, touched, canMove, busy, len, homed, onSaveCorner, onShow, onNext, onProbe, onVbit, onCarve, onClose, onRestart }) {
+  const ids = ["fl", "fr", "bl"];
+  const cancel = <button disabled={!!busy} onClick={onClose}>Cancel</button>;
+  return <>
+    <h3>Carve bed markers</h3>
+    {mk.phase === "corners" && <>
+      <p>Jog the tip of whatever is in the spindle over each corner of the spoilboard (roughly is fine; if a corner is past where the machine can reach, go as far as it goes) and press its button. Not the back-right corner: that's the tool setter's.</p>
+      <ul className="plain corner-list">{ids.map((id) => <li key={id}>
+        <button disabled={!homed || !!busy} onClick={() => onSaveCorner(id)}>{corners[id] ? "Save again" : "Save"} {CORNER_NAMES[id]}</button>{" "}
+        <span className="dim">{corners[id] ? `X ${len(corners[id].x)}, Y ${len(corners[id].y)}` : "not saved"}</span></li>)}</ul>
+      {planned.error ? (ids.every((id) => corners[id]) && <p className="err">{planned.error}</p>) : <>
+        <p>The crosses go {MARK.inset} mm in from both edges at each corner ({MARK.size} mm across, {MARK.depth} mm deep):</p>
+        <ul className="plain">{planned.spots.map((sp) => <li key={sp.id}>{CORNER_NAMES[sp.id]}: machine X {len(sp.x)}, Y {len(sp.y)}{" "}
+          <button className="quiet" disabled={!canMove} onClick={() => onShow(sp)}>{busy === "show" ? "Moving…" : "Go there"}</button></li>)}</ul>
+        {planned.notes.map((n, i) => <p key={i} className="dim">{n}</p>)}
+      </>}
+      <div className="row-end">{cancel}<button className="primary" disabled={!!planned.error || !!busy} onClick={onNext}>Next</button></div>
+    </>}
+    {mk.phase === "check" && <>
+      <p>Put the 3D probe in and plug it in. It measures the board's height at the three spots and touches the tool setter, so the V-bit can be measured against it.</p>
+      <p><b>Push the stylus sideways with your finger</b> to show the probe works.</p>
+      {touched && !mk.seenOpen && <p className="err">The probe already reads as touched. Check the probe and its cable.</p>}
+      <div className="row-end">{cancel}</div>
+    </>}
+    {mk.phase === "ready" && <>
+      <p>The probe works. Take your hand away. The machine touches the board at the three spots, then touches the tool setter.</p>
+      <div className="row-end">{cancel}<button className="primary" data-autofocus disabled={!canMove || touched} onClick={onProbe}>Start</button></div>
+    </>}
+    {(mk.phase === "probing" || mk.phase === "vbit" || mk.phase === "carving") && <p>{mk.phase === "probing" ? `Measuring: ${mk.doing || "starting"}…` : mk.phase === "vbit" ? "Measuring the V-bit on the tool setter…" : "Carving…"}</p>}
+    {mk.phase === "swap" && <>
+      <p>Board measured{mk.spread > 0.05 ? ` (the three spots are within ${len(mk.spread, 2)} of each other)` : ""}.</p>
+      <p><b>Take the probe out and put the V-bit in.</b> Then it touches the tool setter with the V-bit to find how long it is.</p>
+      <div className="row-end">{cancel}<button className="primary" disabled={!canMove} onClick={onVbit}>The V-bit is in: measure it</button></div>
+    </>}
+    {mk.phase === "carve" && <>
+      <p>Ready to carve the three crosses. <b>The router turns on</b> (by itself if it's on the smart plug; otherwise switch it on now). Keep a hand near the E-stop.</p>
+      <div className="row-end">{cancel}<button className="primary" disabled={!canMove} onClick={onCarve}>Carve</button></div>
+    </>}
+    {mk.phase === "done" && <div className="why"><b>Markers carved</b><p>Their positions are saved. Vacuum the dust; a black marker pen in the grooves helps the camera.</p></div>}
+    {mk.phase === "error" && <div className="why bad"><b>Stopped</b><p>{mk.err}</p></div>}
+    {(mk.phase === "done" || mk.phase === "error") && <div className="row-end">
+      {mk.phase === "error" && <button disabled={!!busy} onClick={onRestart}>Start again</button>}
       <button className="primary" disabled={!!busy} onClick={onClose}>Done</button></div>}
   </>;
 }
