@@ -63,11 +63,11 @@ async def main():
         await ws(page, 'mock:stock off')
         # Park position
         await ws(page, 'mock:pos 790 790 -1'); await page.wait_for_timeout(300)
-        await click(page, 'button:has-text("Save park position here")'); await page.wait_for_timeout(400)
+        await click(page, 'button:has-text("Park here instead")'); await page.wait_for_timeout(400)
         check('park saved', 'X 790' in await side(page), (await side(page))[:160])
 
         # Calibrate: 6 spots, the first two lifted
-        await click(page, '.bedcam-side button:has-text("Calibrate")'); await page.wait_for_timeout(300)
+        await click(page, '.bedcam-side button:has-text("Calibrate by tapping")'); await page.wait_for_timeout(300)
         spots = [(60, 60), (560, 60), (560, 400), (60, 400), (310, 230), (200, 330)]
         for i, (x, y) in enumerate(spots):
             await ws(page, f'mock:pos {x} {y} {BED + 10}'); await page.wait_for_timeout(250)

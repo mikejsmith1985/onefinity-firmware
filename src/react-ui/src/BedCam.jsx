@@ -4,11 +4,12 @@ import { remoteGet, remotePut } from "./store.js";
 import { computeAxis, fmtLen } from "./axis.js";
 import { errText } from "./checkpoint.js";
 import { probeActive } from "./setter.js";
-import { useProgramRunner } from "./ToolSetter.jsx";
+import { useProgramRunner, getSetter } from "./ToolSetter.jsx";
 import { readSetup } from "./setup.js";
 import {
   calibrate, revive, toPixel, findStock, stockInMachine, fitCheck, travelArea, thin,
   bedTouchProgram, liftProgram, parkProgram,
+  calibrateLed, detectLedFlip, detectLedMoved, autoSpots, autoTouchProgram, awayMove, sidewaysProgram, LED_H,
 } from "./bedcam.js";
 
 // Bed camera (1.36.0): a camera above the table looking down.
@@ -18,6 +19,10 @@ import {
 //    Measure stock then starts from there (position, size), and the probe measures it exactly.
 //  - Program fit: the loaded program drawn on the picture and checked against the stock outline.
 // All positions are machine coordinates, valid while the machine is homed.
+//
+// 1.38.0: calibrating is hands-off (the machine touches the bed itself and the
+// camera finds the probe's LED ring, see bedcam.js), the empty-bed picture is
+// taken at the end of it, and the park position defaults to the tool setter.
 
 const LIFT = 60;               // mm the probe lifts for the camera-height taps
 const FRESH = 30 * 60 * 1000;  // a found stock is offered to Measure stock for 30 minutes
@@ -36,14 +41,49 @@ export function freshLocated(doc) {
   return l;
 }
 
+// Where the gantry waits for pictures: the saved park position, else over the
+// tool setter (out of the way of the stock, and where tools are measured anyway).
+export async function parkPosition(doc) {
+  if (doc && doc.park) return { ...doc.park, from: "saved" };
+  const s = await getSetter().catch(() => null);
+  if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) return { x: s.x, y: s.y, from: "setter" };
+  return null;
+}
+
+// Park, take a picture and find what's new on the bed. Saves it as the located
+// stock (Measure stock picks it up) and returns it. runOk runs a program and
+// throws if it was stopped; top is the machine Z to travel at.
+export async function locateStock({ runOk, top, lim, tGuess }) {
+  const doc = await loadBedcam();
+  const calib = revive(doc.cal);
+  if (!calib) throw new Error("The bed camera isn't calibrated yet.");
+  if (!doc.base) throw new Error("There's no empty-bed picture yet.");
+  const pp = await parkPosition(doc);
+  if (!pp) throw new Error("Save the tool setter position (or a park position) first.");
+  await runOk(parkProgram({ top, x: pp.x, y: pp.y }));
+  await settle();
+  const [p, b] = await Promise.all([takePicture(), loadPicture(doc.base)]);
+  if (p.w !== b.w || p.h !== b.h) throw new Error("The empty-bed picture is a different size. Take it again on the Camera tab.");
+  const f = findStock(b.data, p.data, { area: travelArea(calib, lim) });
+  if (!f) throw new Error("The camera sees nothing new on the bed. Is the stock in view? If the light changed a lot, retake the empty-bed picture.");
+  const t = Number.isFinite(tGuess) ? tGuess : doc.tGuess || 19;
+  const m = stockInMachine(calib, f, t);
+  const located = { time: Date.now(), cx: m.rect.cx, cy: m.rect.cy, w: m.rect.w, l: m.rect.l, angle: m.rect.angle, t,
+    pxContour: thin(f.contour || f.outline), pxOutline: thin(f.outline, 200), outline: thin(m.outline, 200) };
+  await saveBedcam({ located, outline: { pts: located.outline, t, time: located.time, pxOutline: located.pxOutline } });
+  return { located, touchesEdge: f.touchesEdge, pic: p };
+}
+
+const settle = (ms = 700) => new Promise((r) => setTimeout(r, ms)); // a fresh frame after the machine stops
+
 // A still picture from the controller: {url, w, h, data (ImageData)}
-async function takePicture() {
+export async function takePicture() {
   const r = await fetch(`/api/camera/frame?t=${Date.now()}`, { cache: "no-store" });
   if (!r.ok) throw new Error("No picture from the camera. Is it plugged in?");
   const url = URL.createObjectURL(await r.blob());
   return loadPicture(url);
 }
-function loadPicture(url) {
+export function loadPicture(url) {
   return new Promise((resolve, reject) => {
     const im = new Image();
     im.onload = () => {
@@ -116,9 +156,14 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
   const [tGuess, setTGuess] = useState(19);
   const [fit, setFit] = useState(null);
   const [toolD, setToolD] = useState(6.35);
+  const [pp, setPp] = useState(null);           // park position (saved, or the tool setter)
+  const [auto, setAuto] = useState(null);      // hands-off calibration: {phase, spot, of, points, note, seenOpen, err}
+  const [guard, setGuard] = useState(null);    // tool setter, to keep the calibration spots clear of it
 
   useEffect(() => { loadBedcam().then((d) => { setDoc(d); if (d.tGuess) setTGuess(d.tGuess); }); api.get("camera").then(setCamSt).catch(() => setCamSt({ connected: false })); }, []);
   useEffect(() => { readSetup(state.selected).then((s) => { if (s?.toolD) setToolD(s.toolD); }).catch(() => {}); }, [state.selected]);
+  useEffect(() => { if (doc) parkPosition(doc).then(setPp); }, [doc]);
+  useEffect(() => { getSetter().then((s) => setGuard(s && Number.isFinite(s.x) && s.installed !== false ? { x: s.x, y: s.y, r: (s.keep || 30) + (s.allow || 3.2) } : null)).catch(() => {}); }, []);
   const save = async (patch) => { const d = await saveBedcam(patch); setDoc(d); return d; };
 
   const homed = !!config && ["x", "y", "z"].every((a) => computeAxis(state, config, a, metric).homed);
@@ -139,8 +184,8 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
     return r;
   };
   const park = async () => {
-    if (!doc?.park) throw new Error("Save a park position first.");
-    await runOk(parkProgram({ top, x: doc.park.x, y: doc.park.y }));
+    if (!pp) throw new Error("Save the tool setter position, or a park position here, first.");
+    await runOk(parkProgram({ top, x: pp.x, y: pp.y }));
   };
 
   // ----- resolution -----
@@ -197,6 +242,77 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
     setMode(null); setCal({ points: [], phase: "jog", cur: null, tap: null }); setPic(null);
     setMsg({ ok: res.worst < 2, text: `Calibrated from ${res.n} spots: typical error ${len(res.rms, 2)}, worst ${len(res.worst, 2)}, about ${len(res.mmPerPx, 2)} per pixel. The camera is about ${Math.round(res.hc)} mm above the bed. ${res.worst < 2 ? "" : "That's a bit rough: tap more carefully, or add spots, and calibrate again. "}Next: take the empty-bed picture.` });
   };
+
+  // ----- hands-off calibration (1.38.0) -----
+  const ledH = Number.isFinite(doc?.ledH) ? doc.ledH : LED_H;
+  const startAuto = () => { setMsg(null); setPic(null); setMode("auto"); setAuto({ phase: "check", seenOpen: false, points: [], note: [] }); };
+  // The probe has to be shown to work (stylus pushed by hand) before the machine drives it into the bed
+  useEffect(() => {
+    if (mode !== "auto" || !auto || auto.phase !== "check") return;
+    if (!touched && !auto.seenOpen) setAuto((a) => ({ ...a, seenOpen: true }));
+    else if (touched && auto.seenOpen) setAuto((a) => ({ ...a, phase: "ready" }));
+  }, [mode, auto?.phase, auto?.seenOpen, touched]); // eslint-disable-line react-hooks/exhaustive-deps
+  const runAuto = async () => {
+    const spots = autoSpots(lim, guard);
+    const zMin = zAx.min + 1;
+    const points = [], note = [];
+    let zRef = null, ups = 0, last = null;
+    const show = (o) => setAuto((a) => ({ ...a, ...o, points: [...points], note: [...note] }));
+    setBusy("auto"); show({ phase: "run", spot: 0, of: spots.length });
+    try {
+      for (let i = 0; i < spots.length; i++) {
+        const s = spots[i];
+        show({ spot: i + 1, doing: "touching the bed" });
+        const r = await runOk(autoTouchProgram({ top, x: s.x, y: s.y, approach: zRef === null ? undefined : zRef + 12, zMin, travel: 1000, fast, slow }));
+        if (r.ofa_ok !== 1) {
+          if (zRef === null) throw new Error(`The probe came all the way down at spot ${i + 1} without touching anything. Is the probe plugged in, and is that spot over the bed?`);
+          note.push(`Spot ${i + 1}: nothing under the probe, skipped.`); continue;
+        }
+        const z = r.ofa_z;
+        if (zRef === null) zRef = z;
+        if (Math.abs(z - zRef) > 1.5) {
+          note.push(`Spot ${i + 1}: the bed there is ${len(z - zRef, 1)} off the others (a T-track slot or something on the bed), skipped.`);
+          await runOk(liftProgram(0.35)); continue;
+        }
+        show({ doing: "taking pictures" });
+        await settle(); const red = await takePicture();
+        await runOk(liftProgram(0.35)); await settle(); const green = await takePicture();
+        setPic(green); last = green;
+        const f = detectLedFlip(red.data, green.data);
+        const pt = { m: { x: s.x, y: s.y, z }, px: f ? { x: f.x, y: f.y } : null };
+        if (!f) note.push(`Spot ${i + 1}: the camera couldn't see the probe's light there, skipped.`);
+        // Two lifted spots, far apart: the first one the camera sees, and one at least a third of the reach from it
+        const reach = Math.hypot(lim.x1 - lim.x0, lim.y1 - lim.y0);
+        const firstUp = points.find((q) => q.up);
+        const wantUp = f && ups < 2 && (!firstUp || Math.hypot(s.x - firstUp.m.x, s.y - firstUp.m.y) > reach / 3 || spots.length - i <= 2 - ups);
+        if (wantUp) {
+          show({ doing: "lifting for the height" });
+          await runOk(liftProgram(60)); await settle(); const here = await takePicture();
+          const dx = awayMove(s, lim);
+          await runOk(sidewaysProgram(dx)); await settle(); const away = await takePicture();
+          const g = detectLedMoved(away.data, here.data, f, here.w * 0.3);
+          if (g) { pt.up = { x: g.x, y: g.y, dz: 60.2 }; ups++; }
+          else note.push(`Spot ${i + 1}: the camera lost the probe when it was lifted.`);
+        }
+        points.push(pt);
+        show({});
+        if (points.filter((q) => q.px).length >= 6 && ups >= 2) break;
+      }
+      const good = points.filter((p) => p.px);
+      const res = calibrateLed(good, { w: last ? last.w : sizeNow?.w, h: last ? last.h : sizeNow?.h }, ledH);
+      if (res.error) { show({ phase: "error", err: res.error }); setBusy(""); await park().catch(() => {}); return; }
+      const { Hinv, ...keep } = res; // eslint-disable-line no-unused-vars
+      show({ doing: "taking the empty-bed picture" });
+      // The bed is clear for calibrating, so the empty-bed picture comes for free
+      await park(); await settle();
+      const base = await takePicture();
+      await save({ cal: keep, calPoints: good, base: base.canvas.toDataURL("image/jpeg", 0.92), baseSize: { w: base.w, h: base.h }, baseTime: Date.now(), located: null, outline: null });
+      setPic(base);
+      show({ phase: "done", res: { n: res.n, rms: res.rms, worst: res.worst, hc: res.hc, mmPerPx: res.mmPerPx } });
+    } catch (e) { show({ phase: "error", err: errText(e) }); }
+    setBusy("");
+  };
+  const endAuto = () => { setMode(null); setAuto(null); setPic(null); };
 
   // ----- empty bed -----
   const takeBase = async () => {
@@ -273,6 +389,9 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
     cal.points.forEach((p, i) => { overlay.push(<Dot key={`p${i}`} p={p.px} c="#4fd18b" />); if (p.up) overlay.push(<Dot key={`u${i}`} p={p.up} c="#4f8cff" />); });
     if (cal.tap) overlay.push(<Dot key="tap" p={cal.tap} />);
   }
+  if (mode === "auto" && auto) {
+    auto.points.forEach((p, i) => { if (p.px) overlay.push(<Dot key={`a${i}`} p={p.px} c="#4fd18b" />); if (p.up) overlay.push(<Dot key={`au${i}`} p={p.up} c="#4f8cff" />); });
+  }
   if (mode === "found" && found && calib) {
     overlay.push(<Poly key="o" pts={found.px.outline} c="#ffcc00" fill="rgba(255,204,0,.12)" />);
     if (found.mach.rect) overlay.push(<Poly key="r" pts={found.mach.rect.corners.map((q) => toPixel(calib, q, tGuess))} c="#4fd18b" w={2} dash="8 6" />);
@@ -303,7 +422,9 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
         {msg && <div className={msg.ok ? "why" : "why bad"}><p>{msg.text}</p></div>}
         {!homed && <p className="err">Home the machine first. The bed camera works in machine coordinates.</p>}
 
-        {mode === "calib" ? <CalibPanel {...{ cal, setCal, touched, canMove, busy, needUp, touchBed, acceptTap, liftForTap, skipLift, finishCal, len }}
+        {mode === "auto" && auto ? <AutoPanel {...{ auto, touched, canMove, busy, len, ledH }} onStart={runAuto} onClose={endAuto}
+          onTapInstead={() => { setAuto(null); setMode("calib"); setPic(null); }} />
+        : mode === "calib" ? <CalibPanel {...{ cal, setCal, touched, canMove, busy, needUp, touchBed, acceptTap, liftForTap, skipLift, finishCal, len }}
           onCancel={() => { setMode(null); setCal({ points: [], phase: "jog", cur: null, tap: null }); setPic(null); }} />
         : mode === "manual" ? <>
           <h3>Tap the corners of the stock</h3>
@@ -320,19 +441,26 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
 
           <h3>Park position</h3>
           <p className="dim">Where the gantry waits so it's out of the picture. Pictures are always taken parked, so the empty-bed picture and later ones match.</p>
-          <p>{doc.park ? <>Machine X {len(doc.park.x)}, Y {len(doc.park.y)}</> : "Not saved yet."}</p>
+          <p>{pp ? (pp.from === "setter" ? <>Over the tool setter (machine X {len(pp.x)}, Y {len(pp.y)}), at the top of Z.</> : <>Machine X {len(pp.x)}, Y {len(pp.y)}.</>) : "Save the tool setter position, or a park position here."}</p>
           <div className="row-start">
-            <button disabled={!homed || !idle || !!busy} onClick={() => save({ park: { x: state.xp, y: state.yp } }).then(() => setMsg({ ok: true, text: "Park position saved." }))}>Save park position here</button>
-            <button disabled={!canMove || !doc.park} onClick={() => { setBusy("park"); park().then(() => setBusy("")).catch(fail); }}>{busy === "park" ? "Parking…" : "Park"}</button>
+            <button disabled={!canMove || !pp} onClick={() => { setBusy("park"); park().then(() => setBusy("")).catch(fail); }}>{busy === "park" ? "Parking…" : "Park"}</button>
+            <button className="quiet" disabled={!homed || !idle || !!busy} onClick={() => save({ park: { x: state.xp, y: state.yp } }).then(() => setMsg({ ok: true, text: "Park position saved. Pictures are taken from here from now on." }))}>Park here instead</button>
+            {doc.park && <button className="quiet" disabled={!!busy} onClick={() => save({ park: null }).then(() => setMsg({ ok: true, text: "Parking over the tool setter again." }))}>Back to the tool setter</button>}
           </div>
 
           <h3>Calibrate</h3>
-          <p className="dim">Once, and again whenever the camera moves. Needs the 3D probe in the collet and a clear bed.</p>
-          <button disabled={!canMove} onClick={() => { setMsg(null); setMode("calib"); setPic(null); }}>{calib ? "Calibrate again" : "Calibrate"}</button>
+          <p className="dim">Once, and again whenever the camera moves. Needs the 3D probe in the collet and a clear bed. The machine touches the bed at 6 spots by itself and the camera finds the probe's light, then it takes the empty-bed picture.</p>
+          <div className="row-start">
+            <button className="primary" disabled={!canMove || !pp || !lim} onClick={startAuto}>{calib ? "Calibrate again" : "Calibrate"}</button>
+            <button className="quiet" disabled={!canMove} onClick={() => { setMsg(null); setMode("calib"); setPic(null); }}>Calibrate by tapping</button>
+          </div>
+          <label className="stack">Probe light height above the stylus tip ({metric ? "mm" : "in"})
+            <input type="number" step="any" value={metric ? ledH : +(ledH / 25.4).toFixed(3)} disabled={!!busy} onChange={(e) => { const v = (+e.target.value || 0) * (metric ? 1 : 25.4); if (v > 0) save({ ledH: v }); }} />
+            <small>With calipers: from the bottom of the stylus ball to the middle of the light ring.</small></label>
 
           <h3>Empty-bed picture</h3>
-          <p className="dim">{doc.base ? `Taken ${new Date(doc.baseTime).toLocaleString()}.` : "Not taken yet."} Clear the bed (the vise can stay if it always sits in the same place).</p>
-          <button disabled={!canMove || !ready || !doc.park} onClick={takeBase}>{busy === "base" ? "Taking it…" : doc.base ? "Take it again" : "Take empty-bed picture"}</button>
+          <p className="dim">{doc.base ? `Taken ${new Date(doc.baseTime).toLocaleString()}.` : "Not taken yet."} Calibrating takes it too. Retake it with a clear bed if the bed or the light changes (the vise can stay if it always sits in the same place).</p>
+          <button disabled={!canMove || !ready || !pp} onClick={takeBase}>{busy === "base" ? "Taking it…" : doc.base ? "Take it again" : "Take empty-bed picture"}</button>
 
           <h3>Find stock</h3>
           {mode === "found" && found ? <FoundPanel {...{ found, tGuess, setTGuess, len, measureIt, keepOutline, metric }} onRetry={() => { setMode("manual"); setManual([]); }} />
@@ -341,7 +469,7 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
                 <input type="number" step="any" value={metric ? tGuess : +(tGuess / 25.4).toFixed(3)} onChange={(e) => setTGuess((+e.target.value || 0) * (metric ? 1 : 25.4))} />
                 <small>Only for the picture's size estimate. The probe measures the real height.</small></label>
               <div className="row-start">
-                <button className="primary" disabled={!canMove || !ready || !doc.base || !doc.park} onClick={find}>{busy === "find" ? "Looking…" : "Park and find stock"}</button>
+                <button className="primary" disabled={!canMove || !ready || !doc.base || !pp} onClick={find}>{busy === "find" ? "Looking…" : "Park and find stock"}</button>
                 <button disabled={!ready || !!busy} onClick={async () => { setMsg(null); if (!pic) { try { setPic(await takePicture()); } catch (e) { fail(e); return; } } setMode("manual"); setManual([]); }}>Tap the corners instead</button>
               </div>
             </>}
@@ -406,5 +534,38 @@ function FoundPanel({ found, tGuess, setTGuess, len, measureIt, keepOutline, onR
       <button onClick={keepOutline}>Save outline</button>
       <button className="quiet" onClick={onRetry}>Wrong? Tap the corners</button>
     </div>
+  </>;
+}
+
+function AutoPanel({ auto, touched, canMove, busy, len, ledH, onStart, onClose, onTapInstead }) {
+  const found = auto.points.filter((p) => p.px).length, up = auto.points.filter((p) => p.up).length;
+  return <>
+    <h3>Calibrate the bed camera</h3>
+    {auto.phase === "check" && <>
+      <p>Put the 3D probe in the collet and plug it in. Clear the bed: nothing on it but the tool setter.</p>
+      <p><b>Push the stylus sideways with your finger.</b> This makes sure the probe works before the machine drives it into the bed.</p>
+      {touched && !auto.seenOpen && <p className="err">The probe already reads as touched. Check the probe and its cable.</p>}
+      <div className="row-end"><button onClick={onClose}>Cancel</button></div>
+    </>}
+    {auto.phase === "ready" && <>
+      <p>The probe works. Take your hand away.</p>
+      <p className="dim">The machine goes to 6 spots over the bed, comes down until the stylus touches, and the camera finds the probe's light (it turns red on the touch). At 2 spots it also lifts 60 mm and moves sideways. Then it parks and takes the empty-bed picture. Keep a hand near the E-stop.</p>
+      <div className="row-end"><button onClick={onClose}>Cancel</button>
+        <button className="primary" data-autofocus disabled={!canMove || touched} onClick={onStart}>Start</button></div>
+    </>}
+    {auto.phase === "run" && <>
+      <p>Spot {auto.spot} of {auto.of}{auto.doing ? `: ${auto.doing}` : ""}…</p>
+      <p className="dim">Found the probe at {found} spot{found === 1 ? "" : "s"}, lifted at {up}.</p>
+    </>}
+    {auto.phase === "done" && auto.res && <div className={auto.res.worst < 2 ? "why" : "why bad"}>
+      <b>Calibrated from {auto.res.n} spots</b>
+      <p>Typical error {len(auto.res.rms, 2)}, worst {len(auto.res.worst, 2)}; about {len(auto.res.mmPerPx, 2)} per pixel, the camera about {Math.round(auto.res.hc)} mm above the bed. The empty-bed picture is taken too.</p>
+      {auto.res.worst >= 2 && <p>That's a bit rough. Check the light height ({len(ledH, 1)}) with calipers and calibrate again.</p>}
+    </div>}
+    {auto.phase === "error" && <div className="why bad"><b>Calibration stopped</b><p>{auto.err}</p></div>}
+    {auto.note.length > 0 && <ul className="plain dim">{auto.note.map((n, i) => <li key={i}>{n}</li>)}</ul>}
+    {(auto.phase === "done" || auto.phase === "error") && <div className="row-end">
+      {auto.phase === "error" && <button disabled={!!busy} onClick={onTapInstead}>Calibrate by tapping</button>}
+      <button className="primary" disabled={!!busy} onClick={onClose}>Done</button></div>}
   </>;
 }

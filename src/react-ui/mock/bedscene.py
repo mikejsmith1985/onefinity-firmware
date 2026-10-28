@@ -6,9 +6,10 @@
 import sys, json, io, math
 import numpy as np
 
-W, H, F = 1280, 720, 1150
+W, H, F = 1280, 720, 800
 BED = -100.0                                   # spoilboard top, machine Z
-CAM = np.array([310.0, 240.0, BED + 900.0])    # camera position (machine)
+LED_H = 31.0                                   # probe LED ring above the stylus tip (1.38.0)
+CAM = np.array([405.0, 440.0, BED + 900.0])    # camera position (machine): sees the whole reach (1.38.0)
 STOCK = dict(cx=300.0, cy=250.0, w=150.0, l=90.0, t=19.0, ang=math.radians(4))
 
 def rot():
@@ -55,6 +56,13 @@ def render(q):
     d.line([c, top], fill=(70, 70, 75), width=5)
     r = max(2.0, math.hypot(c[0] - b[0], c[1] - b[1]) * 1.1)
     d.ellipse([c[0] - r, c[1] - r, c[0] + r, c[1] + r], fill=(200, 30, 30))
+    # 1.38.0: the probe's LED ring, 16 mm radius, LED_H above the tip: green, red while touched
+    if q.get('led'):
+        rgb = (240, 50, 40) if q['led'] == 'red' else (50, 235, 90)
+        for k in range(180):
+            a = 2 * math.pi * k / 180
+            p = project((q['x'] + 16 * math.cos(a), q['y'] + 16 * math.sin(a), q['z'] + LED_H))
+            d.ellipse([p[0] - 2, p[1] - 2, p[0] + 2, p[1] + 2], fill=rgb)
     out = io.BytesIO(); im.save(out, 'JPEG', quality=90); return out.getvalue()
 
 if __name__ == '__main__':

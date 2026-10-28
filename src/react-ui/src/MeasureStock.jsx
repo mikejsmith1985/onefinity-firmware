@@ -7,7 +7,7 @@ import { getPrefs, setPrefs } from "./checkpoint.js";
 import { readSetup } from "./setup.js";
 import { probeActive, setterProgram, refStatus, probeRefValue, tripToWork, REF_FORMAT } from "./setter.js";
 import { getSetter, saveSetter, setterArgs, useProgramRunner } from "./ToolSetter.jsx";
-import { loadBedcam, saveBedcam, freshLocated } from "./BedCam.jsx";
+import { loadBedcam, saveBedcam, freshLocated, locateStock } from "./BedCam.jsx";
 import { moveOverProgram, stockInMachine, revive } from "./bedcam.js";
 import { computeAxis } from "./axis.js";
 import { MEASURE_DEFAULTS, FAILS, ORIGINS_XY, ORIGINS_X, checkOpts, measureProgram, calibratedBall } from "./measure.js";
@@ -21,7 +21,7 @@ import { CheckArt, MeasureArt, SetterArt } from "./art.jsx";
 const STEPS = { setup: "Setup", check: "Check probe", place: "Position", run: "Measure", setter: "Tool setter", done: "Done" };
 const CORNERS = new Set(["center", "front-left", "front-right", "back-left", "back-right"]);
 
-export default function MeasureStock({ config, state, send, subscribe, metric, onClose, openId }) {
+export default function MeasureStock({ config, state, send, subscribe, metric, onClose, openId, startCalib }) {
   const u = metric ? 1 : 25.4;                    // display unit -> mm
   const unit = metric ? "mm" : "in";
   const show = (mm, p = 3) => (mm / u).toFixed(metric ? p : p + 1);
@@ -73,7 +73,7 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
       } catch {}
       const cur = await uiGet("measure");
       if (cur.v && cur.v.id === openId) return;
-      await uiCas("measure", { id: openId, driver: ME, step: "setup", calib: false, p: m, form: { w: w ? show(w, 2) : "", l: l ? show(l, 2) : "", trueW: "" },
+      await uiCas("measure", { id: openId, driver: ME, step: "setup", calib: !!startCalib, p: m, form: { w: w ? show(w, 2) : "", l: l ? show(l, 2) : "", trueW: "" },
         adv: false, hint: hintText, result: null, jogStep: 10, useSetter: true, seenOpen: false, phase: null, started: false, cam: camLoc, camMove: null }, cur.rev);
     })().catch(() => {});
   }, [openId, !!D]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -121,6 +121,24 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
     } catch (e) { patch({ camMove: { state: "error", text: e.message } }); }
   };
 
+  // 1.38.0: find the stock with the bed camera from here, then measure it hands-off:
+  // the check (push the stylus), then the machine moves over it, measures it and
+  // touches the setter by itself.
+  const [camReady, setCamReady] = useState(false);
+  useEffect(() => { loadBedcam().then((bc) => setCamReady(!!(bc.cal && bc.base))).catch(() => {}); }, []);
+  const findWithCamera = async () => {
+    patch({ finding: true, findErr: null, driver: ME });
+    try {
+      const z = computeAxis(state, config, "z", true), x = computeAxis(state, config, "x", true), y = computeAxis(state, config, "y", true);
+      const runOk = async (prog) => { const r = await runCam(prog); if (r.estop || r.xx === "ESTOPPED") throw new Error("The machine stopped (E-stop) while parking."); return r; };
+      const res = await locateStock({ runOk, top: z.max - 1, lim: { x0: x.min, x1: x.max, y0: y.min, y1: y.max } });
+      const l = res.located;
+      patch((d) => ({ finding: false, auto: true, camMove: null,
+        cam: { cx: l.cx, cy: l.cy, w: l.w, l: l.l, angle: l.angle, t: l.t, time: l.time },
+        hint: `Found by the bed camera: about ${show(l.w, 0)} × ${show(l.l, 0)} ${unit}. The probe measures it exactly.${res.touchesEdge ? " It runs off the edge of the picture, so check it's all there." : ""}`,
+        form: { ...(d.form || {}), w: show(l.w, 1), l: show(l.l, 1) }, step: "check" }));
+    } catch (e) { patch({ finding: false, findErr: e.message || String(e) }); }
+  };
   const edit = (k, v) => setP((x) => ({ ...x, [k]: v }));
   const mmOf = (s) => { const v = parseFloat(s); return Number.isFinite(v) ? v * u : NaN; };
 
@@ -134,6 +152,7 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
     fast: config.probe["probe-fast-seek"], slow: config.probe["probe-slow-seek"],
   };
   const errs = opts ? checkOpts(opts) : [];
+  const errsNoSize = opts ? checkOpts({ ...opts, w: 100, l: 100 }) : [];
   const origins = p?.probeY ? ORIGINS_XY : ORIGINS_X;
 
   // Only the screen whose Measure the controller accepted first sends the program.
@@ -158,6 +177,8 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
     if (ok && calib) {
       res.ball = calibratedBall(s.ofm_rxa, s.ofm_rxb, opts.w);
       res.ballOk = res.ball > 0.3 && res.ball < 10;
+      // 1.38.0: runs on the same block are kept, and the average is what gets saved
+      if (res.ballOk) res.runs = [...((R.current.D && R.current.D.calibRuns) || []), res.ball];
     }
     if (ok && !calib && D.cam) {
       // The stock is measured: the camera's result is used up; keep its outline at the measured height
@@ -177,7 +198,7 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
       send(setterProgram(setterArgs(s, config, setter, "ref")));
       return;
     }
-    patch({ result: res, step: "done" });
+    patch(res.runs ? { result: res, step: "done", calibRuns: res.runs } : { result: res, step: "done" });
   };
 
   const finishSetter = async () => {
@@ -200,11 +221,28 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
 
   R.current.finish = finish;
   R.current.finishSetter = finishSetter;
+  R.current.camMove = camMove;
+  R.current.start = start;
 
-  const saveBall = () => { const b = Math.round(result.ball * 1000) / 1000; patch((d) => ({ p: { ...d.p, ball: b }, calib: false, step: "setup", result: null })); setPrefs({ measure: { ...p, ball: b } }); };
+  const runs = (result && result.runs) || [];
+  const avgBall = runs.length ? runs.reduce((a, b) => a + b, 0) / runs.length : result?.ball;
+  const spread = runs.length > 1 ? Math.max(...runs) - Math.min(...runs) : 0;
+  const saveBall = () => { const b = Math.round(avgBall * 1000) / 1000; patch((d) => ({ p: { ...d.p, ball: b }, calib: false, step: "setup", result: null, calibRuns: [] })); setPrefs({ measure: { ...p, ball: b, ballTime: Date.now(), ballRuns: runs.length } }); };
+  const measureAgain = () => patch({ step: "place", result: null });
 
   // Wait for the stylus to be touched before any motion
   const touched = probeActive(state);
+  // Hands-off: once the probe check is done and the hand is away, move over the stock; when the
+  // stylus is over it, measure. Each waits a moment so nobody's hand is near the probe.
+  useEffect(() => {
+    if (!isDriver || !D?.auto || touched || state.cycle !== "idle") return undefined;
+    if (step === "place" && D.cam && !D.camMove) { const t = setTimeout(() => R.current.camMove(), 2000); return () => clearTimeout(t); }
+    if (step === "place" && D.camMove?.state === "ready" && !D.camMove.odd && Math.abs(D.camMove.angle || 0) < 5) {
+      const t = setTimeout(() => R.current.start(), 1500); return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [isDriver, D?.auto, step, D?.camMove?.state, touched, state.cycle]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (!D) return;
     if (step !== "check") { if (seenOpen) setSeenOpen(false); return; }
@@ -254,7 +292,8 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
         {step === "setup" && <button className="primary" data-autofocus disabled={!p || errs.length > 0} onClick={() => setStep("check")}>Next</button>}
         {step === "place" && <button className="primary" data-autofocus disabled={touched || D.camMove?.state === "moving" || (!!D.cam && !calib && !D.camMove)} onClick={start}>{calib ? "Measure the block" : "Start measuring"}</button>}
         {(running || step === "finishing") && <button className="primary" disabled>Measuring…</button>}
-        {step === "done" && result?.ok && calib && result.ballOk && <button className="primary" data-autofocus onClick={saveBall}>Save {show(result.ball)} {unit}</button>}
+        {step === "done" && result?.ok && calib && result.ballOk && <button onClick={measureAgain}>Measure again</button>}
+        {step === "done" && result?.ok && calib && result.ballOk && <button className={runs.length >= 3 ? "primary" : ""} data-autofocus={runs.length >= 3 || undefined} onClick={saveBall}>Save {show(avgBall)} {unit}{runs.length > 1 ? ` (average of ${runs.length})` : ""}</button>}
         {step === "done" && <button className={result?.ok && !calib ? "primary" : ""} onClick={done}>Done</button>}
       </>}>
       <div className="probe">
@@ -269,6 +308,10 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
             <p><button onClick={() => setCalib(false)}>Back to measuring</button></p>
           </> : <>
             <p>Measures the top and the real edges of the stock with a 3D touch probe, then sets the work zero. Only the stylus touches the stock; swap to your cutter afterwards and probe Z as usual.</p>
+            {camReady && !D.auto && <div className="why"><b>Let the bed camera find it</b>
+              <p>Parks over the tool setter, finds the stock in a picture, then after the probe check it moves over the stock, measures it{setter && typeof setter.x === "number" && useSetter ? " and touches the tool setter" : ""} by itself.</p>
+              <div className="row-start"><button className="primary" disabled={!!D.finding || state.cycle !== "idle" || errsNoSize.length > 0} onClick={findWithCamera}>{D.finding ? "Looking…" : "Find it and measure"}</button></div>
+              {D.findErr && <p className="err">{D.findErr}</p>}</div>}
             {hint && <p className="dim">{hint}</p>}
             <div className="measure-grid">
               <label className="stack">Approximate X size ({unit})
@@ -307,10 +350,12 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
           {step === "place" && <StepBody title="Position the stylus" art={<MeasureArt moves={planMoves} probeY={!!opts?.probeY} />}>
             {D.cam && !calib && <div className="why">
               <b>The bed camera found the stock</b>
-              {!D.camMove && <><p>The machine can go over its middle by itself: up to the top, across, then down slowly until the stylus touches the top. It stops {show(8, 0)} {unit} above it.</p>
+              {!D.camMove && !D.auto && <><p>The machine can go over its middle by itself: up to the top, across, then down slowly until the stylus touches the top. It stops {show(8, 0)} {unit} above it.</p>
                 <div className="row-start"><button className="primary" disabled={touched || state.cycle !== "idle"} onClick={camMove}>Move over the stock</button>
                   <button className="quiet" onClick={() => patch({ camMove: { state: "manual" } })}>Jog by hand instead</button></div></>}
+              {!D.camMove && D.auto && <p>{touched ? "Let go of the stylus." : "Moving over it in a moment. Keep your hands clear."}</p>}
               {D.camMove?.state === "moving" && <p>Moving over the stock and finding its top… Keep a hand near the E-stop.</p>}
+              {D.camMove?.state === "ready" && D.auto && !D.camMove.odd && Math.abs(D.camMove.angle || 0) < 5 && <p>Measuring in a moment.</p>}
               {D.camMove?.state === "ready" && <p>Ready: the stylus is over the middle, {show(8, 0)} {unit} above the top. The stock is about {show(D.camMove.t, 1)} {unit} thick and {show(D.camMove.w, 0)} × {show(D.camMove.l, 0)} {unit}.
                 {D.camMove.odd && <span className="err"> That height looks odd: the stylus may have landed on a clamp. Check before measuring.</span>}
                 {Math.abs(D.camMove.angle || 0) >= 5 && <span className="err"> The stock is turned {D.camMove.angle.toFixed(1)}°: straighten it, or the sizes will read large.</span>}</p>}
@@ -339,7 +384,12 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
           </StepBody>}
 
           {step === "done" && result && <StepBody art={<MeasureArt moves={planMoves} cur={result.ok ? planMoves.length : stopAt ? stopAt.cur : -1} probeY={!!opts?.probeY} />}>{result.ok ? (calib ? <Outcome ok title={`Stylus ball: ${show(result.ball)} ${unit}`}>
-            {result.ballOk ? <p>Save it to use it for every measurement from now on. Run this again if you change the stylus.</p>
+            {result.ballOk ? <>
+              {runs.length > 1 && <p>Runs: {runs.map((b) => show(b)).join(", ")} {unit}. Average {show(avgBall)}, spread {show(spread)} {unit}.</p>}
+              {spread > 0.05 ? <p className="err">The runs differ by more than {show(0.05, 2)} {unit}. Check the probe is tight in the collet and the block is clamped, then measure again.</p>
+                : runs.length < 3 ? <p>Measure again {3 - runs.length === 1 ? "once more" : "twice more"} without moving anything; the average of 3 runs is saved.</p>
+                : <p>Save it to use it for every measurement from now on. Run this again if you change the stylus.</p>}
+            </>
               : <p className="err">That isn't a believable stylus size. Check the width you typed and that the block's ends are square, then try again.</p>}
           </Outcome> : <Outcome ok title={`Measured ${show(result.w)}${opts.probeY ? ` × ${show(result.l)}` : ""} ${unit}`}>
             <p>Measured {opts.probeY ? "X × Y" : "X length"}{Number.isFinite(opts.w) ? ` (you typed ${show(opts.w, 2)}${opts.probeY ? ` × ${show(opts.l, 2)}` : ""})` : ""}.</p>

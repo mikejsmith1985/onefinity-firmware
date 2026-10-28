@@ -497,3 +497,13 @@ svg.art { width: 100%; height: auto; display: block; background: var(--bed); bor
 .plug button { min-width: 64px; }
 .plug-err { flex-basis: 100%; margin: 0; color: var(--red); }
 .plug-pref { margin-bottom: 12px; }
+
+/* Probe setup (1.38.0) */
+.setup-steps { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 10px; }
+.setup-steps li { display: grid; grid-template-columns: 34px 1fr; gap: 12px; padding: 10px 12px; border-radius: 8px; background: rgba(255,255,255,.03); }
+.setup-steps li.next { background: rgba(79,140,255,.10); outline: 1px solid rgba(79,140,255,.45); }
+.setup-steps li.done { opacity: .8; }
+.setup-steps .mark { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 600; background: rgba(255,255,255,.08); }
+.setup-steps li.done .mark { background: #4fd18b; color: #0b1a12; }
+.setup-steps li.next .mark { background: var(--blue, #4f8cff); color: #fff; }
+.setup-steps p { margin: 4px 0 8px; }

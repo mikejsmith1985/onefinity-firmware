@@ -1,4 +1,5 @@
 import { traceTap } from "./clientlog.js";
+import ProbeSetup from "./ProbeSetup.jsx";
 import React, { useEffect, useState } from "react";
 import { loadPath, api } from "./controller.js";
 import Dro from "./Dro.jsx";
@@ -24,9 +25,12 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
   // Which probing tool is open is part of the shared session: every screen shows the same one.
   // "tool" holds {kind}; each tool keeps its own steps under its own name ("probe", "measure", "setter").
   const toolUi = useUi(state, "tool").v;
+  // 1.38.0: Probe setup checklist; hidden while the tool it opened is up, back when that closes
+  const setupOn = !!useUi(state, "probe-setup").v;
+  const setSetup = (on) => (on ? uiSet("probe-setup", { on: true }) : uiClose("probe-setup"));
   const probe = toolUi?.kind || null, openId = toolUi?.id || null;
-  const setProbe = (k) => (k
-    ? uiOpen("tool", { kind: k, id: `${Date.now()}-${ME}` })
+  const setProbe = (k, extra) => (k
+    ? uiOpen("tool", { kind: k, id: `${Date.now()}-${ME}`, ...(extra || {}) })
         .then((ok) => { if (!ok) traceTap(`${PROBE_NAMES[k] || k}: not opened, the controller says a tool is already open`); return ok; })
         .catch((e) => { traceTap(`${PROBE_NAMES[k] || k}: open failed: ${e && e.message ? e.message : e}`); return false; })
     : uiClose("tool"));
@@ -60,6 +64,7 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
   const [homeErr, setHomeErr] = useState("");
   const requestProbe = (t) => {
     if (!t) { setProbe(null); return; }
+    if (t === "setup") { traceTap("Probe setup"); setSetup(true); return; }
     traceTap(`${PROBE_NAMES[t] || t}: homed ${homed}, state ${mach}, open now ${probe || "none"}`);
     if (homed) setProbe(t); else { setHomeErr(""); setHomeFirst(t); }
   };
@@ -95,7 +100,12 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
         </Modal>
       )}
       {probe === "measure" && cfg.config && (
-        <MeasureStock openId={openId} config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
+        <MeasureStock openId={openId} startCalib={!!toolUi?.calib} config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
+      )}
+      {setupOn && !probe && !homeFirst && (
+        <ProbeSetup state={state} onClose={() => setSetup(false)}
+          onOpen={(o) => { const { kind, ...extra } = o; if (homed) setProbe(kind, extra); else { setHomeErr(""); setHomeFirst(kind); } }}
+          onTab={(tab) => { setSetup(false); window.dispatchEvent(new CustomEvent("next-work-tab", { detail: tab })); }} />
       )}
       {probe === "setter" && cfg.config && (
         <ToolSetter openId={openId} config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />

@@ -143,6 +143,9 @@ const onStock = (x, y) => {
   return stockOn && Math.abs(u) <= STOCK.w / 2 && Math.abs(v) <= STOCK.l / 2;
 };
 function runFake(fn, ms = 500) { broadcast({ xx: "RUNNING", cycle: "running" }); setTimeout(() => broadcast({ ...fn(), xx: "READY", cycle: "idle" }), ms); }
+// 1.38.0: the probe's LED (MOCK_NO_LED=1: a camera that can't see it)
+const probeLed = () => (process.env.MOCK_NO_LED ? null : (state.pt === 2 ? state.pw === 1 : state.pw === 0) ? "red" : "green");
+const probeRest = () => (state.pt === 2 ? 0 : 1);
 function bedcamMdi(text) {
   const num = (re) => { const m = re.exec(text); return m ? +m[1] : null; };
   if (text.startsWith("mock:stock ")) { stockOn = text.endsWith("on"); return true; }
@@ -151,7 +154,13 @@ function bedcamMdi(text) {
     const floor = onStock(state.xp, state.yp) ? BED_Z + STOCK.t : BED_Z;
     runFake(() => ({ zp: floor + 0.2, ofc_z: floor, ofc_ok: 1 })); return true;
   }
-  if (text.includes("(Bed camera: lift)")) { const dz = num(/G0 Z(-?[\d.]+)/); runFake(() => ({ zp: +(state.zp + dz).toFixed(3) })); return true; }
+  if (text.includes("(Bed camera: auto touch)")) {
+    const x = num(/G53 G0 X(-?[\d.]+)/), y = num(/ Y(-?[\d.]+)/), top = num(/G53 G0 Z(-?[\d.]+)/);
+    const floor = onStock(x, y) ? BED_Z + STOCK.t : BED_Z;
+    runFake(() => ({ xp: x, yp: y, zp: +(floor - 0.15).toFixed(3), ofa_z: floor, ofa_ok: 1, pw: 1 - probeRest() }), 600); return true;
+  }
+  if (text.includes("(Bed camera: sideways)")) { const dx = num(/G0 X(-?[\d.]+)/); runFake(() => ({ xp: +(state.xp + dx).toFixed(3) }), 300); return true; }
+  if (text.includes("(Bed camera: lift)")) { const dz = num(/G0 Z(-?[\d.]+)/); runFake(() => ({ zp: +(state.zp + dz).toFixed(3), pw: probeRest() })); return true; }
   if (text.includes("(Bed camera: park)")) {
     const z = num(/G53 G0 Z(-?[\d.]+)/), x = num(/G53 G0 X(-?[\d.]+)/), y = num(/ Y(-?[\d.]+)/);
     runFake(() => ({ xp: x, yp: y, zp: z }), 800); return true;
@@ -290,7 +299,7 @@ const server = http.createServer((req, res) => {
   }
   if (p === "/api/camera/frame") {
     const r = spawnSync("python3", [path_.join(path_.dirname(fileURLToPath(import.meta.url)), "bedscene.py")],
-      { input: JSON.stringify({ x: state.xp, y: state.yp, z: state.zp, stock: stockOn, seed: Date.now() % 1000 }) });
+      { input: JSON.stringify({ x: state.xp, y: state.yp, z: state.zp, stock: stockOn, seed: Date.now() % 1000, led: probeLed() }) });
     if (r.status !== 0) { console.error("bedscene:", String(r.stderr)); res.writeHead(503); return res.end(); }
     res.writeHead(200, { "Content-Type": "image/jpeg" }); return res.end(r.stdout);
   }

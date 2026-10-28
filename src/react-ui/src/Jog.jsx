@@ -145,6 +145,7 @@ export default function Jog({ state, config, send, metric, locked, idle, onProbe
         {!rotaryOn && <button disabled={!ready} onClick={() => onProbe("center")}>Probe center</button>}
         {!rotaryOn && <button disabled={!ready} onClick={() => onProbe("measure")} title="Measure the stock with a 3D touch probe">Measure stock</button>}
         <button disabled={!ready} onClick={() => onProbe("setter")} title="Measure a tool on the tool setter">Tool setter</button>
+        <button onClick={() => onProbe("setup")} title="One-off setup of the 3D probe, tool setter and bed camera">Probe setup</button>
         <button disabled={locked} onClick={() => setAsk("z")} title="Move to Z0">Z0</button>
         {rotaryOn && <button disabled={locked} onClick={() => setAsk("a")} title="Move A to zero">A0</button>}
         {rotaryAvail && <button disabled={!idle} className={rotaryOn ? "on" : ""} onClick={() => setAsk("rotary")}>Rotary {rotaryOn ? "on" : "off"}</button>}

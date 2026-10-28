@@ -469,3 +469,203 @@ export function travelArea(cal, lim) {
 
 // Fewer points for storing
 export const thin = (pts, max = 400) => { const k = Math.max(1, Math.ceil(pts.length / max)); return pts.filter((_, i) => i % k === 0).map((p) => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 })); };
+
+// ---------- hands-off calibration with the probe's LED ring (1.38.0) ----------
+//
+// The probe's LED ring glows green, and red while the stylus is touched. The
+// machine touches the bed itself at a few spots; at each one the camera takes a
+// picture with the stylus still pressed (red ring) and one just after lifting it
+// 0.35 mm (green ring). The ring is the only thing whose colour flips between the
+// two, so it is found without anyone tapping the picture. At two spots the probe
+// is then lifted further and found again for the height: a picture lifted, and
+// one with the probe moved sideways, so the ring is the green spot that went away.
+//
+// The ring sits ledH mm above the stylus tip, so its pixels describe the plane
+// ledH above the bed. calibrateLed() fits that plane like calibrate() fits the
+// bed, then moves the result down to the bed along the rays from the camera.
+export const LED_H = 31;  // mm, LED ring above the stylus tip (EasyTouch: 26 mm stylus + ~5 mm)
+
+export const LED_R = 16;  // mm, radius of the LED ring (the probe body is 33 mm across)
+
+// The middle of a ring seen at an angle isn't quite where its centre is in the
+// picture (perspective). Once there is a first calibration, work out that
+// offset for each spot and take it off, then calibrate again.
+function ringBias(cal, m, t, r = LED_R) {
+  const c = toPixel(cal, m, t);
+  let sx = 0, sy = 0;
+  for (let k = 0; k < 36; k++) {
+    const a = (k * Math.PI) / 18, q = toPixel(cal, { x: m.x + r * Math.cos(a), y: m.y + r * Math.sin(a) }, t);
+    sx += q.x; sy += q.y;
+  }
+  return { x: sx / 36 - c.x, y: sy / 36 - c.y };
+}
+
+export function calibrateLed(points, size, ledH = LED_H) {
+  let cal = calibrateLedOnce(points, size, ledH);
+  for (let it = 0; it < 2 && cal && !cal.error; it++) {
+    const fixed = points.map((p) => {
+      if (!p.m || !p.px) return p;
+      const b = ringBias(cal, p.m, ledH), q = { ...p, px: { x: p.px.x - b.x, y: p.px.y - b.y } };
+      if (p.up) { const bu = ringBias(cal, p.m, ledH + p.up.dz); q.up = { ...p.up, x: p.up.x - bu.x, y: p.up.y - bu.y }; }
+      return q;
+    });
+    const next = calibrateLedOnce(fixed, size, ledH);
+    if (!next || next.error) break;
+    cal = next;
+  }
+  return cal;
+}
+
+function calibrateLedOnce(points, size, ledH) {
+  const low = points.filter((p) => p.m && p.px);
+  if (low.length < 4) return { error: "The camera found the probe at fewer than 4 spots. Check it can see the probe's light, or calibrate by tapping." };
+  const HL = fitHomography(low.map((p) => ({ from: p.px, to: p.m })));
+  if (!HL) return { error: "The spots the camera found don't fit together. Calibrate by tapping instead." };
+  const raised = low.filter((p) => p.up && p.up.dz > 5);
+  if (raised.length < 2) return { error: "The camera didn't find the lifted probe at 2 spots, so it can't work out heights. Calibrate by tapping instead." };
+  const rows = [], rhs = [];
+  for (const p of raised) {
+    const P = apply(HL, p.up.x, p.up.y);
+    rows.push([p.m.x, 1, 0]); rhs.push(P.x);
+    rows.push([p.m.y, 0, 1]); rhs.push(P.y);
+  }
+  const s = leastSquares(rows, rhs);
+  const dz = raised.reduce((a, p) => a + p.up.dz, 0) / raised.length;
+  if (!s || !(s[0] > 1.0005)) return { error: "The lifted probe didn't move in the picture the way it should. Calibrate by tapping instead." };
+  const k = s[0], c = { x: s[1] / (1 - k), y: s[2] / (1 - k) };
+  const hcL = (k * dz) / (k - 1);                 // camera above the LED plane
+  const hc = hcL + ledH;                          // camera above the bed
+  if (!(hc > 100 && hc < 5000)) return { error: `That puts the camera ${Math.round(hc)} mm above the bed, which can't be right. Calibrate by tapping instead.` };
+  // The bed seen through a pixel lies further out from c than the LED plane, by f
+  const f = hc / hcL;
+  const S = [[f, 0, c.x * (1 - f)], [0, f, c.y * (1 - f)], [0, 0, 1]];
+  const H = mul3(S, HL);
+  const zs = low.map((p) => p.m.z).sort((a, b) => a - b), zBed = zs[zs.length >> 1];
+  const cal = { H, Hinv: inv3(H), c, hc, zBed, size, n: low.length, time: Date.now(), led: true, ledH };
+  const errs = low.map((p) => { const q = toMachine(cal, p.px, ledH); return Math.hypot(q.x - p.m.x, q.y - p.m.y); });
+  const upErrs = raised.map((p) => { const q = toMachine(cal, p.up, ledH + p.up.dz); return Math.hypot(q.x - p.m.x, q.y - p.m.y); });
+  cal.rms = Math.sqrt([...errs, ...upErrs].reduce((a, e) => a + e * e, 0) / (errs.length + upErrs.length));
+  cal.worst = Math.max(...errs, ...upErrs);
+  cal.mmPerPx = mmPerPixel(cal);
+  return cal;
+}
+
+// Find a blob from a per-pixel score (on a shrunk copy). Returns its centroid in
+// full-size pixels, weighted by score over the strongest part, or null.
+function blob(score, w, h, s, minScore, near, radius) {
+  let max = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (near && Math.hypot((x + 0.5) * s - near.x, (y + 0.5) * s - near.y) > radius) continue;
+    if (score[y * w + x] > max) max = score[y * w + x];
+  }
+  if (max < minScore) return null;
+  // Connected area around the strongest pixel above 40% of it
+  const th = 0.4 * max, seen = new Uint8Array(w * h);
+  let start = -1;
+  for (let i = 0; i < w * h && start < 0; i++) if (score[i] === max) {
+    const x = i % w, y = (i / w) | 0;
+    if (!near || Math.hypot((x + 0.5) * s - near.x, (y + 0.5) * s - near.y) <= radius) start = i;
+  }
+  const stack = [start], pts = []; seen[start] = 1;
+  while (stack.length) {
+    const j = stack.pop(); pts.push(j);
+    const x = j % w, y = (j / w) | 0;
+    // 8-neighbours, and a 1-pixel gap, so the ring's segments join up
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+      const X = x + dx, Y = y + dy;
+      if (X < 0 || Y < 0 || X >= w || Y >= h) continue;
+      const k = Y * w + X;
+      if (!seen[k] && score[k] > th) { seen[k] = 1; stack.push(k); }
+    }
+  }
+  if (pts.length < 3) return null;
+  let sx = 0, sy = 0, sw = 0, x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const j of pts) {
+    const x = j % w, y = (j / w) | 0, v = score[j] - th;
+    sx += (x + 0.5) * v; sy += (y + 0.5) * v; sw += v;
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  }
+  return { x: (sx / sw) * s, y: (sy / sw) * s, n: pts.length, size: Math.max(x1 - x0 + 1, y1 - y0 + 1) * s, peak: max };
+}
+
+const LED_SCALE = 2; // work on a copy half the size: plenty for a ring 20+ px across
+
+// red: picture with the stylus pressed (red ring); green: just after lifting (green ring)
+export function detectLedFlip(red, green) {
+  if (!red || !green || red.width !== green.width || red.height !== green.height) return null;
+  const A = shrink(red, red.width / LED_SCALE), B = shrink(green, green.width / LED_SCALE), w = A.w, h = A.h;
+  const score = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const dG = B.px[i * 3 + 1] - A.px[i * 3 + 1];   // greener now
+    const dR = A.px[i * 3] - B.px[i * 3];           // was redder
+    score[i] = dG > 0 && dR > 0 ? Math.min(dG, dR) : 0;
+  }
+  const r = blob(score, w, h, A.s, 25);
+  return r && r.size < red.width * 0.2 ? r : null;
+}
+
+// here: the lifted ring; away: the same, with the probe moved sideways (so the
+// ring is somewhere else and nothing overlaps it). The green spot that is in
+// `here` and not in `away`, near `near`. Green things that never move cancel.
+export function detectLedMoved(away, here, near, radius) {
+  if (!away || !here || away.width !== here.width) return null;
+  const A = shrink(away, away.width / LED_SCALE), B = shrink(here, here.width / LED_SCALE), w = A.w, h = A.h;
+  const green = (P, i) => P.px[i * 3 + 1] - Math.max(P.px[i * 3], P.px[i * 3 + 2]);
+  const score = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) score[i] = Math.max(0, green(B, i) - Math.max(0, green(A, i)));
+  const r = blob(score, w, h, A.s, 25, near, radius || away.width * 0.3);
+  return r && r.size < away.width * 0.2 ? r : null;
+}
+
+// Spots spread over the machine's reach, kept clear of the tool setter
+// (a 3 x 3 grid: corners and middle first, so the first 6 already cover the whole
+// reach; calibration stops once it has 6 the camera saw)
+export function autoSpots(lim, setter) {
+  const order = [[0.15, 0.15], [0.85, 0.15], [0.85, 0.85], [0.15, 0.85], [0.5, 0.5], [0.5, 0.15], [0.85, 0.5], [0.5, 0.85], [0.15, 0.5]];
+  const out = [];
+  for (const [xf, yf] of order) {
+    {
+      let x = lim.x0 + (lim.x1 - lim.x0) * xf, y = lim.y0 + (lim.y1 - lim.y0) * yf;
+      if (setter && Number.isFinite(setter.x)) {
+        const keep = (setter.r || 33.2) + 25;
+        for (let n = 0; n < 6 && Math.abs(x - setter.x) < keep && Math.abs(y - setter.y) < keep; n++) {
+          // step towards the middle of the reach until clear of the setter
+          const mx = (lim.x0 + lim.x1) / 2, my = (lim.y0 + lim.y1) / 2, d = Math.hypot(mx - x, my - y) || 1;
+          x += ((mx - x) / d) * 30; y += ((my - y) / d) * 30;
+        }
+      }
+      out.push({ x: Math.round(x), y: Math.round(y) });
+    }
+  }
+  return out;
+}
+
+// Up to the top, across, then down to the bed. The first time the bed height
+// isn't known: come down guarded from the top. After that, rapid to `approach`
+// (a little above the bed) and touch from there. Ends pressed 0.15 mm into the
+// touch (red ring), so the picture can be taken; liftProgram(0.35) lets it go.
+export function autoTouchProgram({ top, x, y, approach, zMin, travel, fast, slow }) {
+  const lines = ["(Bed camera: auto touch)", "G21", "#<_ofa_ok> = 0",
+    `G90 G53 G0 Z${n4(top)}`, `G53 G0 X${n4(x)} Y${n4(y)}`];
+  if (Number.isFinite(approach)) lines.push(`G53 G0 Z${n4(approach)}`);
+  const from = Number.isFinite(approach) ? approach : top;
+  lines.push(`G91 G38.3 Z${n4(-(from - zMin))} F${Math.min(travel, 800)}`,
+    "o420 if [#5070 EQ 1]",
+    `G91 G1 Z1 F${fast}`, `G91 G38.2 Z-2 F${slow}`,
+    "#<_ofa_z> = #5063",
+    `G91 G1 Z-0.15 F${slow}`,
+    "#<_ofa_ok> = 1",
+    "o420 else",
+    `G90 G53 G0 Z${n4(top)}`,
+    "o420 endif",
+    "G90", "M2");
+  return lines.join("\n") + "\n";
+}
+
+// Sideways move for the lifted picture: towards the middle of the reach
+export const AWAY = 80;
+export function awayMove(spot, lim) {
+  const mx = (lim.x0 + lim.x1) / 2;
+  return spot.x < mx ? AWAY : -AWAY;
+}
+export const sidewaysProgram = (dx) => ["(Bed camera: sideways)", "G21", `G91 G0 X${n4(dx)}`, "G90", "M2"].join("\n") + "\n";
