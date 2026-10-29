@@ -94,6 +94,7 @@ const speeds = Buffer.from(new Float32Array(spd).buffer);
 
 let timer = null;
 // M62-M66 (1.45.0): state.user_io as the controller works it out (UserIO.plan via mock/userio.py)
+let mockWifiInternal = true; // 1.46.0: built-in Wi-Fi or a USB adapter
 function mockUserIo() {
   try { return JSON.parse(execFileSync("python3", [new URL("./userio.py", import.meta.url).pathname], { input: JSON.stringify(config) }).toString()); }
   catch (e) { return { outputs: {}, inputs: {}, notes: ["mock: " + e.message] }; }
@@ -359,7 +360,8 @@ const server = http.createServer((req, res) => {
   }
   if (p === "/mock/error") { errId++; broadcast({ last_error: { id: errId, msg: url.searchParams.get("msg") || "Invalid character: ','", at: Date.now() / 1000 } }); return json(res, "ok"); }
   if (p === "/api/hostname") return json(res, "onefinity");
-  if (p === "/api/network") return json(res, { ipAddresses: ["192.168.1.42"], hostname: "onefinity", wifi: { enabled: true, ssid: "Shop-WiFi", networks: [{ Name: "Shop-WiFi", Quality: 78 }, { Name: "Neighbor", Quality: 34 }, { Name: "Guest", Quality: 55 }] } });
+  if (p === "/api/network" && req.method === "PUT") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { const w = JSON.parse(b).wifi || {}; if ("internal" in w) mockWifiInternal = !!w.internal; } catch {} json(res, "ok"); }); return; }
+  if (p === "/api/network") return json(res, { ipAddresses: ["192.168.1.42"], hostname: "onefinity", wifi: { enabled: true, ssid: "Shop-WiFi", internal: mockWifiInternal, networks: [{ Name: "Shop-WiFi", Quality: 78 }, { Name: "Neighbor", Quality: 34 }, { Name: "Guest", Quality: 55 }] } });
   if (p === "/api/time") return json(res, { timeinfo: "Local time: Fri 2026-10-09 10:15:00\nTime zone: America/New_York (EDT)", timezones: "America/New_York\nAmerica/Chicago\nUTC" });
   if (p === "/api/screen-rotation") return json(res, { rotated: false });
   if (p === "/api/video") {

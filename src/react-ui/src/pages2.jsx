@@ -337,6 +337,13 @@ function Network() {
     const n = dlg.net; setRebooting("Rebooting to apply Wi-Fi changes…");
     try { await api.put("network", { wifi: { enabled: !n.active, ssid: n.Name, password: pw } }); } catch (e) { setRebooting(""); setErr(e.message); }
   };
+  // 1.46.0: use a USB Wi-Fi adapter instead of the built-in Wi-Fi (Buildbotics 0.4.15)
+  const internal = net?.wifi?.internal !== false;
+  const switchAdapter = async () => {
+    setDlg(null);
+    setRebooting(internal ? "Turning off the built-in Wi-Fi and rebooting. Plug in the USB adapter if it isn't already, then choose your network again here in about a minute." : "Turning the built-in Wi-Fi back on and rebooting…");
+    try { await api.put("network", { wifi: { internal: !internal } }); } catch (e) { setRebooting(""); setErr(e.message); }
+  };
   const rename = async () => {
     setRebooting("Rebooting to apply the new hostname. Reconnect using the new name in about 45 seconds.");
     try { await api.put("hostname", { hostname: host }); await api.put("reboot"); } catch (e) { setRebooting(""); setErr(e.message); }
@@ -348,6 +355,7 @@ function Network() {
           <div className="stat"><dt>Hostname</dt><dd>{net?.hostname || "—"} <button className="quiet" onClick={() => { setHost(""); setDlg({ kind: "host" }); }}>Change</button></dd></div>
           <div className="stat"><dt>IP address</dt><dd>{net ? [].concat(net.ipAddresses).join(", ") : "—"}</dd></div>
           <div className="stat"><dt>Wi-Fi network</dt><dd>{net?.wifi?.ssid || "Not connected"}</dd></div>
+          <div className="stat"><dt>Wi-Fi adapter</dt><dd>{!net ? "—" : internal ? "Built-in" : "USB adapter"} {net && <button className="quiet" onClick={() => setDlg({ kind: "adapter" })}>{internal ? "Use a USB adapter" : "Use the built-in Wi-Fi"}</button>}</dd></div>
         </dl>
         {err && <p className="err">{err}</p>}
       </Group>
@@ -366,6 +374,17 @@ function Network() {
         <Modal title={`${dlg.net.active ? "Disconnect from" : "Connect to"} ${dlg.net.Name}`} onClose={() => setDlg(null)} actions={<><button onClick={() => setDlg(null)}>Cancel</button><button className="primary" onClick={connect}>{dlg.net.active ? "Disconnect" : "Connect"}</button></>}>
           {!dlg.net.active && dlg.net.Encryption !== "Open" && <label className="stack">Password<input data-autofocus type="password" autoComplete="off" value={pw} onChange={(e) => setPw(e.target.value)} /></label>}
           <p className="dim">The controller will reboot.</p>
+        </Modal>
+      )}
+      {dlg?.kind === "adapter" && (
+        <Modal title={internal ? "Use a USB Wi-Fi adapter" : "Use the built-in Wi-Fi"} onClose={() => setDlg(null)} actions={<><button onClick={() => setDlg(null)}>Cancel</button><button className="primary" onClick={switchAdapter}>Switch and reboot</button></>}>
+          {internal ? (
+            <>
+              <p>The controller's own Wi-Fi sits inside its metal case, which weakens the signal. A USB adapter on a short extension lead, outside the case, usually reaches further.</p>
+              <p>This turns the built-in Wi-Fi off and reboots. Afterwards the controller uses the USB adapter, so choose your network again on this page. Adapters with MT7601U or RT5370 chips are the ones known to work on Buildbotics controllers; others may not.</p>
+              <p className="warn-text">If the adapter doesn't work, the controller has no Wi-Fi until you switch back. Have an Ethernet cable or the controller's own screen ready to do that.</p>
+            </>
+          ) : <p>This turns the built-in Wi-Fi back on and reboots. Unplug the USB adapter, then choose your network again on this page.</p>}
         </Modal>
       )}
       {dlg?.kind === "host" && (

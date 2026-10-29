@@ -253,6 +253,14 @@ class NetworkHandler(bbctrl.APIHandler):
         wifi = self.json['wifi']
         cmd = ['config-wifi', '-r']
 
+        # 1.46.0: switch between the built-in wifi and a USB adapter only
+        if set(wifi) == {'internal'}:
+            cmd += ['-X' if wifi['internal'] else '-x']
+            if subprocess.call(cmd) == 0:
+                self.write_json('ok')
+                return
+            raise HTTPError(400, 'Failed to change the wifi adapter')
+
         if not wifi['enabled']:
             cmd += ['-d']
         else:
