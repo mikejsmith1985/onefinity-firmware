@@ -67,6 +67,13 @@ check('a block against the body: its touch dropped, centre still right (or nothi
 # 4. Saved far off: stops with a reason, never hits anything
 sim, r, _ = run(dict(x=CX + 40, y=CY, z=-15))
 check('saved 40 mm off: nothing under the probe -> stops (1)', r.get('ofx_ok') == 0 and r.get('ofx_fail') == 1, r)
+# 4b. Something sitting on top of the setter (on the machine the probe touched 40 mm above the cap): stops (4)
+# (saved height 23 mm below the cap, as on the machine with the cutter it was saved with: so only
+# a touch more than 7 mm above the cap counts as something else here)
+sim, r, _ = run(dict(x=CX, y=CY, z=-45), [BED] + setter() + [Cyl(CX, CY, 6, -22, -5)])
+check('(the setter alone, saved like that, still works)', run(dict(x=CX, y=CY, z=-45))[1].get('ofx_ok') == 1)
+check('something on top of the setter: stops (4), nothing saved', r.get('ofx_fail') == 4 and 'error' in js('setterCentre', r, None), r)
+check('  and ends at the top of Z (1.40.0 lifted 10 mm from the touch and went past the limit)', abs(sim.P[2] - TOP) < 1e-6, sim.P)
 # 5. Everything blocked: nothing saved
 ring = [Cyl(CX + 25 * math.cos(a * math.pi / 4), CY + 25 * math.sin(a * math.pi / 4), 3, -60, -10) for a in range(8)]
 sim, r, _ = run(dict(x=CX, y=CY, z=-15), [BED] + setter() + ring)

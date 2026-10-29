@@ -113,6 +113,9 @@ export function setterCentreProgram(o) {
     `G91 G1 Z1 F${o.fast}`, `G91 G38.2 Z-2 F${o.slow}`,
     "#<_ofx_top> = #5063",
     `G90 G53 G0 Z${n(o.top)}`,
+    // 1.40.2: a touch far above the setter is something else (on the machine: 40 mm above the
+    // cap). Same allowance as the setter routine's clearance for longer tools.
+    `o611 if [#<_ofx_top> GT ${n(z + o.clear)}]`, "#<_ofx_fail> = 4", "o611 endif",
     "o610 else", "#<_ofx_fail> = 1", "o610 endif",
   ];
   for (let i = 0; i < dirs; i++) {
@@ -140,6 +143,7 @@ export function setterCentreProgram(o) {
 }
 export const CENTRE_FAILS = {
   1: "The probe came down over the saved setter position without touching anything. Jog over the setter and save its position roughly first.",
+  4: "The probe touched something well above the setter, so it stopped. Check nothing is on or over the setter (a hand, a part, a loose cable) and try again.",
 };
 // Circle through points (least squares, algebraic fit): {x, y, r, res: worst distance off it}
 export function fitCircle(pts) {
