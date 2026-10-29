@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const NEXT = process.env.MOCK_UI_DIR || path_.resolve(path_.dirname(fileURLToPath(import.meta.url)), "../../resources/next");
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".woff2": "font/woff2", ".woff": "font/woff" };
 import { WebSocketServer } from "ws";
+import { abcard } from "./abcard.mjs";
 import { spawnSync } from "node:child_process";
 
 const PORT = process.env.PORT || 8080;
@@ -359,6 +360,7 @@ const server = http.createServer((req, res) => {
     let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { let body = {}; try { body = JSON.parse(b); } catch {} json(res, uiPut(name, body)); }); return;
   }
   if (p === "/mock/error") { errId++; broadcast({ last_error: { id: errId, msg: url.searchParams.get("msg") || "Invalid character: ','", at: Date.now() / 1000 } }); return json(res, "ok"); }
+  if (abcard(req, res, p, json)) return;
   if (p === "/api/hostname") return json(res, "onefinity");
   if (p === "/api/network" && req.method === "PUT") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { const w = JSON.parse(b).wifi || {}; if ("internal" in w) mockWifiInternal = !!w.internal; } catch {} json(res, "ok"); }); return; }
   if (p === "/api/network") return json(res, { ipAddresses: ["192.168.1.42"], hostname: "onefinity", wifi: { enabled: true, ssid: "Shop-WiFi", internal: mockWifiInternal, networks: [{ Name: "Shop-WiFi", Quality: 78 }, { Name: "Neighbor", Quality: 34 }, { Name: "Guest", Quality: 55 }] } });

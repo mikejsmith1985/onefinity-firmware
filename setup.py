@@ -33,6 +33,7 @@ setup(
         'scripts/config-screen',
         'scripts/edit-config',
         'scripts/edit-boot-config',
+        'scripts/ab-card',
         'scripts/browser',
         ],
     install_requires = 'tornado sockjs-tornado pyserial pyudev smbus2 watchdog'.split(),

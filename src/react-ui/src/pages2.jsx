@@ -4,6 +4,7 @@ import { getPrefs, setPrefs, useCheckpoint, isInterrupted } from "./checkpoint.j
 import { api, MACRO_PREFIX, DELETE_LIST_PREFIX } from "./controller.js";
 import { Page, Group, Modal, Confirm, SubTabs } from "./ui.jsx";
 import { PlugPrefs } from "./Plugs.jsx";
+import { SdCard } from "./SdCard.jsx";
 
 /* ------------------------------------------------------------------ Macros */
 const DEFAULTS = Array.from({ length: 8 }, (_, i) => ({ name: `Macro ${i + 1}`, color: "#dedede", file_name: "default", alert: true }));
@@ -401,8 +402,8 @@ export function Admin({ cfg, state, metric, sub, go, ver }) {
   if (!cfg.config) return <Page title="Admin"><p className="empty">Loading settings from the controller…</p></Page>;
   return (
     <Page title="Admin">
-      <SubTabs items={[["general", "General"], ["network", "Network"]]} value={sub} onChange={(v) => go(`admin-${v}`)} />
-      {sub === "network" ? <Network /> : <General cfg={cfg} ver={ver} state={state} />}
+      <SubTabs items={[["general", "General"], ["network", "Network"], ["card", "SD card"]]} value={sub} onChange={(v) => go(`admin-${v}`)} />
+      {sub === "network" ? <Network /> : sub === "card" ? <SdCard state={state} /> : <General cfg={cfg} ver={ver} state={state} />}
     </Page>
   );
 }

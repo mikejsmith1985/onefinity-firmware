@@ -1,6 +1,8 @@
 import os
 import json
 import tornado
+import tornado.process
+import tornado.web
 import time
 import sockjs.tornado
 import datetime
@@ -436,6 +438,125 @@ class ConfigSaveHandler(bbctrl.APIHandler):
 
 class ConfigResetHandler(bbctrl.APIHandler):
     def put_ok(self): self.get_ctrl().config.reset()
+
+
+# A/B SD card (1.47.0, scripts/ab-card)
+AB_DOWNLOADS = '/var/lib/bbctrl/os-update'
+
+@gen.coroutine
+def ab_card(*args):
+    "Runs ab-card without holding up the controller: (stdout, stderr, code)"
+    proc = tornado.process.Subprocess(('ab-card',) + args,
+                                      stdout = tornado.process.Subprocess.STREAM,
+                                      stderr = tornado.process.Subprocess.STREAM)
+    out, err = yield [proc.stdout.read_until_close(),
+                      proc.stderr.read_until_close()]
+    ret = yield proc.wait_for_exit(False)
+    return out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace'), ret
+
+
+def ab_job_running():
+    try:
+        with open('/run/ab-card/job.json') as f: job = json.load(f)
+        return job.get('state') == 'running' and \
+            os.path.exists('/proc/%d' % job.get('pid', 0))
+    except Exception: return False
+
+
+def ab_check_idle(handler):
+    if handler.get_ctrl().args.demo:
+        raise HTTPError(400, 'Not available in demo mode')
+    if handler.get_ctrl().state.get('cycle', 'idle') != 'idle':
+        raise HTTPError(409, 'Wait until the machine is idle')
+
+
+class ABCardHandler(bbctrl.APIHandler):
+    @gen.coroutine
+    def get(self):
+        out, err, ret = yield ab_card('status')
+        if ret: raise HTTPError(500, err.strip() or 'ab-card failed')
+        self.write(out)
+
+
+    @gen.coroutine
+    def put(self):
+        ab_check_idle(self)
+        action = self.json.get('action')
+
+        # Long jobs report progress through "status"
+        jobs = {
+            'make': lambda: ['make', self.json['device'], '--yes'],
+            'copy': lambda: ['copy'],
+            'fetch': lambda: ['fetch', self.json['url']] +
+                (['--sha256', self.json['sha256']] if self.json.get('sha256')
+                 else []),
+        }
+        if action in jobs:
+            if ab_job_running():
+                raise HTTPError(409, 'A card job is already running')
+            args = jobs[action]()
+            for a in args:
+                if a.startswith('-') and a not in ('--yes', '--sha256'):
+                    raise HTTPError(400, 'Bad argument')
+            subprocess.Popen(['ab-card'] + args, stdout = subprocess.DEVNULL,
+                             stderr = subprocess.DEVNULL,
+                             start_new_session = True)
+            self.write_json('ok')
+            return
+
+        if action == 'switch':
+            if self.json.get('slot') not in ('a', 'b'):
+                raise HTTPError(400, 'Bad slot')
+            args = ['switch', self.json['slot']]
+        elif action in ('try', 'keep', 'dismiss'): args = [action]
+        else: raise HTTPError(400, 'Unknown action')
+
+        out, err, ret = yield ab_card(*args)
+        if ret: raise HTTPError(400, err.replace('ab-card: ', '').strip())
+        if action in ('try', 'switch'):
+            self.get_ctrl().lcd.goodbye('Restarting...')
+        self.write_json('ok')
+
+
+@tornado.web.stream_request_body
+class ABCardUploadHandler(bbctrl.RequestHandler):
+    "An OS file for the other slot, written to disk as it arrives"
+    def prepare(self):
+        self.file = None
+        ab_check_idle(self)
+        if ab_job_running(): raise HTTPError(409, 'A card job is already running')
+        size = int(self.request.headers.get('Content-Length', 0))
+        os.makedirs(AB_DOWNLOADS, exist_ok = True)
+        st = os.statvfs(AB_DOWNLOADS)
+        if st.f_bavail * st.f_frsize < size + (200 << 20):
+            raise HTTPError(400, 'Not enough free space for this file')
+        self.sha = (self.get_argument('sha256', '') or '').strip()
+        if self.sha and not re.match(r'^[0-9a-fA-F]{64}$', self.sha):
+            raise HTTPError(400, 'The checksum should be 64 hex digits')
+        self.request.connection.set_max_body_size(16 << 30)
+        self.path = os.path.join(AB_DOWNLOADS, 'bundle.tar')
+        self.file = open(self.path + '.part', 'wb')
+
+
+    def data_received(self, chunk): self.file.write(chunk)
+
+
+    def on_connection_close(self):
+        if self.file is not None and not self.file.closed:
+            self.file.close()
+            try: os.unlink(self.path + '.part')
+            except OSError: pass
+
+
+    def put(self):
+        self.file.close()
+        os.rename(self.path + '.part', self.path)
+        subprocess.Popen(['ab-card', 'write', self.path] +
+                         (['--sha256', self.sha] if self.sha else []),
+                         stdout = subprocess.DEVNULL,
+                         stderr = subprocess.DEVNULL, start_new_session = True)
+        self.set_header('Content-Type', 'application/json')
+        self.write(json.dumps('ok'))
 
 
 class FirmwareUpdateHandler(bbctrl.APIHandler):
@@ -1267,6 +1388,8 @@ class Web(tornado.web.Application):
             (r'/api/config/restore',ConfigRestoreHandler),
             (r'/api/firmware/update', FirmwareUpdateHandler),
             (r'/api/upgrade', UpgradeHandler),
+            (r'/api/abcard', ABCardHandler),
+            (r'/api/abcard/upload', ABCardUploadHandler),
             (r'/api/file(/[^/]+)?', bbctrl.FileHandler),
             (r'/api/path/([^/]+)((/positions)|(/speeds))?', PathHandler),
             (r'/api/home(/[xyzabcXYZABC]((/set)|(/clear))?)?', HomeHandler),

@@ -46,20 +46,29 @@ fi
 #     REBOOT=true
 # fi
 
+# On an A/B card each slot has its own cmdline.txt (see scripts/ab-card)
+CMDLINE=/boot/cmdline.txt
+if [ -d /boot/a ] && [ -d /boot/b ]; then
+    case "$(findmnt -n -o SOURCE /)" in
+        *mmcblk0p2) CMDLINE=/boot/a/cmdline.txt ;;
+        *mmcblk0p3) CMDLINE=/boot/b/cmdline.txt ;;
+    esac
+fi
+
 # Fix camera
-grep dwc_otg.fiq_fsm_mask /boot/cmdline.txt >/dev/null
+grep dwc_otg.fiq_fsm_mask $CMDLINE >/dev/null
 if [ $? -ne 0 ]; then
     mount -o remount,rw /boot &&
-    sed -i 's/\(.*\)/\1 dwc_otg.fiq_fsm_mask=0x3/' /boot/cmdline.txt
+    sed -i 's/\(.*\)/\1 dwc_otg.fiq_fsm_mask=0x3/' $CMDLINE
     mount -o remount,ro /boot
     REBOOT=true
 fi
 
 # Enable memory cgroups
-grep cgroup_memory /boot/cmdline.txt >/dev/null
+grep cgroup_memory $CMDLINE >/dev/null
 if [ $? -ne 0 ]; then
     mount -o remount,rw /boot &&
-    sed -i 's/\(.*\)/\1 cgroup_memory=1/' /boot/cmdline.txt
+    sed -i 's/\(.*\)/\1 cgroup_memory=1/' $CMDLINE
     mount -o remount,ro /boot
     REBOOT=true
 fi
@@ -117,6 +126,11 @@ if [ $? -ne 0 ]; then
     depmod
     REBOOT=true
 fi
+
+# Boot firmware for making A/B cards (scripts/ab-card)
+mkdir -p /usr/local/share/ab-card
+rm -rf /usr/local/share/ab-card/boot-firmware
+cp -r scripts/ab-boot-firmware /usr/local/share/ab-card/boot-firmware
 
 # Install rc.local
 cp scripts/rc.local /etc/

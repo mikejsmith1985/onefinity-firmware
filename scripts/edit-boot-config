@@ -1,12 +1,20 @@
 #!/bin/bash
 
-cp /boot/config.txt /tmp/
+# Edits /boot/config.txt, and on an A/B card also tryboot.txt (the same
+# settings, starting the other slot; see ab-card)
 
-edit-config /tmp/config.txt "$@"
+for CONFIG in /boot/config.txt /boot/tryboot.txt; do
+  [ -e $CONFIG ] || continue
+  NAME=$(basename $CONFIG)
 
-diff /boot/config.txt /tmp/config.txt >/dev/null
-if [ $? -eq 1 ]; then
-  mount -o remount,rw /boot
-  mv /tmp/config.txt /boot/
-  mount -o remount,ro /boot
-fi
+  cp $CONFIG /tmp/$NAME
+
+  edit-config /tmp/$NAME "$@"
+
+  diff $CONFIG /tmp/$NAME >/dev/null
+  if [ $? -eq 1 ]; then
+    mount -o remount,rw /boot
+    mv /tmp/$NAME /boot/
+    mount -o remount,ro /boot
+  fi
+done

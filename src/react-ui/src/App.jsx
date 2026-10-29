@@ -30,6 +30,7 @@ function parseHash() {
   const [a, b] = h.split(":");
   if (a === "motor") return { page: "motors", index: Number(b) || 0 };
   if (a === "admin-network") return { page: "admin", sub: "network" };
+  if (a === "admin-card") return { page: "admin", sub: "card" };
   if (a === "admin-general" || a === "admin") return { page: "admin", sub: "general" };
   if (TABS.some(([id]) => id === a)) return { page: a };
   return { page: "control" };

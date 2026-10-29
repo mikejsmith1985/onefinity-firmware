@@ -510,3 +510,14 @@ svg.art { width: 100%; height: auto; display: block; background: var(--bed); bor
 .setup-steps li.done .mark { background: #4fd18b; color: #0b1a12; }
 .setup-steps li.next .mark { background: var(--blue, #4f8cff); color: #fff; }
 .setup-steps p { margin: 4px 0 8px; }
+
+/* A/B SD card (1.47.0) */
+.abslot { border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; margin: 0 0 8px; }
+.abslot.on { border-color: var(--blue); }
+.abslot p { margin: 4px 0 0; }
+.abhead { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.abjob { border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; margin: 10px 0; }
+.abjob p { margin: 4px 0; }
+.abtrial { border: 1px solid var(--yellow); border-radius: 6px; padding: 8px 10px; margin: 0 0 12px; }
+.abtrial p { margin: 4px 0 8px; }
+ol.abwhat { margin: 6px 0; padding-left: 22px; } ol.abwhat li { margin: 3px 0; }
