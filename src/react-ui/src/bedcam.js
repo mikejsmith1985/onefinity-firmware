@@ -677,8 +677,13 @@ export const sidewaysProgram = (dx) => ["(Bed camera: sideways)", "G21", `G91 G0
 // You only show it the board: jog over three of its corners. The outer pieces
 // of a slatted spoilboard are MDF, so a spot a little in from a corner is MDF.
 export const MARK = { inset: 25, size: 20, depth: 1.2, plunge: 300, feed: 1000, rpm: 18000 };
-const CORNERS = ["fl", "fr", "bl"];  // front left, front right, back left
-export const CORNER_NAMES = { fl: "front-left", fr: "front-right", bl: "back-left" };
+// 1.41.0: two more, part way up the left and right sides, at different heights and further in
+// from the edge than the corner ones (not in line with them: three crosses in a line, or the two
+// on a side swapped, would fit a camera just as well). So the layout has no symmetry and the
+// camera calibration can tell which cross is which. Still on the outer slats.
+const SIDES = { ml: 0.4, mr: 0.62 }, SIDE_IN = 45;
+export const MARK_IDS = ["fl", "fr", "bl", "ml", "mr"];
+export const CORNER_NAMES = { fl: "front-left", fr: "front-right", bl: "back-left", ml: "left side", mr: "right side" };
 
 // corners: {fl, fr, bl} machine {x, y} (the fourth corner is where the setter is).
 // Returns {spots: [{id, x, y}], error}. The spots sit `inset` in from both edges
@@ -696,9 +701,10 @@ export function markerSpots(corners, lim, setter, o = {}) {
   if (Math.abs(dot) > 0.1) return { error: "Those three corners aren't square to each other. Front-left, front-right, then back-left." };
   if (u.x * v.y - u.y * v.x < 0) return { error: "The corners look swapped: front-right should be to the right of front-left, and back-left behind it." };
   const at = (c, su, sv) => ({ x: c.x + su * inset * u.x + sv * inset * v.x, y: c.y + su * inset * u.y + sv * inset * v.y });
-  const raw = { fl: at(fl, 1, 1), fr: at(fr, -1, 1), bl: at(bl, 1, -1) };
+  const side = (c, su, f) => ({ x: c.x + su * SIDE_IN * u.x + f * lv * v.x, y: c.y + su * SIDE_IN * u.y + f * lv * v.y });
+  const raw = { fl: at(fl, 1, 1), fr: at(fr, -1, 1), bl: at(bl, 1, -1), ml: side(fl, 1, SIDES.ml), mr: side(fr, -1, SIDES.mr) };
   const notes = [];
-  const spots = CORNERS.map((id) => {
+  const spots = MARK_IDS.map((id) => {
     let { x, y } = raw[id];
     const m = half + 2;
     if (lim) {

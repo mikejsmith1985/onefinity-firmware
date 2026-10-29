@@ -63,7 +63,7 @@ async def main():
         check('park defaults to the tool setter', 'Over the tool setter (machine X 760' in t, t[t.find('PARK'):][:160] if 'PARK' in t else t[:200])
 
         # Calibrate: the probe check, then hands-off
-        await page.click(f'{side} button.primary:has-text("Calibrate")'); await page.wait_for_timeout(400)
+        await page.click(f'{side} button:has-text("Calibrate with the probe\'s light")'); await page.wait_for_timeout(400)  # 1.41.0: the crosses are the main way now
         check('asks to push the stylus first', 'Push the stylus sideways' in await text(page, side))
         start = page.locator(f'{side} button:has-text("Start")')
         check('no Start before the probe check', await start.count() == 0)

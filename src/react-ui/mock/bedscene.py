@@ -6,7 +6,7 @@
 import sys, json, io, math
 import numpy as np
 
-W, H, F = 1280, 720, 800
+W, H, F = 1280, 720, 650     # 1.41.0: wider, so the crosses at the back corners are in view
 BED = -100.0                                   # spoilboard top, machine Z
 LED_H = 31.5                                   # probe LED ring above the stylus tip (1.38.0)
 CAM = np.array([405.0, 440.0, BED + 900.0])    # camera position (machine): sees the whole reach (1.38.0)
@@ -47,6 +47,13 @@ def render(q):
     if q.get('stock'):
         sx, sy = unproject(STOCK['t'])
         img[in_stock(sx, sy)] = [120, 85, 60]
+    # 1.41.0: the carved crosses, inked: 20 mm across, on the bed (lines drawn 2.5 mm wide so they
+    # come out 2 px at this mock camera's 1.4 mm per pixel; the detection itself is tested in
+    # test/bedcam-markers-cal.mjs at the machine's 0.6 mm per pixel)
+    for m in q.get('marks') or []:
+        dx, dy = x - m['x'], y - m['y']
+        cross = ((np.abs(dy) < 1.25) & (np.abs(dx) < 10)) | ((np.abs(dx) < 1.25) & (np.abs(dy) < 10))
+        img[cross] = [45, 42, 40]
     rng = np.random.default_rng(int(q.get('seed', 1)))
     img = np.clip(img * q.get('gain', 1.0) + rng.normal(0, 3, img.shape), 0, 255).astype(np.uint8)
     im = Image.fromarray(img); d = ImageDraw.Draw(im)

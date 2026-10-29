@@ -317,7 +317,8 @@ const server = http.createServer((req, res) => {
   }
   if (p === "/api/camera/frame") {
     const r = spawnSync("python3", [path_.join(path_.dirname(fileURLToPath(import.meta.url)), "bedscene.py")],
-      { input: JSON.stringify({ x: state.xp, y: state.yp, z: state.zp, stock: stockOn, seed: Date.now() % 1000, led: probeLed() }) });
+      { input: JSON.stringify({ x: state.xp, y: state.yp, z: state.zp, stock: stockOn, seed: Date.now() % 1000, led: probeLed(),
+        marks: process.env.MOCK_NO_MARKS ? [] : (store.bedcam?.markers?.spots || []) }) });  // 1.41.0: the carved, inked crosses
     if (r.status !== 0) { console.error("bedscene:", String(r.stderr)); res.writeHead(503); return res.end(); }
     res.writeHead(200, { "Content-Type": "image/jpeg" }); return res.end(r.stdout);
   }

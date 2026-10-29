@@ -106,19 +106,64 @@ async def main():
         t = await wait_text(page, side, r'Ready to carve|Stopped', 30)
         check('V-bit measured', t and 'Ready to carve' in t and 'router turns on' in t.lower(), (t or '')[:300])
         await page.click(f'{side} button.primary:has-text("Carve")')
-        t = await wait_text(page, side, r'Markers carved|Stopped', 30)
+        t = await wait_text(page, side, r'Carved|Stopped', 30)
         await shot(page, 'mk3-done.png')
-        check('carved', t and 'Markers carved' in t, (t or '')[:300])
+        check('carved, and told to ink the grooves', t and 'Carved' in t and 'black marker' in t, (t or '')[:300])
         carve = [m for m in http('/api/mdis') if '(Bed markers: carve)' in m]
         c = carve[-1] if carve else ''
         # bed -100 (probe), V-bit 12 longer, corr 0.19: surface -87.81, start 3 above, 1.2 deep
-        check('carve program: router on, 6 strokes', c.count('M3 S') == 1 and c.count('G1 X20') == 3 and c.count('G1 Y20') == 3 and c.rstrip().endswith('M2'), c[:300])
+        check('carve program: router on, 5 crosses (1.41.0: two on the sides too)', c.count('M3 S') == 1 and c.count('G1 X20') == 5 and c.count('G1 Y20') == 5 and c.rstrip().endswith('M2'), c[:300])
         check('cuts 1.2 mm into the board, from the measured heights', 'G53 G0 Z-84.81\nG91 G1 Z-4.2 F300' in c, c[:400])
         check('first cross: horizontal arm centred on the front-left spot', 'G53 G0 X19' in c or re.search(r'G53 G0 X1\d\.\d+ Y3\d', c), c[:200])
         bc = http('/api/next-store/bedcam')
-        check('marker positions saved', len((bc.get('markers') or {}).get('spots') or []) == 3, bc.get('markers'))
+        spots = (bc.get('markers') or {}).get('spots') or []
+        check('marker positions saved, with heights relative to the setter cap', len(spots) == 5 and all(abs(k['rel'] - (-84.8)) < 0.01 for k in spots), spots)
         await page.click(f'{side} button.primary:has-text("Done")'); await page.wait_for_timeout(300)
-        check('Camera tab says when they were carved', 'Carved' in await text(page, side))
+        check('Camera tab says all 5 are carved', '5 of 5 crosses carved' in await text(page, side))
+
+        # 1.41.0: Calibrate from the crosses (the mock camera draws them, inked)
+        await ws(page, 'mock:stock off')
+        await page.click(f'{side} button.primary:has-text("Calibrate")')
+        t = await wait_text(page, side, r'Calibrated from the|almost straight down|Stopped|found', 60)
+        if t and 'almost straight down' in t:
+            check('mock camera looks nearly straight down: asks for the height from a tape', 'Camera height above the bed' in t, t[:300])
+            await page.fill(f'{side} label:has-text("Camera height above the bed") input', '900'); await page.wait_for_timeout(500)
+            await page.click(f'{side} button.primary:has-text("Calibrate")')
+            t = await wait_text(page, side, r'Calibrated from the|Stopped|found', 60)
+        await shot(page, 'mk5-calibrated.png')
+        check('calibrated from the 5 crosses', t and 'Calibrated from the 5 crosses' in t, (t or '')[:400])
+        bc = http('/api/next-store/bedcam'); cal = bc.get('cal') or {}
+        check('  saved: from the markers, camera height within 8% of 900 mm (coarse mock camera, 1.4 mm per pixel), empty-bed picture taken', cal.get('from') == 'markers' and abs(cal.get('hc', 0) - 900) < 72 and bc.get('base'), {k: cal.get(k) for k in ('from', 'hc', 'worst', 'n')})
+        check('  machine Z of the bed kept for Measure stock', abs(cal.get('zBed', 0) - (-100)) < 0.01, cal.get('zBed'))
+
+        # 1.41.0: the board heights are known from 3 crosses: the two new ones need only the V-bit
+        bc['markers']['spots'] = [k for k in bc['markers']['spots'] if k['id'] in ('fl', 'fr', 'bl')]
+        http('/api/next-store/bedcam', bc)
+        n0 = len(http('/api/mdis'))
+        await page.reload(); await page.wait_for_timeout(1500)
+        for t in ('Cancel', 'Not now', 'Later'):
+            loc = page.locator(f'.modal button:has-text("{t}")')
+            if await loc.count(): await loc.first.click()
+        await page.click('button[role=tab]:has-text("Camera")'); await page.wait_for_timeout(800)
+        await page.click(f'{side} button:has-text("Carve the rest")'); await page.wait_for_timeout(400)
+        t = await text(page, side)
+        check('3 carved already: listed as carved, Next says 2 new', t.count('(carved)') == 3 and 'Next (2 new)' in t, t[:500])
+        await page.click(f'{side} button.primary:has-text("Next")'); await page.wait_for_timeout(400)
+        t = await text(page, side)
+        check('heights known: no probe step, straight to the V-bit', 'Put the V-bit in' in t and 'Push the stylus' not in t, t[:300])
+        await ws(page, 'mock:tool 12')
+        await page.click(f'{side} button.primary:has-text("measure it")')
+        t = await wait_text(page, side, r'Ready to carve|Stopped', 30)
+        check('  V-bit measured', t and 'Ready to carve the 2 crosses' in t, (t or '')[:300])
+        await page.click(f'{side} button.primary:has-text("Carve")')
+        t = await wait_text(page, side, r'Carved|Stopped', 30)
+        sent = http('/api/mdis')[n0:]
+        check('  no probe touches this time', not any('(Bed camera: auto touch)' in m or '(Tool setter: find centre)' in m for m in sent))
+        c = [m for m in sent if '(Bed markers: carve)' in m][-1:] or ['']
+        check('  carves only the 2 new ones, at the same depth as before', c[0].count('G1 X20') == 2 and 'G53 G0 Z-84.81\nG91 G1 Z-4.2 F300' in c[0], c[0][:400])
+        st = (http('/api/next-store/bedcam').get('markers') or {}).get('spots') or []
+        check('  all 5 saved again', sorted(k['id'] for k in st) == ['bl', 'fl', 'fr', 'ml', 'mr'], st)
+        await page.click(f'{side} button.primary:has-text("Done")'); await page.wait_for_timeout(300)
 
         # wrong corners
         http('/api/next-store/bedcam', {'markCorners': {'fl': {'x': 800, 'y': 5}, 'fr': {'x': 5, 'y': 5}, 'bl': {'x': 800, 'y': 800}}})
