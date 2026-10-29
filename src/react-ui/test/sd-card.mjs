@@ -20,7 +20,7 @@ check("single card described", await p.getByText("Single system").isVisible() &&
 check("the reader's card is offered", await p.locator("select option", { hasText: "Generic STORAGE DEVICE — 31.9 GB" }).count() === 1);
 await shot("1-plain");
 await p.getByRole("button", { name: "Make the A/B card" }).click();
-check("erase warning names the card", await p.getByText(/Everything on Generic STORAGE DEVICE \(31\.9 GB\) is erased/).isVisible());
+check("erase warning names the card", await p.getByText(/Everything on Generic STORAGE DEVICE \(31\.9 GB, \/dev\/sda\) is erased/).isVisible());
 await p.getByRole("button", { name: "Erase and make the card" }).click();
 check("progress shown", await until(() => p.getByText("Making an A/B card").isVisible()));
 check("then what to do with the new card", await until(() => p.getByText("Take the old card out of the SD slot").isVisible(), 15000));
@@ -51,6 +51,7 @@ await p.getByRole("button", { name: "Keep slot B" }).click();
 await p.getByRole("button", { name: "Keep", exact: true }).click();
 check("kept: banner gone, B starts normally", await until(async () => !(await p.getByText("is on trial").isVisible())) &&
   await p.locator(".abslot.on .flag", { hasText: "Starts normally" }).isVisible());
+check("slot A, tried before, can be started from", await p.getByRole("button", { name: "Start from slot A" }).isEnabled());
 
 // OS file into slot A
 await p.locator("input[type=file]").setInputFiles({ name: "onefinity-os-2.0.0.tar.xz", mimeType: "application/x-xz", buffer: Buffer.alloc(3 << 20, 7) });
@@ -58,6 +59,8 @@ check("load dialog names the file", await p.getByText("onefinity-os-2.0.0.tar.xz
 await p.getByPlaceholder("64 hex digits, from the release page").fill("ab".repeat(32));
 await p.getByRole("button", { name: "Load", exact: true }).click();
 check("slot A gets the OS file", await until(() => p.locator(".abslot").first().getByText("Uploaded OS file").isVisible(), 15000));
+check("an untried slot can't be made the normal one", await p.getByRole("button", { name: "Start from slot A" }).isDisabled() &&
+  await p.getByText("hasn't been tried and kept yet").isVisible());
 
 await mock({ trial_ended: { slot: "a", time: "2026-11-02 10:00" } });
 await p.reload();
@@ -66,6 +69,15 @@ await shot("5-ended");
 await p.getByRole("button", { name: "OK", exact: true }).click();
 check("and dismissed", await until(async () => !(await p.getByText(/Either slot A did not start/).isVisible())));
 
+await mock({ targets: [{ device: "/dev/sda", size: 15.9e9, model: "SanDisk Cruzer", mounted: ["/media/GCODE"] }] });
+await p.reload();
+await until(() => p.getByRole("button", { name: "Copy this system to that card" }).isVisible());
+await p.getByRole("button", { name: "Copy this system to that card" }).click();
+check("a mounted USB stick: warned, erase needs a tick", await p.getByText(/It may be a USB stick with your files/).isVisible() &&
+  await p.getByRole("button", { name: "Erase and make the card" }).isDisabled());
+await p.getByLabel("It's the new card. Erase it.").check();
+check("ticked: erase allowed", await p.getByRole("button", { name: "Erase and make the card" }).isEnabled());
+await p.getByRole("button", { name: "Cancel" }).click();
 await mock({ targets: [] });
 await p.reload();
 check("no reader: says what to plug in", await until(() => p.getByText(/Plug a USB SD card reader/).isVisible()));

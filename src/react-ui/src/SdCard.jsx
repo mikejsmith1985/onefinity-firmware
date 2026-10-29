@@ -24,12 +24,14 @@ export function SdCard({ state }) {
   const [dlg, setDlg] = useState(null);
   const [target, setTarget] = useState("");
   const [sha, setSha] = useState("");
+  const [mountedOk, setMountedOk] = useState(false);
   const [file, setFile] = useState(null);
   const [sending, setSending] = useState(null);
   const [restarting, setRestarting] = useState("");
   const fileIn = useRef(null);
   const idle = (state?.cycle || "idle") === "idle";
   const running = st?.job?.state === "running";
+  const busy = running || sending !== null;
 
   const load = () => api.get("abcard").then((s) => { setSt(s); setErr(""); }).catch((e) => setErr(e.message));
   useEffect(() => { load(); }, []);
@@ -76,7 +78,7 @@ export function SdCard({ state }) {
         <label className="stack">Card in the reader
           <select value={target} onChange={(e) => setTarget(e.target.value)}>{st.targets.map((t) => <option key={t.device} value={t.device}>{t.model} — {gb(t.size)} ({t.device})</option>)}</select>
         </label>
-        <div className="btnrow"><button className="primary" disabled={!idle || running || !tgt} onClick={() => setDlg("make")}>{st.ab ? "Copy this system to that card" : "Make the A/B card"}</button></div>
+        <div className="btnrow"><button className="primary" disabled={!idle || running || !tgt} onClick={() => { setMountedOk(false); setDlg("make"); }}>{st.ab ? "Copy this system to that card" : "Make the A/B card"}</button></div>
       </>}
       {busyNote}
     </Group>
@@ -97,7 +99,7 @@ export function SdCard({ state }) {
         {err && <p className="err">{err}</p>}
       </div>
       <div>{makeCard}</div>
-      {dlg === "make" && <MakeConfirm tgt={tgt} onCancel={() => setDlg(null)} onConfirm={() => act({ action: "make", device: target })} />}
+      {dlg === "make" && <MakeConfirm tgt={tgt} onCancel={() => setDlg(null)} mountedOk={mountedOk} setMountedOk={setMountedOk} onConfirm={() => act({ action: "make", device: target, size: tgt.size, mounted_ok: mountedOk })} />}
     </div>
   );
 
@@ -123,7 +125,7 @@ export function SdCard({ state }) {
         {st.trial && (
           <div className="abtrial" role="alert">
             <p><b>Slot {S(cur)} is on trial.</b> Restarting or turning the controller off and on goes back to slot {S(st.default)}.</p>
-            <div className="btnrow"><button className="primary" disabled={!idle} onClick={() => setDlg("keep")}>Keep slot {S(cur)}</button><button disabled={!idle} onClick={() => setDlg("back")}>Go back to slot {S(st.default)}</button></div>
+            <div className="btnrow"><button className="primary" disabled={!idle || busy} onClick={() => setDlg("keep")}>Keep slot {S(cur)}</button><button disabled={!idle || busy} onClick={() => setDlg("back")}>Go back to slot {S(st.default)}</button></div>
           </div>
         )}
         {st.trial_ended && (
@@ -152,9 +154,10 @@ export function SdCard({ state }) {
               <input ref={fileIn} type="file" hidden accept=".tar,.gz,.tgz,.bz2,.xz" onChange={(e) => { if (e.target.files[0]) { setFile(e.target.files[0]); setSha(""); setDlg("file"); } e.target.value = ""; }} />
             </div>
             <div className="btnrow">
-              <button className="primary" disabled={!idle || running || !os.bootable} onClick={() => setDlg("try")}>Try slot {S(other)}</button>
-              <button disabled={!idle || running || !os.bootable} onClick={() => setDlg("switch")}>Start from slot {S(other)}</button>
+              <button className="primary" disabled={!idle || busy || !os.bootable} onClick={() => setDlg("try")}>Try slot {S(other)}</button>
+              <button disabled={!idle || busy || !os.bootable || !os.proven} onClick={() => setDlg("switch")}>Start from slot {S(other)}</button>
             </div>
+            {os.bootable && !os.proven && <p className="dim">Slot {S(other)} hasn't been tried and kept yet, so it can only be tried.</p>}
             <p className="dim"><b>Try</b> restarts into slot {S(other)} once; turning the controller off and on comes back to slot {S(cur)}. <b>Start from</b> makes slot {S(other)} the one that starts normally.</p>
           </>}
           {busyNote}
@@ -162,12 +165,12 @@ export function SdCard({ state }) {
         {makeCard}
       </div>
 
-      {dlg === "make" && <MakeConfirm tgt={tgt} onCancel={() => setDlg(null)} onConfirm={() => act({ action: "make", device: target })} />}
+      {dlg === "make" && <MakeConfirm tgt={tgt} onCancel={() => setDlg(null)} mountedOk={mountedOk} setMountedOk={setMountedOk} onConfirm={() => act({ action: "make", device: target, size: tgt.size, mounted_ok: mountedOk })} />}
       {dlg === "copy" && <Confirm title={`Copy into slot ${S(other)}?`} confirmLabel="Copy" danger={os.bootable} onCancel={() => setDlg(null)} onConfirm={() => act({ action: "copy" })}>
         <p>Slot {S(other)} gets a copy of this running system.{os.bootable ? ` What is in slot ${S(other)} now (${os.label || "a system"}) is erased.` : ""}</p></Confirm>}
       {dlg === "file" && (
         <Modal title={`Load into slot ${S(other)}?`} onClose={() => setDlg(null)} actions={<><button onClick={() => setDlg(null)}>Cancel</button><button className={os.bootable ? "danger" : "primary"} onClick={sendFile}>Load</button></>}>
-          <p><em>{file?.name}</em> ({gb(file?.size)}) is written into slot {S(other)}. This system's settings, Wi-Fi, calibration and probe reference are copied across with it.{os.bootable ? ` What is in slot ${S(other)} now is erased.` : ""}</p>
+          <p><em>{file?.name}</em> ({gb(file?.size)}) is written into slot {S(other)}. This controller's settings, calibration, probe reference, hostname and network settings are copied across with it. The login password is whatever the OS file has.{os.bootable ? ` What is in slot ${S(other)} now is erased.` : ""}</p>
           <label className="stack">SHA-256 checksum (optional)<input value={sha} onChange={(e) => setSha(e.target.value)} placeholder="64 hex digits, from the release page" /><small>With a checksum the file is checked before anything is written.</small></label>
         </Modal>
       )}
@@ -175,7 +178,7 @@ export function SdCard({ state }) {
         <p>The controller restarts into slot {S(other)} ({os.label || "system"}). Check it over, then come back here to keep it.</p>
         <p>To go back, restart or turn the controller off and on: it starts slot {S(cur)} again.</p></Confirm>}
       {dlg === "switch" && <Confirm title={`Start from slot ${S(other)}?`} confirmLabel="Switch and restart" onCancel={() => setDlg(null)} onConfirm={() => { setRestarting(`Restarting into slot ${S(other)}. Reconnect in about a minute.`); act({ action: "switch", slot: other }); }}>
-        <p>Slot {S(other)} becomes the one that starts normally, without a trial. To come back, use this page on slot {S(other)}.</p></Confirm>}
+        <p>Slot {S(other)} becomes the one that starts normally. It has been tried and kept before. To come back, use this page on slot {S(other)}.</p></Confirm>}
       {dlg === "keep" && <Confirm title={`Keep slot ${S(cur)}?`} confirmLabel="Keep" onCancel={() => setDlg(null)} onConfirm={() => act({ action: "keep" })}>
         <p>Slot {S(cur)} becomes the one that starts normally. Slot {S(st.default)} stays as it is, and you can switch back to it here later.</p></Confirm>}
       {dlg === "back" && <Confirm title={`Go back to slot ${S(st.default)}?`} confirmLabel="Restart" onCancel={() => setDlg(null)} onConfirm={() => { setDlg(null); setRestarting(`Restarting into slot ${S(st.default)}. Reconnect in about a minute.`); api.put("reboot").catch((e) => { setRestarting(""); setErr(e.message); }); }}>
@@ -185,11 +188,16 @@ export function SdCard({ state }) {
   );
 }
 
-function MakeConfirm({ tgt, onCancel, onConfirm }) {
+function MakeConfirm({ tgt, mountedOk, setMountedOk, onCancel, onConfirm }) {
+  const inUse = tgt?.mounted?.length > 0;
   return (
-    <Confirm title="Erase that card?" confirmLabel="Erase and make the card" danger onCancel={onCancel} onConfirm={onConfirm}>
-      <p>Everything on <b>{tgt?.model} ({gb(tgt?.size)})</b> is erased. The card in the controller's SD slot isn't changed.</p>
-      <p>Copying can take a while, depending on the card and the reader. Leave the machine idle until it finishes.</p>
-    </Confirm>
+    <Modal title="Erase that card?" onClose={onCancel} actions={<><button onClick={onCancel}>Cancel</button><button className="danger" disabled={inUse && !mountedOk} onClick={onConfirm}>Erase and make the card</button></>}>
+      <p>Everything on <b>{tgt?.model} ({gb(tgt?.size)}, {tgt?.device})</b> is erased. The card in the controller's SD slot isn't changed.</p>
+      {inUse && <>
+        <p className="warn-text">This device is open as {tgt.mounted.join(", ")}. It may be a USB stick with your files on it, not a new card.</p>
+        <label className="check"><input type="checkbox" checked={mountedOk} onChange={(e) => setMountedOk(e.target.checked)} /> It's the new card. Erase it.</label>
+      </>}
+      <p>Copying can take a while, depending on the card and the reader. Leave the machine idle until it finishes; programs can't be started meanwhile.</p>
+    </Modal>
   );
 }

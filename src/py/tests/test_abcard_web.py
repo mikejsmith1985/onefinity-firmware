@@ -69,14 +69,19 @@ last_calls()
 r = go('/api/abcard', 'PUT', json.dumps({'action': 'copy'})); time.sleep(0.3)
 check('copy starts the job', r.code == 200 and last_calls() == ['copy'], r.body)
 
-r = go('/api/abcard', 'PUT', json.dumps({'action': 'make', 'device': '/dev/sda'})); time.sleep(0.3)
-check('make passes the device and --yes', r.code == 200 and last_calls() == ['make /dev/sda --yes'])
+r = go('/api/abcard', 'PUT', json.dumps({'action': 'copy'}))
+check('a second job right after is refused', r.code == 409, r.body)
+Web.ab_spawned[0] = 0
+r = go('/api/abcard', 'PUT', json.dumps({'action': 'make', 'device': '/dev/sda', 'size': 31900000000, 'mounted_ok': True})); time.sleep(0.3)
+check('make passes the device, the size shown and the mounted ok', r.code == 200 and last_calls() == ['make /dev/sda --yes --size 31900000000 --mounted-ok'])
+Web.ab_spawned[0] = 0
 
-r = go('/api/abcard', 'PUT', json.dumps({'action': 'make', 'device': '--help'})); time.sleep(0.3)
+r = go('/api/abcard', 'PUT', json.dumps({'action': 'make', 'device': '--help', 'size': 1})); time.sleep(0.3)
 check('an option as the device is refused', r.code == 400 and last_calls() == [], r.body)
 
 r = go('/api/abcard', 'PUT', json.dumps({'action': 'fetch', 'url': 'https://x/os.tar', 'sha256': 'ab' * 32})); time.sleep(0.3)
 check('fetch passes the URL and checksum', r.code == 200 and last_calls() == ['fetch https://x/os.tar --sha256 ' + 'ab' * 32])
+Web.ab_spawned[0] = 0
 
 r = go('/api/abcard', 'PUT', json.dumps({'action': 'try'}))
 check('try: restarting shown on the screen', r.code == 200 and ctrl.said == ['Restarting...'] and last_calls() == ['try'])
@@ -111,7 +116,10 @@ path = os.path.join(Web.AB_DOWNLOADS, 'bundle.tar')
 check('upload stored whole', r.code == 200 and os.path.getsize(path) == size, r.body)
 check('and handed to ab-card write with the checksum',
       last_calls() == ['write %s --sha256 %s' % (path, 'cd' * 32)])
+check('no program can start right after (card being written)', Web.ab_busy())
+Web.ab_spawned[0] = 0
+check('not busy once the job is over', not Web.ab_busy())
 r = go('/api/abcard/upload?sha256=nothex', 'PUT', b'x' * 10)
-check('a malformed checksum is refused before the file is taken',
-      r.code == 400 and not os.path.exists(os.path.join(Web.AB_DOWNLOADS, 'bundle.tar.part')))
+check('a malformed checksum is refused before the file is taken, with a JSON reason',
+      r.code == 400 and json.loads(r.body)['message'].startswith('The checksum') and not os.path.exists(os.path.join(Web.AB_DOWNLOADS, 'bundle.tar.part')))
 done()

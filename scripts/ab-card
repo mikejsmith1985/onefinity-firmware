@@ -42,7 +42,6 @@ FW_DIR = os.environ.get('AB_FW_DIR', '/usr/local/share/ab-card/boot-firmware')
 ROOT = os.environ.get('AB_ROOT', '/')            # running root (tests change it)
 RUN_DIR = os.environ.get('AB_RUN_DIR', '/run/ab-card')
 JOB = os.path.join(RUN_DIR, 'job.json')
-TRIAL = os.path.join(ROOT, 'var/lib/bbctrl/ab-trial.json')
 DOWNLOADS = os.path.join(ROOT, 'var/lib/bbctrl/os-update')
 SLOT_PART = {'a': 2, 'b': 3}
 PART_SLOT = {2: 'a', 3: 'b'}
@@ -68,7 +67,11 @@ class Fail(Exception): pass
 job = {}
 use_job = False
 
+prog_range = [0, 100]     # a job made of parts maps its parts into this
+
 def progress(pct, msg):
+    lo, hi = prog_range
+    pct = lo + (hi - lo) * pct / 100
     sys.stdout.write('%3d%% %s\n' % (pct, msg))
     sys.stdout.flush()
     if not use_job: return
@@ -183,8 +186,11 @@ def usb_disks():
         model = ' '.join(x for x in (
             (read('/sys/block/%s/device/vendor' % name) or '').strip(),
             (read('/sys/block/%s/device/model' % name) or '').strip()) if x)
-        disks.append({'device': '/dev/' + name, 'size': size,
-                      'model': model or 'USB card reader'})
+        dev = '/dev/' + name
+        disks.append({'device': dev, 'size': size,
+                      'model': model or 'USB card reader',
+                      'mounted': [m for src, m in mounts()
+                                  if re.match(re.escape(dev) + r'\d*$', src)]})
     return disks
 
 
@@ -270,7 +276,7 @@ def used_bytes(path):
 # Not copied from a running system
 EXCLUDES = ['./var/swap', './tmp/*', './var/tmp/*', './var/cache/apt/archives/*.deb',
             './var/lib/bbctrl/firmware/*', './var/lib/bbctrl/os-update/*',
-            './var/lib/bbctrl/ab-trial.json', './lost+found']
+            './lost+found']
 
 def copy_root(src, dst, lo, hi, what):
     "Copy a running root file system with tar, reporting progress lo..hi"
@@ -281,24 +287,28 @@ def copy_root(src, dst, lo, hi, what):
     create.append('.')
     extract = ['tar', '-C', dst, '--numeric-owner', '--xattrs',
                '--xattrs-include=*', '-xpf', '-']
-    c = subprocess.Popen(create, stdout = subprocess.PIPE,
-                         stderr = subprocess.PIPE)
-    x = subprocess.Popen(extract, stdin = subprocess.PIPE,
-                         stderr = subprocess.PIPE)
+    import tempfile
+    ce, xe = tempfile.TemporaryFile(), tempfile.TemporaryFile()
+    c = subprocess.Popen(create, stdout = subprocess.PIPE, stderr = ce)
+    x = subprocess.Popen(extract, stdin = subprocess.PIPE, stderr = xe)
     done, last = 0, 0
     while True:
         chunk = c.stdout.read(1 << 20)
         if not chunk: break
-        x.stdin.write(chunk)
+        try: x.stdin.write(chunk)
+        except BrokenPipeError:
+            c.kill(); break
         done += len(chunk)
         if time.time() - last > 2:
             last = time.time()
             pct = lo + (hi - lo) * min(done / total, 1)
             progress(pct, '%s (%d of about %d MB)' %
                      (what, done >> 20, total >> 20))
-    x.stdin.close()
-    cerr, xerr = c.stderr.read().decode(), x.stderr.read().decode()
+    try: x.stdin.close()
+    except BrokenPipeError: pass
     c.wait(); x.wait()
+    ce.seek(0); xe.seek(0)
+    cerr, xerr = ce.read().decode(errors = 'replace'), xe.read().decode(errors = 'replace')
     # tar exits 1 when a file changed while being read (logs on a live system)
     if c.returncode not in (0, 1): raise Fail('Reading the system failed: ' + cerr[-400:])
     if x.returncode != 0: raise Fail('Writing the card failed: ' + xerr[-400:])
@@ -308,7 +318,9 @@ def copy_root(src, dst, lo, hi, what):
 # Settings that follow the machine into a slot written from an OS bundle
 CARRY = ['var/lib/bbctrl', 'etc/hostname', 'etc/hosts',
          'etc/wpa_supplicant/wpa_supplicant.conf',
-         'etc/modprobe.d/blacklist-internal-wifi.conf']
+         'etc/modprobe.d/blacklist-internal-wifi.conf',
+         'etc/network/interfaces.d', 'etc/hostapd/hostapd.conf',
+         'etc/dnsmasq.conf', 'etc/dhcpcd.conf']
 
 def carry_settings(src, dst):
     for rel in CARRY + [os.path.relpath(p, src) for p in
@@ -319,7 +331,7 @@ def carry_settings(src, dst):
         if os.path.isdir(s):
             run('tar', '-C', os.path.dirname(s), '--numeric-owner', '-cf',
                 os.path.join(RUN_DIR, 'carry.tar'), '--exclude', 'firmware/*',
-                '--exclude', 'os-update/*', '--exclude', 'ab-trial.json',
+                '--exclude', 'os-update/*',
                 os.path.basename(s))
             run('tar', '-C', os.path.dirname(d), '--numeric-owner', '-xpf',
                 os.path.join(RUN_DIR, 'carry.tar'))
@@ -390,7 +402,7 @@ def status():
         for k in ('running', 'default', 'other', 'trial'): out[k] = s[k]
         out['slots'] = dict((x, slot_info(s['boot'], x)) for x in 'ab')
         try:
-            with open(TRIAL) as f: t = json.load(f)
+            with open(os.path.join(s['boot'], 'ab-trial.json')) as f: t = json.load(f)
             # Asked for a trial of the other slot, but this slot is running:
             # the trial didn't start, or ended with a reboot
             if t.get('slot') != s['running']: out['trial_ended'] = t
@@ -399,7 +411,7 @@ def status():
 
 
 # --- Commands ----------------------------------------------------------------
-def check_target(dev):
+def check_target(dev, expect_size = None, allow_mounted = False):
     disk, _ = running_root()
     if not re.match(r'^/dev/sd[a-z]+$', dev) and not os.environ.get('AB_ANY_TARGET'):
         raise Fail('%s is not a USB card reader' % dev)
@@ -409,6 +421,13 @@ def check_target(dev):
         if not any(d['device'] == dev for d in usb_disks()):
             raise Fail('%s is not a USB card reader' % dev)
     size = int(read('/sys/block/%s/size' % name, '0')) * 512
+    if expect_size is not None and size != expect_size:
+        raise Fail('The device at %s changed (%.1f GB now). Check the card '
+                   'reader and choose it again.' % (dev, size / 1e9))
+    in_use = [m for src, m in mounts() if re.match(re.escape(dev) + r'\d*$', src)]
+    if in_use and not allow_mounted:
+        raise Fail('%s is in use (mounted at %s). If it really is the new card, '
+                   'confirm that it may be erased.' % (dev, ', '.join(in_use)))
     if size < MIN_CARD:
         raise Fail('The card is %.1f GB; it needs to be at least 8 GB' %
                    (size / 1e9))
@@ -450,13 +469,13 @@ def copy_boot_slot(src, dst):
         if os.path.isdir(s): shutil.copytree(s, d)
         else: shutil.copyfile(s, d)
 
-def cmd_make(dev):
+def cmd_make(dev, expect_size = None, allow_mounted = False):
     for t in ('sfdisk', 'wipefs', 'mkfs.vfat', 'mkfs.ext4', 'tar'):
         if not have(t): raise Fail('The %s program is missing' % t)
     fw = os.path.join(FW_DIR, 'bootcode.bin')
     if not os.path.exists(fw): raise Fail('Boot firmware missing from ' + FW_DIR)
     verify_firmware()
-    size = check_target(dev)
+    size = check_target(dev, expect_size, allow_mounted)
     boot = boot_dir()
 
     progress(1, 'Preparing the card in %s' % dev)
@@ -548,7 +567,7 @@ def make_boot(boot, mb):
     os.makedirs(os.path.join(mb, 'b'), exist_ok = True)
     write(os.path.join(mb, 'a', 'slot.json'), json.dumps({
         'label': 'Copy of the original card', 'version': bbctrl_version(),
-        'os': os_name(ROOT), 'written': now()}))
+        'os': os_name(ROOT), 'written': now(), 'proven': True}))
     config = read(os.path.join(boot, 'config.txt'), '')
     write(os.path.join(mb, 'config.txt'), config_for(config, 'a'))
     write(os.path.join(mb, 'tryboot.txt'), config_for(config, 'b'))
@@ -588,7 +607,17 @@ def finish_other(s, other, where, cmdline, label, extra):
         write(os.path.join(d, 'cmdline.txt'),
               fix_cmdline(cmdline, SLOT_PART[other]))
         write(os.path.join(d, 'slot.json'), json.dumps(info))
+        if other == 'a': refresh_fallback(boot)
         set_default(boot, s['default'])     # rewrites tryboot.txt too
+
+def refresh_fallback(boot):
+    "The top-level kernel files (used if os_prefix is ignored) follow slot A"
+    for name in os.listdir(boot):
+        if is_slot_file(name):
+            p = os.path.join(boot, name)
+            if os.path.isdir(p): shutil.rmtree(p)
+            else: os.unlink(p)
+    copy_boot_slot(os.path.join(boot, 'a'), boot)
 
 def cmd_copy():
     s = need_ab()
@@ -628,6 +657,12 @@ def tar_member(path, member):
         stderr = subprocess.DEVNULL).decode()
 
 def cmd_write(path, sha256 = None, keep_file = False):
+    try: _write(path, sha256)
+    finally:
+        if not keep_file and path.startswith(DOWNLOADS) and os.path.exists(path):
+            os.unlink(path)
+
+def _write(path, sha256):
     s = need_ab()
     if not os.path.exists(path): raise Fail('%s not found' % path)
     progress(1, 'Checking the OS file')
@@ -657,14 +692,16 @@ def cmd_write(path, sha256 = None, keep_file = False):
             '-xf', path, 'boot/')
     cmdline = read(os.path.join(d, 'cmdline.txt')) or \
         read(os.path.join(s['boot'], s['running'], 'cmdline.txt'), '')
-    if not any(re.match(r'^kernel.*\.img$', n) for n in os.listdir(d)):
+    missing = [n for n in ('kernel7.img', PI3_DTB)
+               if not os.path.exists(os.path.join(d, n))]
+    if missing:
         umount(where)
-        raise Fail('The OS file has no kernel in boot/')
-    if not os.path.exists(os.path.join(d, PI3_DTB)):
-        progress(93, 'Warning: no %s in the OS file' % PI3_DTB)
+        with BootRW(s['boot']):
+            shutil.rmtree(d); os.makedirs(d)
+        raise Fail('The OS file can\'t start a Raspberry Pi 3: boot/ has no %s. '
+                   'Slot %s was left empty.' % (' or '.join(missing), other.upper()))
     finish_other(s, other, where, cmdline, meta.get('label', 'OS file'),
                  {'version': meta.get('version'), 'sha256': digest})
-    if not keep_file and path.startswith(DOWNLOADS): os.unlink(path)
     progress(100, 'Slot %s is ready to try' % other.upper())
 
 def cmd_fetch(url, sha256):
@@ -685,7 +722,7 @@ def cmd_fetch(url, sha256):
             f.write(b); done += len(b)
             if time.time() - last > 2:
                 last = time.time()
-                progress(40 * done / size if size else 20,
+                progress(100 * done / size if size else 50,
                          'Downloading (%d MB%s)' % (done >> 20,
                          ' of %d' % (size >> 20) if size else ''))
     if size and done != size: raise Fail('The download was cut short')
@@ -702,8 +739,9 @@ def cmd_try():
         raise Fail('The boot firmware did not accept the one-shot "try" flag, '
                    'so nothing was changed. (The card\'s boot firmware may be '
                    'too old, or this Raspberry Pi does not support it.)')
-    os.makedirs(os.path.dirname(TRIAL), exist_ok = True)
-    write(TRIAL, json.dumps({'slot': other, 'time': now()}))
+    with BootRW(s['boot']):
+        write(os.path.join(s['boot'], 'ab-trial.json'),
+              json.dumps({'slot': other, 'time': now()}))
     os.sync()
     if not os.environ.get('AB_NO_REBOOT'): subprocess.Popen(['reboot'])
 
@@ -711,8 +749,8 @@ def cmd_keep():
     s = need_ab(allow_trial = True)
     if not s['trial']: raise Fail('No slot is on trial')
     set_default(s['boot'], s['running'])
-    try: os.unlink(TRIAL)
-    except OSError: pass
+    mark_proven(s['boot'], s['running'])
+    clear_trial(s['boot'])
 
 def cmd_switch(slot):
     s = need_ab()
@@ -720,6 +758,10 @@ def cmd_switch(slot):
                                         slot.upper())
     if not slot_bootable(s['boot'], slot):
         raise Fail('Slot %s has no system' % slot.upper())
+    if not slot_info(s['boot'], slot).get('proven'):
+        raise Fail('Slot %s has not been tried and kept yet. Try it first: '
+                   'if it doesn\'t start, a power cycle comes back here.' %
+                   slot.upper())
     set_default(s['boot'], slot)
     os.sync()
     if not os.environ.get('AB_NO_REBOOT'): subprocess.Popen(['reboot'])
@@ -745,9 +787,20 @@ def cmd_bundle(out, label):
     shutil.rmtree(stage)
 
 
+def clear_trial(boot):
+    if os.path.exists(os.path.join(boot, 'ab-trial.json')):
+        with BootRW(boot): os.unlink(os.path.join(boot, 'ab-trial.json'))
+
+def mark_proven(boot, slot):
+    "A slot that has started and been kept (or the copy made from a running one)"
+    path = os.path.join(boot, slot, 'slot.json')
+    info = json.loads(read(path, '{}') or '{}')
+    if info.get('proven'): return
+    info['proven'] = True
+    with BootRW(boot): write(path, json.dumps(info))
+
 def cmd_dismiss():
-    try: os.unlink(TRIAL)
-    except OSError: pass
+    clear_trial(card_state()['boot'])
 
 
 def as_job(name, fn, *args):
@@ -778,6 +831,9 @@ def main():
     sub.add_parser('status')
     m = sub.add_parser('make'); m.add_argument('device')
     m.add_argument('--yes', action = 'store_true')
+    m.add_argument('--size', type = int, help = 'the size the user was shown')
+    m.add_argument('--mounted-ok', action = 'store_true',
+                   help = 'erase even though it is mounted')
     sub.add_parser('copy')
     w = sub.add_parser('write'); w.add_argument('file')
     w.add_argument('--sha256')
@@ -797,12 +853,15 @@ def main():
         elif args.cmd == 'make':
             if not args.yes: raise Fail('Add --yes: everything on %s is erased' %
                                         args.device)
-            as_job('make', cmd_make, args.device)
+            as_job('make', cmd_make, args.device, args.size, args.mounted_ok)
         elif args.cmd == 'copy': as_job('copy', cmd_copy)
         elif args.cmd == 'write': as_job('write', cmd_write, args.file, args.sha256)
         elif args.cmd == 'fetch':
             def fetch_write():
-                cmd_write(cmd_fetch(args.url, args.sha256), args.sha256)
+                prog_range[:] = [0, 40]
+                path = cmd_fetch(args.url, args.sha256)
+                prog_range[:] = [40, 100]
+                cmd_write(path, args.sha256)
             as_job('write', fetch_write)
         elif args.cmd == 'try': cmd_try()
         elif args.cmd == 'keep': cmd_keep()

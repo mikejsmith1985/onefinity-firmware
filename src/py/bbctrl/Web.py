@@ -463,11 +463,27 @@ def ab_job_running():
     except Exception: return False
 
 
+ab_uploading = [False]
+ab_spawned = [0]    # a job just started may not have written job.json yet
+
+def ab_busy():
+    return ab_uploading[0] or ab_job_running() or time.time() - ab_spawned[0] < 10
+
+
 def ab_check_idle(handler):
     if handler.get_ctrl().args.demo:
         raise HTTPError(400, 'Not available in demo mode')
     if handler.get_ctrl().state.get('cycle', 'idle') != 'idle':
         raise HTTPError(409, 'Wait until the machine is idle')
+
+
+def ab_spawn(args):
+    "A long ab-card job; it reports through /run/ab-card/job.json"
+    ab_spawned[0] = time.time()
+    os.makedirs('/run/ab-card', exist_ok = True)
+    with open('/run/ab-card/spawn.log', 'w') as log:
+        subprocess.Popen(['ab-card'] + args, stdout = subprocess.DEVNULL,
+                         stderr = log, start_new_session = True)
 
 
 class ABCardHandler(bbctrl.APIHandler):
@@ -485,22 +501,25 @@ class ABCardHandler(bbctrl.APIHandler):
 
         # Long jobs report progress through "status"
         jobs = {
-            'make': lambda: ['make', self.json['device'], '--yes'],
+            'make': lambda: ['make', self.json['device'], '--yes', '--size',
+                             str(int(self.json['size']))] +
+                (['--mounted-ok'] if self.json.get('mounted_ok') else []),
             'copy': lambda: ['copy'],
             'fetch': lambda: ['fetch', self.json['url']] +
                 (['--sha256', self.json['sha256']] if self.json.get('sha256')
                  else []),
         }
+        if ab_busy():
+            raise HTTPError(409, 'The SD card is being written. Wait until '
+                            'that finishes.')
+
         if action in jobs:
-            if ab_job_running():
-                raise HTTPError(409, 'A card job is already running')
             args = jobs[action]()
             for a in args:
-                if a.startswith('-') and a not in ('--yes', '--sha256'):
+                if a.startswith('-') and a not in ('--yes', '--sha256', '--size',
+                                                   '--mounted-ok'):
                     raise HTTPError(400, 'Bad argument')
-            subprocess.Popen(['ab-card'] + args, stdout = subprocess.DEVNULL,
-                             stderr = subprocess.DEVNULL,
-                             start_new_session = True)
+            ab_spawn(args)
             self.write_json('ok')
             return
 
@@ -524,7 +543,9 @@ class ABCardUploadHandler(bbctrl.RequestHandler):
     def prepare(self):
         self.file = None
         ab_check_idle(self)
-        if ab_job_running(): raise HTTPError(409, 'A card job is already running')
+        if ab_busy():
+            raise HTTPError(409, 'The SD card is being written. Wait until '
+                            'that finishes.')
         size = int(self.request.headers.get('Content-Length', 0))
         os.makedirs(AB_DOWNLOADS, exist_ok = True)
         st = os.statvfs(AB_DOWNLOADS)
@@ -536,12 +557,27 @@ class ABCardUploadHandler(bbctrl.RequestHandler):
         self.request.connection.set_max_body_size(16 << 30)
         self.path = os.path.join(AB_DOWNLOADS, 'bundle.tar')
         self.file = open(self.path + '.part', 'wb')
+        ab_uploading[0] = True
 
 
     def data_received(self, chunk): self.file.write(chunk)
 
 
-    def on_connection_close(self):
+    def write_error(self, status_code, **kwargs):
+        msg = self._reason
+        e = kwargs.get('exc_info')
+        if e and isinstance(e[1], HTTPError) and e[1].log_message:
+            msg = e[1].log_message
+        self.set_header('Content-Type', 'application/json')
+        self.finish(json.dumps({'message': msg, 'code': status_code}))
+
+
+    def on_finish(self): self._done()
+    def on_connection_close(self): self._done()
+
+
+    def _done(self):
+        if self.file is not None: ab_uploading[0] = False
         if self.file is not None and not self.file.closed:
             self.file.close()
             try: os.unlink(self.path + '.part')
@@ -551,10 +587,8 @@ class ABCardUploadHandler(bbctrl.RequestHandler):
     def put(self):
         self.file.close()
         os.rename(self.path + '.part', self.path)
-        subprocess.Popen(['ab-card', 'write', self.path] +
-                         (['--sha256', self.sha] if self.sha else []),
-                         stdout = subprocess.DEVNULL,
-                         stderr = subprocess.DEVNULL, start_new_session = True)
+        ab_spawn(['write', self.path] + (['--sha256', self.sha] if self.sha
+                                          else []))
         self.set_header('Content-Type', 'application/json')
         self.write(json.dumps('ok'))
 
@@ -655,6 +689,11 @@ class StartHandler(bbctrl.APIHandler):
     def put(self):
         ctrl = self.get_ctrl()
         body = self.json if isinstance(self.json, dict) else {}
+
+        # SD card jobs (1.47.0) write the card for minutes: not during a run
+        if ab_busy():
+            raise HTTPError(409, 'Not started: the SD card is being written '
+                            '(Admin > SD card). Wait until that finishes.')
 
         # Router plug (1.35.0): never start a real run that would switch on
         # a router the controller can't reach.  "Run anyway" doesn't skip it.

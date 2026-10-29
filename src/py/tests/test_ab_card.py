@@ -148,7 +148,9 @@ try:
             except Exception: pass
             time.sleep(0.2)
     t = threading.Thread(target = nodes); t.start()
-    good, out = tool(srcenv, 'make', dst, '--yes')
+    bad, out = tool(srcenv, 'make', dst, '--yes', '--size', '123', fail = True)
+    check('make refuses when the device isn\'t the size the user was shown', bad and 'changed' in out, out[-200:])
+    good, out = tool(srcenv, 'make', dst, '--yes', '--size', str(8 << 30))
     stop[0] = True; t.join()
     check('make: card made', good and 'ready' in out, out[-600:])
     job = json.load(open(os.path.join(work, 'run1', 'job.json')))
@@ -227,8 +229,11 @@ try:
           read(os.path.join(nrootB, 'var/lib/bbctrl/config.json')) == '{"probe": "reference"}\n')
     sh('umount', nrootB); mnts.remove(nrootB)
 
+    bad, out = tool(envA, 'switch', 'b', fail = True)
+    check('start from an untried slot refused', bad and 'Try it first' in out, out)
     good, out = tool(envA, 'try')
     check('try: accepted', good, out)
+    check('try: recorded on the shared boot partition', os.path.exists(os.path.join(nboot, 'ab-trial.json')))
     check('try: config.txt still starts A (one-shot)', read(os.path.join(nboot, 'config.txt')).rstrip().endswith('os_prefix=a/'))
     check('try: tryboot.txt starts B', read(os.path.join(nboot, 'tryboot.txt')).rstrip().endswith('os_prefix=b/'))
 
@@ -251,8 +256,13 @@ try:
     check('on trial: writing the known-good slot is refused', bad and 'on trial' in out, out)
     bad, out = tool(envB, 'try', fail = True)
     check('on trial: try refused', bad, out)
+    sh('mount', '-o', 'remount,rw', nboot)
+    with open(os.path.join(nboot, 'ab-trial.json'), 'w') as f: f.write(json.dumps({'slot': 'b', 'time': 'now'}))
+    sh('mount', '-o', 'remount,ro', nboot)
     good, out = tool(envB, 'keep')
     check('keep', good, out)
+    check('keep clears the trial record and marks B as tried', not os.path.exists(os.path.join(nboot, 'ab-trial.json')) and
+          json.loads(read(os.path.join(nboot, 'b', 'slot.json'))).get('proven') is True)
     good, out = tool(envB, 'status'); st = json.loads(out)
     check('kept: B by default, tryboot points at A', st['default'] == 'b' and not st['trial'] and
           read(os.path.join(nboot, 'tryboot.txt')).rstrip().endswith('os_prefix=a/'))
@@ -273,11 +283,18 @@ try:
     put(os.path.join(work, 'b2/root/var/lib/bbctrl/config.json'), '{"probe": "factory"}\n')
     put(os.path.join(work, 'b2/root/etc/hostname'), 'raspberrypi\n')
     put(os.path.join(work, 'b2/root/etc/new-os-file'), 'new\n')
+    put(os.path.join(work, 'b2/boot/kernel7.img'), 'new kernel')
     bundle2 = os.path.join(work, 'os2.tar.xz')
     sh('tar', '-cJf', bundle2, '-C', os.path.join(work, 'b2'), 'ab-bundle.json', 'boot', 'root')
+    # An OS file with no Pi 3 device tree is refused, and the slot left empty
+    bad3 = os.path.join(work, 'nodtb.tar')
+    sh('tar', '-cf', bad3, '-C', os.path.join(work, 'b2'), '--exclude', 'boot/bcm2710-rpi-3-b.dtb', 'ab-bundle.json', 'boot', 'root')
+    bad, out = tool(envB, 'write', bad3, fail = True)
+    check('an OS file that can\'t start a Pi 3 is refused', bad and 'bcm2710-rpi-3-b.dtb' in out, out[-300:])
+    good, out = tool(envB, 'status'); st = json.loads(out)
+    check('and slot A is left empty, not half-written', st['slots']['a']['bootable'] is False, st['slots']['a'])
     bad, out = tool(envB, 'write', bundle2, '--sha256', '00' * 32, fail = True)
-    check('write: wrong checksum refused before anything is touched',
-          bad and 'checksum' in out and os.path.exists(os.path.join(nboot, 'a', 'kernel7.img')), out)
+    check('write: wrong checksum refused', bad and 'checksum' in out, out)
     put(os.path.join(work, 'notbundle.tar'), '')
     sh('tar', '-cf', os.path.join(work, 'notbundle.tar'), '-C', work, 'src.img')
     bad, out = tool(envB, 'write', os.path.join(work, 'notbundle.tar'), fail = True)
@@ -297,6 +314,18 @@ try:
     check('slot A labelled from the OS file', st['slots']['a']['label'] == 'Test OS 2' and
           st['slots']['a'].get('sha256') == digest, st['slots']['a'])
     check('slot A cmdline root p2', 'root=/dev/mmcblk0p2' in read(os.path.join(nboot, 'a', 'cmdline.txt')))
+    check('the top-level fallback follows the new slot A',
+          read(os.path.join(nboot, 'kernel7.img')) == read(os.path.join(nboot, 'a', 'kernel7.img')) ==
+          read(os.path.join(work, 'b2/boot/kernel7.img')) and
+          read(os.path.join(nboot, 'cmdline.txt')) == read(os.path.join(nboot, 'a', 'cmdline.txt')))
+    check('slot A is not marked as tried', not st['slots']['a'].get('proven'))
+    bad, out = tool(envB, 'switch', 'a', fail = True)
+    check('so it can\'t be made the normal slot without a trial', bad, out)
+    # pretend slot A was tried and kept
+    sh('mount', '-o', 'remount,rw', nboot)
+    j = json.loads(read(os.path.join(nboot, 'a', 'slot.json'))); j['proven'] = True
+    with open(os.path.join(nboot, 'a', 'slot.json'), 'w') as f: f.write(json.dumps(j))
+    sh('mount', '-o', 'remount,ro', nboot)
     sh('umount', nrootA2); mnts.remove(nrootA2)
 
     good, out = tool(envB, 'switch', 'a')

@@ -3,17 +3,18 @@
 // PUT /mock/abcard with JSON sets the state directly (tests).
 const now = () => new Date().toISOString().slice(0, 16).replace("T", " ");
 const GB = 1e9;
+const S = (x) => x.toUpperCase();
 let s;
 export function resetAbCard(kind = process.env.MOCK_ABCARD || "plain") {
   s = {
     ab: kind === "ab", disk: "/dev/mmcblk0", card_size: kind === "ab" ? 31.9 * GB : 7.9 * GB,
     os: "Raspbian GNU/Linux 9 (stretch)", version: "1.47.0",
     firmware: kind === "ab" ? "May 21 2026 14:30:55" : "Mar 13 2018 18:45:24",
-    job: null, targets: [{ device: "/dev/sda", size: 31.9 * GB, model: "Generic STORAGE DEVICE" }],
+    job: null, targets: [{ device: "/dev/sda", size: 31.9 * GB, model: "Generic STORAGE DEVICE", mounted: [] }],
   };
   if (s.ab) Object.assign(s, {
     running: "a", default: "a", other: "b", trial: false,
-    slots: { a: { bootable: true, label: "Copy of the original card", version: "1.47.0", os: s.os, written: "2026-11-01 09:12" },
+    slots: { a: { bootable: true, label: "Copy of the original card", version: "1.47.0", os: s.os, written: "2026-11-01 09:12", proven: true },
              b: { bootable: false } },
   });
 }
@@ -56,6 +57,9 @@ export function abcard(req, res, p, json) {
       const busy = s.job?.state === "running";
       if (["make", "copy", "fetch"].includes(q.action) && busy) { res.writeHead(409, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ message: "A card job is already running" })); }
       if (q.action === "make") {
+        const t = s.targets.find((x) => x.device === q.device);
+        if (!t || t.size !== q.size) return fail(res, "The device changed. Choose it again.");
+        if (t.mounted?.length && !q.mounted_ok) return fail(res, "It is in use.");
         job("make", [[1, `Preparing the card in ${q.device}`], [4, "Formatting"], [30, "Copying the system to slot A (900 of about 3100 MB)"], [70, "Copying the system to slot A (2200 of about 3100 MB)"], [93, "Writing the boot files"], [100, "The new card is ready in the card reader. Shut down, put it in the controller's SD slot and start up."]]);
       } else if (q.action === "copy") {
         if (s.trial) return fail(res, `Slot ${s.running.toUpperCase()} is on trial. Keep it or go back first.`);
@@ -69,8 +73,9 @@ export function abcard(req, res, p, json) {
         Object.assign(s, { running: s.other, other: s.running, trial: true });
       } else if (q.action === "keep") {
         if (!s.trial) return fail(res, "No slot is on trial");
-        Object.assign(s, { default: s.running, trial: false });
+        Object.assign(s, { default: s.running, trial: false }); s.slots[s.running].proven = true;
       } else if (q.action === "switch") {
+        if (!s.slots[q.slot]?.proven) return fail(res, `Slot ${S(q.slot)} has not been tried and kept yet.`);
         Object.assign(s, { default: q.slot, running: q.slot, other: q.slot === "a" ? "b" : "a", trial: false });
       } else if (q.action === "dismiss") delete s.trial_ended;
       else return fail(res, "Unknown action");
