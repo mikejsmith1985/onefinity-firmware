@@ -87,21 +87,23 @@ export function setterProgram(o) {
   return lines.join("\n") + "\n";
 }
 
-// Find the setter's centre with the 3D probe (1.40.0). It touches the cap from
-// above (that height is also the probe's trip height on the setter, the same
-// as a reference touch), then, from `ro` out on each side and `drop` below the
-// cap, probes the setter's round body inwards from +X, -X, +Y and -Y. The
-// middle of each pair of touches is the centre: for a round body that is true
-// on any line across it, so the saved position only has to be roughly right.
-// Everything is guarded (G38.3); a step that touches too soon or finds nothing
-// stops it with _ofx_fail set:
-//   1 nothing under the probe, 2 something beside the setter, 3 the side not found.
-// o: {setter: {x, y, z}, top, clear, travel, fast, slow, ro, drop}
-export const CENTRE = { ro: 25, drop: 6 };
+// Find the setter's centre with the 3D probe (1.40.0; 1.40.1: eight directions and a circle fit).
+// It touches the cap from above (to know the height), then from `ro` out in eight directions
+// around the setter and `drop` below the cap it probes the round body inwards, going up to
+// the top of Z between directions and down beside the setter guarded. A direction where
+// something is in the way (on the machine: the setter's air-nozzle post behind it) is skipped:
+// the guarded descent beside the setter touches it, or the inward touch lands off the circle.
+// The centre is the circle through the good touches (4 needed: any 3 points make a circle, so a
+// fourth is what shows a touch went wrong). Everything is guarded (G38.3).
+//   _ofx_fail: 1 nothing under the probe over the saved position.
+//   _ofx_pN: 1 touched the body in direction N, with _ofx_xN / _ofx_yN; 0 skipped.
+// The cap height for a reference is taken afterwards with setterProgram over the new centre.
+// o: {setter: {x, y, z}, top, travel, fast, slow, ro, drop}
+export const CENTRE = { ro: 25, drop: 6, dirs: 8, need: 4 };
 export function setterCentreProgram(o) {
   const { x, y, z } = o.setter;
-  const ro = o.ro ?? CENTRE.ro, drop = o.drop ?? CENTRE.drop;
-  const down = o.top - (z - 25), up = 10; // between sides: 10 mm over the cap
+  const ro = o.ro ?? CENTRE.ro, drop = o.drop ?? CENTRE.drop, dirs = o.dirs ?? CENTRE.dirs;
+  const down = o.top - (z - 25); // between directions it goes back up to the top of Z
   const L = [
     "(Tool setter: find centre)", "G21", "M5",
     "#<_ofx_ok> = 0", "#<_ofx_fail> = 0",
@@ -110,61 +112,90 @@ export function setterCentreProgram(o) {
     "o610 if [#5070 EQ 1]",
     `G91 G1 Z1 F${o.fast}`, `G91 G38.2 Z-2 F${o.slow}`,
     "#<_ofx_top> = #5063",
-    `G91 G0 Z${up}`,
+    `G90 G53 G0 Z${n(o.top)}`,
     "o610 else", "#<_ofx_fail> = 1", "o610 endif",
   ];
-  const sides = [["xp", "X", 1], ["xm", "X", -1], ["yp", "Y", 1], ["ym", "Y", -1]];
-  sides.forEach(([k, A, sg], i) => {
-    const sx = A === "X" ? x + sg * ro : x, sy = A === "Y" ? y + sg * ro : y;
-    const o_ = 620 + i * 10;
-    L.push(`o${o_} if [#<_ofx_fail> EQ 0]`,
+  for (let i = 0; i < dirs; i++) {
+    const a = (i * 2 * Math.PI) / dirs, c = Math.cos(a), s = Math.sin(a);
+    const sx = x + ro * c, sy = y + ro * s, q = 620 + i * 10;
+    L.push(`#<_ofx_p${i}> = 0`,
+      `o${q} if [#<_ofx_fail> EQ 0]`,
       `G90 G53 G0 X${n(sx)} Y${n(sy)}`,
-      `G91 G38.3 Z${n(-(up + drop))} F${o.fast}`,
-      `o${o_ + 1} if [#5070 EQ 1]`, "#<_ofx_fail> = 2", `o${o_ + 1} else`,
-      `G91 G38.3 ${A}${n(-sg * ro)} F${o.fast}`,
-      `o${o_ + 2} if [#5070 EQ 1]`,
-      `G91 G1 ${A}${n(sg)} F${o.fast}`, `G91 G38.2 ${A}${n(-2 * sg)} F${o.slow}`,
-      `#<_ofx_${k}> = #${A === "X" ? 5061 : 5062}`,
-      `o${o_ + 2} else`, "#<_ofx_fail> = 3", `o${o_ + 2} endif`,
-      `G90 G53 G0 ${A}${n(A === "X" ? sx : sy)}`,
-      `o${o_ + 1} endif`,
-      `G90 G53 G0 Z[#<_ofx_top> + ${up}]`,
-      `o${o_} endif`);
-  });
-  // Then touch the cap again over the centre: the first touch may have landed
-  // on the body's rim when the saved position was well off. This is the
-  // probe's trip height on the setter, the same as a reference touch.
-  L.push("o680 if [#<_ofx_fail> EQ 0]",
-    `G90 G53 G0 X[[#<_ofx_xp> + #<_ofx_xm>] / 2] Y[[#<_ofx_yp> + #<_ofx_ym>] / 2]`,
-    `G91 G38.3 Z${n(-(up + 15))} F${o.fast}`,
-    "o681 if [#5070 EQ 1]",
-    `G91 G1 Z1 F${o.fast}`, `G91 G38.2 Z-2 F${o.slow}`,
-    "#<_ofx_cap> = #5063",
-    "o681 else", "#<_ofx_fail> = 1", "o681 endif",
-    "o680 endif",
-    `G90 G53 G0 Z${n(o.top)}`,
+      // Down beside the setter from the top, guarded: anything there (however tall) stops it
+      `G91 G38.3 Z[#<_ofx_top> - ${n(drop)} - ${n(o.top)}] F${Math.min(o.travel, 800)}`,
+      `o${q + 1} if [#5070 EQ 0]`,  // clear beside the setter: probe inwards
+      `G91 G38.3 X${n(-ro * c)} Y${n(-ro * s)} F${o.fast}`,
+      `o${q + 2} if [#5070 EQ 1]`,
+      `G91 G1 X${n(c)} Y${n(s)} F${o.fast}`, `G91 G38.2 X${n(-2 * c)} Y${n(-2 * s)} F${o.slow}`,
+      `#<_ofx_x${i}> = #5061`, `#<_ofx_y${i}> = #5062`, `#<_ofx_p${i}> = 1`,
+      `o${q + 2} endif`,
+      `G90 G53 G0 X${n(sx)} Y${n(sy)}`,
+      `o${q + 1} endif`,
+      `G90 G53 G0 Z${n(o.top)}`,
+      `o${q} endif`);
+  }
+  L.push(`G90 G53 G0 Z${n(o.top)}`,
     "o690 if [#<_ofx_fail> EQ 0]", "#<_ofx_ok> = 1", "o690 endif", "G90", "M2");
   return L.join("\n") + "\n";
 }
 export const CENTRE_FAILS = {
   1: "The probe came down over the saved setter position without touching anything. Jog over the setter and save its position roughly first.",
-  2: "The probe touched something beside the setter on the way down. The saved position may be far off, or something is next to the setter.",
-  3: "The probe didn't find a side of the setter. The saved position may be far off.",
 };
-// The centre from the touches (machine positions of the spindle at each trip:
-// the stylus ball's size cancels out). Checks it looks like one round body.
-export function setterCentre(r, from) {
-  const v = (k) => r[`ofx_${k}`];
-  if (r.ofx_ok !== 1 || !["xp", "xm", "yp", "ym", "cap"].every((k) => typeof v(k) === "number")) return { error: CENTRE_FAILS[r.ofx_fail] || "Finding the centre didn't finish." };
-  const x = (v("xp") + v("xm")) / 2, y = (v("yp") + v("ym")) / 2;
-  // The X touches were on the line through the saved Y, the Y touches on the saved X: all four
-  // should be the same distance from the centre if they were all on the one round body.
-  const sx = from ? from.x : x, sy = from ? from.y : y;
-  const rs = [Math.hypot(v("xp") - x, sy - y), Math.hypot(v("xm") - x, sy - y), Math.hypot(sx - x, v("yp") - y), Math.hypot(sx - x, v("ym") - y)];
-  const spread = Math.max(...rs) - Math.min(...rs);
-  if (!(v("xp") > v("xm")) || !(v("yp") > v("ym")) || spread > 1) return { error: `The four touches aren't on one round body (they differ by ${spread.toFixed(1)} mm), so something else was touched. Nothing was saved.` };
-  const moved = from ? Math.hypot(x - from.x, y - from.y) : 0;
-  return { x, y, d: 2 * rs.reduce((a, b) => a + b, 0) / 4, top: v("cap"), moved };
+// Circle through points (least squares, algebraic fit): {x, y, r, res: worst distance off it}
+export function fitCircle(pts) {
+  const n = pts.length;
+  if (n < 3) return null;
+  const mx = pts.reduce((a, p) => a + p.x, 0) / n, my = pts.reduce((a, p) => a + p.y, 0) / n;
+  let suu = 0, svv = 0, suv = 0, suuu = 0, svvv = 0, suvv = 0, svuu = 0;
+  for (const p of pts) {
+    const u = p.x - mx, v = p.y - my;
+    suu += u * u; svv += v * v; suv += u * v; suuu += u * u * u; svvv += v * v * v; suvv += u * v * v; svuu += v * u * u;
+  }
+  const det = suu * svv - suv * suv;
+  if (Math.abs(det) < 1e-9) return null;
+  const b1 = (suuu + suvv) / 2, b2 = (svvv + svuu) / 2;
+  const uc = (b1 * svv - b2 * suv) / det, vc = (suu * b2 - suv * b1) / det;
+  const x = uc + mx, y = vc + my;
+  const r = Math.sqrt(uc * uc + vc * vc + (suu + svv) / n);
+  const res = Math.max(...pts.map((p) => Math.abs(Math.hypot(p.x - x, p.y - y) - r)));
+  return { x, y, r, res };
+}
+// The centre from the touches (spindle positions at each trip: the stylus ball's size cancels
+// out). A touch that isn't on the circle with the others (it hit something else) is dropped.
+export function setterCentre(r, from, dirs = CENTRE.dirs) {
+  if (r.ofx_ok !== 1) return { error: CENTRE_FAILS[r.ofx_fail] || "Finding the centre didn't finish." };
+  let pts = [];
+  for (let i = 0; i < dirs; i++) {
+    if (r[`ofx_p${i}`] === 1 && typeof r[`ofx_x${i}`] === "number" && typeof r[`ofx_y${i}`] === "number") pts.push({ i, x: r[`ofx_x${i}`], y: r[`ofx_y${i}`] });
+  }
+  const skipped = dirs - pts.length;
+  let f = fitCircle(pts);
+  while (f && f.res > 0.3 && pts.length > CENTRE.need) {
+    const worst = pts.reduce((w, p) => (Math.abs(Math.hypot(p.x - f.x, p.y - f.y) - f.r) > Math.abs(Math.hypot(w.x - f.x, w.y - f.y) - f.r) ? p : w));
+    pts = pts.filter((p) => p !== worst);
+    f = fitCircle(pts);
+  }
+  if (!f || pts.length < CENTRE.need) return { error: `Only ${pts.length} of the ${dirs} touches found the setter's side (something was in the way of the others, or the saved position is far off). Nothing was saved.` };
+  if (f.res > 0.3) return { error: `The touches aren't on one round body (${f.res.toFixed(2)} mm off), so something else was touched. Nothing was saved.` };
+  // The touches should go most of the way round, or the fit is poor
+  const ang = pts.map((p) => Math.atan2(p.y - f.y, p.x - f.x)).sort((a, b) => a - b);
+  let gap = 2 * Math.PI - (ang[ang.length - 1] - ang[0]);
+  for (let k = 1; k < ang.length; k++) gap = Math.max(gap, ang[k] - ang[k - 1]);
+  if (gap > Math.PI) return { error: "The touches that found the setter are all on one side of it, so its centre can't be trusted. Nothing was saved." };
+  const moved = from ? Math.hypot(f.x - from.x, f.y - from.y) : 0;
+  return { x: f.x, y: f.y, d: 2 * f.r, used: pts.length, skipped: dirs - pts.length, blocked: skipped, moved };
+}
+
+// Both passes (1.40.1): when the first one moved the centre more than 2 mm, the touches were
+// lopsided around the body; a second pass from the new centre is evenly spread, and is the one
+// kept. run(program) resolves with the controller state when the program ends.
+export async function findSetterCentre(run, args) {
+  const first = setterCentre(await run(setterCentreProgram(args)), args.setter);
+  if (first.error || first.moved <= 2) return { ...first, passes: 1 };
+  const setter = { ...args.setter, x: first.x, y: first.y };
+  const second = setterCentre(await run(setterCentreProgram({ ...args, setter })), setter);
+  if (second.error) return second;
+  return { ...second, moved: Math.hypot(second.x - args.setter.x, second.y - args.setter.y), passes: 2 };
 }
 
 // The touch height the controller reports (#5063) is in MACHINE coordinates, not work

@@ -4,7 +4,7 @@ import { ME, useUi, useDriver, uiGet, uiCas, uiUpdate, uiPatch, uiClose } from "
 import { api } from "./controller.js";
 import { computeAxis } from "./axis.js";
 import { getPrefs, setPrefs } from "./checkpoint.js";
-import { SETTER_DEFAULTS, SETTER_FAILS, CORR_MAX, setterProgram, setterCentreProgram, setterCentre, refStatus, probeActive, probeCorrection, guardZone, guardText, tripToWork, REF_FORMAT } from "./setter.js";
+import { SETTER_DEFAULTS, SETTER_FAILS, CORR_MAX, setterProgram, findSetterCentre, refStatus, probeActive, probeCorrection, guardZone, guardText, tripToWork, REF_FORMAT } from "./setter.js";
 import { programMoves, moveStatus } from "./progress.js";
 import { RunProgress, Outcome, useRunStep, StepBody } from "./steps.jsx";
 import { SetterArt } from "./art.jsx";
@@ -119,13 +119,13 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
   }, [cen, touched]);
   const centre = async () => {
     setCen({ phase: "run" }); setMsg(null);
-    const res = await run(setterCentreProgram(setterArgs(state, config, s, "ref")));
+    let stopped = false;
+    const c = await findSetterCentre(async (prog) => { const r = await run(prog); if (r.notFound || r.estop) stopped = true; return r; }, setterArgs(state, config, s, "ref"));
     setCen(null);
-    if (res.notFound || res.estop) { setMsg({ ok: false, text: "Stopped by the E-stop. Nothing was saved." }); return; }
-    const c = setterCentre(res, s);
+    if (stopped) { setMsg({ ok: false, text: "Stopped by the E-stop. Nothing was saved." }); return; }
     if (c.error) { setMsg({ ok: false, text: c.error }); return; }
     update((x) => ({ ...x, x: c.x, y: c.y }));
-    setMsg({ ok: true, text: `Centre found and saved: machine X ${fmt(c.x)}, Y ${fmt(c.y)}${c.moved > 0.05 ? ` (it was ${fmt(c.moved)} ${unit} off)` : ""}. The reference and calibration are kept: the setter didn't move.` });
+    setMsg({ ok: true, text: `Centre found and saved: machine X ${fmt(c.x)}, Y ${fmt(c.y)}${c.moved > 0.05 ? ` (it was ${fmt(c.moved)} ${unit} off)` : ""}${c.skipped ? `, from ${c.used} side touches (${c.skipped} skipped: something was in the way)` : ""}. The reference and calibration are kept: the setter didn't move.` });
   };
 
   const saveLocation = () => {
@@ -197,7 +197,7 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
             {cen?.phase === "check" ? <p><b>Push the stylus sideways</b> to show the probe works.{touched && !cen.seenOpen ? " (It already reads as touched: check the probe.)" : ""} <button className="quiet" onClick={() => setCen(null)}>Cancel</button></p>
               : cen?.phase === "ready" ? <button className="primary" disabled={!canMove} onClick={centre}>Start: find the centre</button>
               : <button disabled={!canMove || !!cen} onClick={() => setCen({ phase: "check", seenOpen: false })}>{cen?.phase === "run" ? "Finding the centre…" : "Find the centre with the probe"}</button>}
-            <small>With the 3D probe in: it touches the top, then the four sides, and saves the exact centre. The saved position only needs to be roughly right.</small>
+            <small>With the 3D probe in: it touches the top, then the sides from eight directions (skipping any where something is in the way), and saves the exact centre. The saved position only needs to be roughly right.</small>
           </div>}
           <div>
             <button disabled={!homed || !idle || !!busy} onClick={saveLocation}>{located ? "Save setter position again" : "Save setter position"}</button>

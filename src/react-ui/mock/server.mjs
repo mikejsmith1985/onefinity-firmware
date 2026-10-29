@@ -173,9 +173,10 @@ function bedcamMdi(text) {
   // 1.40.0: the probe finds the setter's centre (round body, 13.35 mm to the spindle at a touch)
   if (text.includes("(Tool setter: find centre)")) {
     const sx = num(/G53 G0 X(-?[\d.]+) Y/), sy = num(/G53 G0 X-?[\d.]+ Y(-?[\d.]+)/), R = 13.355;
-    const [cx, cy] = MOCK_SETTER, hx = Math.sqrt(Math.max(0, R * R - (sy - cy) ** 2)), hy = Math.sqrt(Math.max(0, R * R - (sx - cx) ** 2));
-    const far = Math.hypot(sx - cx, sy - cy) > 12;
-    runFake(() => (far ? { ofx_ok: 0, ofx_fail: 1 } : { ofx_ok: 1, ofx_fail: 0, ofx_top: -15.2, ofx_cap: -15.2, ofx_xp: cx + hx, ofx_xm: cx - hx, ofx_yp: cy + hy, ofx_ym: cy - hy, xp: cx, yp: cy }), 1500);
+    const [cx, cy] = MOCK_SETTER, far = Math.hypot(sx - cx, sy - cy) > 12;
+    const pts = {};
+    for (let i = 0; i < 8; i++) { const a = (i * Math.PI) / 4; pts[`ofx_p${i}`] = 1; pts[`ofx_x${i}`] = cx + R * Math.cos(a); pts[`ofx_y${i}`] = cy + R * Math.sin(a); }
+    runFake(() => (far ? { ofx_ok: 0, ofx_fail: 1 } : { ofx_ok: 1, ofx_fail: 0, ofx_top: -15.2, ...pts }), 1500);
     return true;
   }
   if (text.includes("(Bed camera: park)")) {
