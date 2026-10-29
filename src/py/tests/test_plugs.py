@@ -129,9 +129,10 @@ check('addresses passed to the plugs', links['router'].ip == '192.168.4.173' and
 check('idle: both off', p.want == {'router': False, 'vac': False})
 ctrl.state.set('cycle', 'running')
 p.job_start(False)
-check('job start: vac on, router waits for M3', p.want == {'router': False, 'vac': True})
+check('job start: both wait for M3 (1.40.3: the vac too)', p.want == {'router': False, 'vac': False})
 p.spindle_cmd(True)
 check('M3: router on', p.want['router'] is True)
+check('M3: vac on', p.want['vac'] is True)
 ctrl.ioloop.advance(5, each = beat)
 check('router confirmed: the job is not paused', ctrl.mach.pauses == 0)
 check('status shows on and watts', ctrl.state.get('plug_router') == 'on' and ctrl.state.get('plug_router_w') == 400)
@@ -174,7 +175,8 @@ ctrl.ioloop.advance(10, each = beat)
 check('lost: paused only once', ctrl.mach.pauses == 1)
 
 ctrl, p, links, beat = make()
-ctrl.state.set('cycle', 'running'); p.job_start(False)
+ctrl.state.set('cycle', 'running'); p.job_start(False); p.spindle_cmd(True)
+ctrl.ioloop.advance(5, each = beat)
 links['vac'].alive = False
 ctrl.ioloop.advance(12, each = beat)
 check('vac lost: warning, job keeps going', ctrl.mach.pauses == 0 and ctrl.log.has('warning', 'Vac plug'))
@@ -220,7 +222,7 @@ ctrl.state.set('cycle', 'running'); p.job_start(False)
 p.on_update(True)
 went = []
 p.resume(lambda: went.append(1))
-check('Continue with the router off (no M3 yet): no wait', went == [1] and p.want == {'router': False, 'vac': True})
+check('Continue with the router off (no M3 yet): no wait', went == [1] and p.want == {'router': False, 'vac': False})
 
 
 # ------------------------------------------------------------ E-stop and Stop
@@ -245,6 +247,26 @@ check('Stop: router off at once', p.want['router'] is False)
 ctrl.state.set('cycle', 'idle'); p.job_end()
 check('Stop: vac runs on to clear the hose', p.want['vac'] is True)
 
+
+# ------------------------------------------------------------ 1.40.3: a macro that only moves
+# On the machine the Tool Change macro (moves to the change position and pauses) started the vac.
+ctrl, p, links, beat = make()
+ctrl.state.set('cycle', 'running'); p.job_start(False)
+check('macro without M3: vac stays off', p.want == {'router': False, 'vac': False})
+p.on_update(True); p.resume(lambda: None); p.on_update(False)
+check('macro paused and continued: vac still off', p.want['vac'] is False)
+ctrl.state.set('cycle', 'idle'); p.job_end()
+check('macro ends: no vac run-on', p.want['vac'] is False)
+ctrl.ioloop.advance(6, each = beat)
+check('macro ends: vac stays off', p.want['vac'] is False and links['vac'].target is not True)
+# a job with a tool change in the middle: the vac keeps running through the M5 after M3
+ctrl, p, links, beat = make()
+ctrl.state.set('cycle', 'running'); p.job_start(False); p.spindle_cmd(True); p.spindle_cmd(False)
+check('job: M5 for a tool change keeps the vac on', p.want['vac'] is True)
+# the next job starts without the earlier one's M3 counting
+ctrl.state.set('cycle', 'idle'); p.job_end(); ctrl.ioloop.advance(6, each = beat)
+ctrl.state.set('cycle', 'running'); p.job_start(False)
+check('next job (a macro): the last job\'s M3 doesn\'t count', p.want['vac'] is False)
 
 # ------------------------------------------------------------ dry run, laser, manual
 ctrl, p, links, beat = make()

@@ -143,7 +143,7 @@ export function setterCentreProgram(o) {
 }
 export const CENTRE_FAILS = {
   1: "The probe came down over the saved setter position without touching anything. Jog over the setter and save its position roughly first.",
-  4: "The probe touched something well above the setter, so it stopped. Check nothing is on or over the setter (a hand, a part, a loose cable) and try again.",
+  4: "The probe touched something well above where the setter should be, so it stopped. Either something is on or over the setter (a hand, a part, a loose cable), or Z has lost its position: home the machine and try again.",
 };
 // Circle through points (least squares, algebraic fit): {x, y, r, res: worst distance off it}
 export function fitCircle(pts) {

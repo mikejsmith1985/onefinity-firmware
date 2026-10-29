@@ -6,7 +6,8 @@
 #                                                                              #
 #   Two Shelly Wi-Fi plugs (Gen2 or later RPC: Plug US Gen4 tested) switch    #
 #   the Makita router and the shop vac.  The router follows the program's     #
-#   spindle commands (M3 on, M5 off) and the vac runs while a program runs.   #
+#   spindle commands (M3 on, M5 off) and the vac runs while a program runs   #
+#   once it has turned the spindle on (1.40.3: not for macros that don't cut).#
 #   Both go off at the end of the program, on Stop, on E-stop and while a     #
 #   job is paused.                                                             #
 #                                                                              #
@@ -134,6 +135,7 @@ class Plugs(object):
         self.manual = {'router': False, 'vac': False} # On from the screen
         self.job = False       # A real (not dry) program is running
         self.vac_hang = False  # Vac running on after the job, to clear the hose
+        self.cutting = False   # 1.40.3: this job has turned the spindle on
         self.vac_token = 0
         self.paused = False    # Job paused: everything off
         self.resuming = None   # (proceed, token) while the router spins up
@@ -216,7 +218,10 @@ class Plugs(object):
             if name == 'router':
                 on = (self.spindle and self._tool_is_router()) or \
                     self.manual['router']
-            else: on = self.job or self.vac_hang or self.manual['vac']
+            # 1.40.3: only a job that has turned the spindle on runs the vac.
+            # A macro that only moves (the Tool Change macro) used to start it.
+            else: on = (self.job and self.cutting) or self.vac_hang or \
+                self.manual['vac']
             want[name] = bool(on)
         return want
 
@@ -304,6 +309,7 @@ class Plugs(object):
     def spindle_cmd(self, on):
         '''A spindle command (M3/M4 with S > 0, or M5/S0) reached the machine.'''
         on = bool(on)
+        if on and self.job: self.cutting = True
         if on == self.spindle: return
         self.spindle = on
         self._apply()
@@ -326,6 +332,7 @@ class Plugs(object):
 
     def job_start(self, dry):
         self.job = not dry
+        self.cutting = False
         self.manual['router'] = False
         self.vac_token += 1
         self.vac_hang = False
@@ -334,8 +341,9 @@ class Plugs(object):
 
     def job_end(self):
         '''The program ended or was stopped: router off, vac runs on a little.'''
-        was = self.job
+        was = self.job and self.cutting
         self.job = False
+        self.cutting = False
         self.spindle = False
         self.paused = False
         self.resuming = None
