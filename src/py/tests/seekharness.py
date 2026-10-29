@@ -213,6 +213,9 @@ class FakeAVR:
         self.rx = ''
         self.out = deque()
         self.read_cb = self.write_cb = None
+        self.garble = None
+        self.garbled = []
+        self.dumps = 0
 
     def set_handlers(self, read_cb, write_cb):
         self.read_cb, self.write_cb = read_cb, write_cb
@@ -242,7 +245,16 @@ class FakeAVR:
     def deliver(self):
         while self.out:
             msg = self.out.popleft()
-            self.read_cb(bytes(json.dumps(msg) + '\n', 'utf-8'))
+            text = json.dumps(msg, separators = (',', ':'))
+            # 1.43.1: garble the next "holding" report the way the machine's
+            # serial link did ('quote': a quote lost before a key) or worse
+            # ('cut': half the line lost)
+            if self.garble and msg.get('xx') == 'HOLDING':
+                if self.garble == 'quote': text = text.replace('"xc"', 'xc"')
+                else: text = text[:len(text) // 2]
+                self.garbled.append(text)
+                self.garble = None
+            self.read_cb(bytes(text + '\n', 'utf-8'))
 
     def write(self, data):
         self.rx += data.decode('utf-8')
@@ -252,6 +264,14 @@ class FakeAVR:
         return len(data)
 
     def execute(self, line):
+        # 'D' (report all variables) runs at once, whatever the state
+        # (command.def: not synchronous)
+        if line == Cmd.DUMP:
+            self.dumps += 1
+            self.report(xx = self.state, xc = self.count,
+                        pr = 'Switch found' if self.state == 'HOLDING' else '',
+                        **self.position())
+            return
         if not line or self.state in ('ESTOPPED', 'HOLDING'): return
         self.h.executed += 1
         c = line[0]

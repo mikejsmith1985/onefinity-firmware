@@ -27,6 +27,7 @@
 
 import serial
 import json
+import re
 import time
 import traceback
 from collections import deque
@@ -64,6 +65,21 @@ def _driver_flags_to_string(flags):
 
 def driver_flags_to_string(flags):
     return ', '.join(_driver_flags_to_string(flags))
+
+
+# 1.43.1: put back a quote lost from a key in a status line from the motion
+# board, e.g. {"pw":0,"xx":"HOLDING",xc":455} -> ..."xc":455}. Only lines
+# that then read as a JSON object are used; anything else returns None.
+_LOST_QUOTE = re.compile(r'([{,])\s*"?([A-Za-z0-9_]+)"?\s*:')
+
+def repair_line(line):
+    if '"msg"' in line: return None # free text: leave it alone
+    try:
+        fixed = _LOST_QUOTE.sub(lambda m: '%s"%s":' % (m.group(1), m.group(2)),
+                                line)
+        msg = json.loads(fixed)
+        return msg if isinstance(msg, dict) else None
+    except Exception: return None
 
 
 class Comm(object):
@@ -214,8 +230,18 @@ class Comm(object):
                     msg = json.loads(line)
 
                 except Exception as e:
-                    self.log.warning('%s, data: %s', e, line)
-                    continue
+                    # 1.43.1: a character can go missing on the serial link. On
+                    # the machine the line that said the probe had touched
+                    # ("xx":"HOLDING") lost a quote, so the controller never
+                    # saw the touch and waited for ever. Repair what can be
+                    # repaired, and ask the motion board for every variable
+                    # again either way, so nothing stays missed.
+                    msg = repair_line(line)
+                    self.log.warning('%s, data: %s (%s)', e, line,
+                                     'repaired' if msg is not None else
+                                     'skipped')
+                    self.queue_command(Cmd.DUMP)
+                    if msg is None: continue
 
                 if 'variables' in msg:
                     self._update_vars(msg)
