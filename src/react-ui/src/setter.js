@@ -109,14 +109,20 @@ export function setterCentreProgram(o) {
     "#<_ofx_ok> = 0", "#<_ofx_fail> = 0",
     `G90 G53 G0 Z${n(o.top)}`, `G53 G0 X${n(x)} Y${n(y)}`,
     `G91 G38.3 Z${n(-down)} F${Math.min(o.travel, 800)}`,
-    "o610 if [#5070 EQ 1]",
+    // 1.41.1: no "else" here. On the machine the controller's G-code reader took the "else" of an
+    // if/else whose first branch held another if that was false, so it set fail 1 after a good touch.
+    "#<_ofx_hit> = #5070",
+    "o610 if [#<_ofx_hit> EQ 1]",
     `G91 G1 Z1 F${o.fast}`, `G91 G38.2 Z-2 F${o.slow}`,
     "#<_ofx_top> = #5063",
+    "o610 endif",
     `G90 G53 G0 Z${n(o.top)}`,
+    "o611 if [#<_ofx_hit> EQ 0]", "#<_ofx_fail> = 1", "o611 endif",
     // 1.40.2: a touch far above the setter is something else (on the machine: 40 mm above the
     // cap). Same allowance as the setter routine's clearance for longer tools.
-    `o611 if [#<_ofx_top> GT ${n(z + o.clear)}]`, "#<_ofx_fail> = 4", "o611 endif",
-    "o610 else", "#<_ofx_fail> = 1", "o610 endif",
+    "o612 if [#<_ofx_fail> EQ 0]",
+    `o613 if [#<_ofx_top> GT ${n(z + o.clear)}]`, "#<_ofx_fail> = 4", "o613 endif",
+    "o612 endif",
   ];
   for (let i = 0; i < dirs; i++) {
     const a = (i * 2 * Math.PI) / dirs, c = Math.cos(a), s = Math.sin(a);
@@ -125,7 +131,7 @@ export function setterCentreProgram(o) {
       `o${q} if [#<_ofx_fail> EQ 0]`,
       `G90 G53 G0 X${n(sx)} Y${n(sy)}`,
       // Down beside the setter from the top, guarded: anything there (however tall) stops it
-      `G91 G38.3 Z[#<_ofx_top> - ${n(drop)} - ${n(o.top)}] F${Math.min(o.travel, 800)}`,
+      `G91 G38.3 Z[#<_ofx_top> - ${n(drop + o.top)}] F${Math.min(o.travel, 800)}`,   // (no "- -1")
       `o${q + 1} if [#5070 EQ 0]`,  // clear beside the setter: probe inwards
       `G91 G38.3 X${n(-ro * c)} Y${n(-ro * s)} F${o.fast}`,
       `o${q + 2} if [#5070 EQ 1]`,
@@ -138,7 +144,8 @@ export function setterCentreProgram(o) {
       `o${q} endif`);
   }
   L.push(`G90 G53 G0 Z${n(o.top)}`,
-    "o690 if [#<_ofx_fail> EQ 0]", "#<_ofx_ok> = 1", "o690 endif", "G90", "M2");
+    // 1.41.1: o699, not o690: the eighth direction's block is o690 (620 + 7 * 10)
+    "o699 if [#<_ofx_fail> EQ 0]", "#<_ofx_ok> = 1", "o699 endif", "G90", "M2");
   return L.join("\n") + "\n";
 }
 export const CENTRE_FAILS = {

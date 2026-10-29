@@ -12,7 +12,7 @@
 //    matches, which gives the camera's height and the point under it, so the
 //    top of stock can be placed allowing for its height (parallax)
 // The result has the same form as bedcam.js calibrate(): {H, c, hc, zBed, ...}.
-import { fitHomography, apply, inv3 } from "./bedcam.js";
+import { fitHomography, apply, inv3, undistortPx } from "./bedcam.js";
 
 // ---------- finding crosses ----------
 function grayOf(img) {
@@ -163,13 +163,16 @@ function rodrigues(r) {
   return [[c + x * x * C, x * y * C - z * s, x * z * C + y * s], [y * x * C + z * s, c + y * y * C, y * z * C - x * s], [z * x * C - y * s, z * y * C + x * s, c + z * z * C]];
 }
 const mul3 = (A, B) => A.map((r) => [0, 1, 2].map((j) => r[0] * B[0][j] + r[1] * B[1][j] + r[2] * B[2][j]));
-// p = [f, rx, ry, rz, Cx, Cy, Cz, R0]: the turn (rx, ry, rz) is a small change on top of the
+// p = [f, rx, ry, rz, Cx, Cy, Cz, k1, R0]: the turn (rx, ry, rz) is a small change on top of the
 // starting guess R0, which keeps the fit well behaved for any way round the camera is mounted.
-// World point -> pixel (principal point at the picture's middle).
+// k1: the lens's barrel distortion (1.41.1: the machine's webcam bends the picture enough to put
+// the crosses up to 4 mm off a straight-lens fit). World point -> pixel (principal point at the
+// picture's middle).
 function project(p, size, X) {
-  const R = mul3(rodrigues([p[1], p[2], p[3]]), p[7]), d = [X.x - p[4], X.y - p[5], X.z - p[6]];
+  const R = mul3(rodrigues([p[1], p[2], p[3]]), p[8]), d = [X.x - p[4], X.y - p[5], X.z - p[6]];
   const c = R.map((r) => r[0] * d[0] + r[1] * d[1] + r[2] * d[2]);
-  return { x: size.w / 2 + (p[0] * c[0]) / c[2], y: size.h / 2 + (p[0] * c[1]) / c[2], z: c[2] };
+  const xn = c[0] / c[2], yn = c[1] / c[2], k = 1 + p[7] * (xn * xn + yn * yn);
+  return { x: size.w / 2 + p[0] * xn * k, y: size.h / 2 + p[0] * yn * k, z: c[2] };
 }
 function solve(A, b) {
   const n = b.length, M = A.map((r, i) => [...r, b[i]]);
@@ -184,7 +187,7 @@ function solve(A, b) {
   return x;
 }
 // Levenberg-Marquardt on the pixel error of every match (plus an optional height prior)
-function refine(p0, size, pts, prior) {
+function refine(p0, size, pts, prior, NP = 7) {
   let p = p0.slice(), lam = 1e-3;
   const res = (q) => {
     const r = [];
@@ -195,15 +198,15 @@ function refine(p0, size, pts, prior) {
   let r = res(p); if (!r) return null;
   let cost = r.reduce((a, v) => a + v * v, 0);
   for (let it = 0; it < 200; it++) {
-    const J = [], eps = [1, 1e-5, 1e-5, 1e-5, 0.05, 0.05, 0.05];
-    for (let k = 0; k < 7; k++) { const q = p.slice(); q[k] += eps[k]; const rq = res(q); if (!rq) return null; J.push(rq.map((v, i) => (v - r[i]) / eps[k])); }
-    const A = [...Array(7)].map((_, i) => [...Array(7)].map((_, j) => J[i].reduce((a, v, k) => a + v * J[j][k], 0)));
-    const g = [...Array(7)].map((_, i) => J[i].reduce((a, v, k) => a + v * r[k], 0));
+    const J = [], eps = [1, 1e-5, 1e-5, 1e-5, 0.05, 0.05, 0.05, 1e-4];
+    for (let k = 0; k < NP; k++) { const q = p.slice(); q[k] += eps[k]; const rq = res(q); if (!rq) return null; J.push(rq.map((v, i) => (v - r[i]) / eps[k])); }
+    const A = [...Array(NP)].map((_, i) => [...Array(NP)].map((_, j) => J[i].reduce((a, v, k) => a + v * J[j][k], 0)));
+    const g = [...Array(NP)].map((_, i) => J[i].reduce((a, v, k) => a + v * r[k], 0));
     let moved = false;
     for (let tries = 0; tries < 10; tries++) {
       const Al = A.map((row, i) => row.map((v, j) => (i === j ? v * (1 + lam) : v)));
       const d = solve(Al, g.map((v) => -v)); if (!d) { lam *= 10; continue; }
-      const q = p.map((v, i) => (i < 7 ? v + d[i] : v)); const rq = res(q);
+      const q = p.map((v, i) => (i < NP ? v + d[i] : v)); const rq = res(q);
       const cq = rq ? rq.reduce((a, v) => a + v * v, 0) : Infinity;
       if (cq < cost) { p = q; r = rq; const done = cost - cq < 1e-12 * (1 + cost); cost = cq; lam = Math.max(lam / 10, 1e-9); moved = true; if (done) it = 999; break; }
       lam *= 10;
@@ -224,8 +227,8 @@ function startGuesses(H, size, zBed, prior) {
   const uz = [ux[1] * uy[2] - ux[2] * uy[1], ux[2] * uy[0] - ux[0] * uy[2], ux[0] * uy[1] - ux[1] * uy[0]]; // camera axis, pointing down
   const R = [ux, uy, uz];  // rows: camera axes in machine coordinates
   const mm = (sx + sy) / 2;
-  if (prior) { const f0 = (prior.z - zBed) / mm; return [0.8, 1, 1.25].map((k) => [f0 * k, 0, 0, 0, c.x, c.y, prior.z, R]); }
-  return [500, 800, 1100, 1500, 2200].map((f) => [f, 0, 0, 0, c.x, c.y, zBed + f * mm, R]);
+  if (prior) { const f0 = (prior.z - zBed) / mm; return [0.8, 1, 1.25].map((k) => [f0 * k, 0, 0, 0, c.x, c.y, prior.z, 0, R]); }
+  return [500, 800, 1100, 1500, 2200].map((f) => [f, 0, 0, 0, c.x, c.y, zBed + f * mm, 0, R]);
 }
 // pairs: [{px, m: {x, y, z}}] (z: machine Z of the bed at that cross); size {w, h};
 // o.hc: camera height above the bed measured with a tape (optional, used as a gentle prior)
@@ -234,13 +237,16 @@ export function fitCamera(pairs, size, o = {}) {
   const zBed = pts.reduce((a, p) => a + p.m.z, 0) / pts.length;
   const H = fitHomography(pts.map((p) => ({ from: p.px, to: p.m })));
   if (!H) return { error: "The crosses found don't work out (they may be in a line)." };
+  // Straight-lens fit from a few starting points, then with the lens's bend (k1) let free too
   const fit = (prior) => {
     let best = null;
     for (const g of startGuesses(H, size, zBed, prior)) {
       const r = refine(g, size, pts, prior);
       if (r && (!best || r.cost < best.cost)) best = r;
     }
-    return best;
+    if (!best || o.straight) return best;
+    const b8 = refine(best.p, size, pts, prior, 8);
+    return b8 && b8.cost < best.cost ? b8 : best;
   };
   const px = (r) => Math.sqrt(r.cost / (pts.length * 2));
   let best = fit(null);
@@ -258,8 +264,10 @@ export function fitCamera(pairs, size, o = {}) {
     if (!best || px(best) > 2 || !(best.p[0] > 0)) return { error: "Couldn't work out where the camera is from the crosses and that height. Check the height measurement." };
   }
   if (px(best) > 2 || !(best.p[0] > 0)) return { error: `The crosses don't fit one camera position (off by ${px(best).toFixed(1)} pixels). Something else may have been taken for a cross.` };
-  const p = best.p, hc = p[6] - zBed;
-  return { f: p[0], c: { x: p[4], y: p[5] }, hc, H, zBed, errPx: px(best), fromTape: weak };
+  const p = best.p, hc = p[6] - zBed, k1 = Math.abs(p[7]) > 1e-6 ? p[7] : 0;
+  // The picture-to-bed map for the straightened picture
+  const Hu = k1 ? fitHomography(pts.map((q) => ({ from: undistortPx(q.px, p[0], k1, size), to: q.m }))) : H;
+  return { f: p[0], k1, c: { x: p[4], y: p[5] }, hc, H: Hu, zBed, errPx: px(best), fromTape: weak };
 }
 
 // The whole calibration: picture -> cal (same form as bedcam.js calibrate()).
@@ -269,15 +277,19 @@ export function calibrateMarkers(img, marks, o = {}) {
   const found = detectCrosses(img, o);
   const m = matchCrosses(found, marks.map((k) => ({ id: k.id, x: k.x, y: k.y, z: k.z })), size);
   if (m.error) return { error: m.error, found };
-  if (m.worst > 3) return { error: `The crosses found only line up with the carved ones to within ${m.worst.toFixed(1)} mm, so something else may have been taken for a cross.`, found };
+  // (1.41.1: judged on the camera fit below, which allows for the lens's bend; a straight
+  // homography is several mm out on the machine's webcam)
+  if (m.worst > 8) return { error: `The crosses found don't line up with the carved ones (${m.worst.toFixed(1)} mm out), so something else may have been taken for a cross, or a cross isn't where it's saved.`, found };
   const cam = fitCamera(m.pairs, size, o);
   if (cam.error) return { ...cam, found, pairs: m.pairs };
   if (!(cam.hc > 150 && cam.hc < 4000)) return { error: `That puts the camera ${Math.round(cam.hc)} mm above the bed, which can't be right.`, found };
-  const cal = { H: cam.H, Hinv: inv3(cam.H), c: cam.c, hc: cam.hc, zBed: cam.zBed, size, n: m.pairs.length, time: Date.now(), from: "markers", f: cam.f, errPx: cam.errPx, fromTape: cam.fromTape };
-  const errs = m.pairs.map((p) => { const q = apply(cam.H, p.px.x, p.px.y); return Math.hypot(q.x - p.m.x, q.y - p.m.y); });
+  const cal = { H: cam.H, Hinv: inv3(cam.H), c: cam.c, hc: cam.hc, zBed: cam.zBed, size, n: m.pairs.length, time: Date.now(), from: "markers", f: cam.f, k1: cam.k1, errPx: cam.errPx, fromTape: cam.fromTape };
+  const errs = m.pairs.map((p) => { const u = undistortPx(p.px, cam.f, cam.k1, size), q = apply(cam.H, u.x, u.y); return Math.hypot(q.x - p.m.x, q.y - p.m.y); });
   cal.rms = Math.sqrt(errs.reduce((a, e) => a + e * e, 0) / errs.length);
   cal.worst = Math.max(...errs);
   { const cx = size.w / 2, cy = size.h / 2, a = apply(cam.H, cx, cy), b = apply(cam.H, cx + 10, cy); cal.mmPerPx = Math.hypot(b.x - a.x, b.y - a.y) / 10; }
+  if (cal.worst > 1.5) return { error: `The crosses only line up to within ${cal.worst.toFixed(1)} mm even allowing for the lens, so something may be off: a cross covered or smudged, or one carved somewhere else.`, found };
   cal.pairs = m.pairs.map((p) => ({ id: p.id, px: { x: +p.px.x.toFixed(2), y: +p.px.y.toFixed(2) } }));
   return cal;
 }
+export const _internals = { refine: (...a) => refine(...a), startGuesses: (...a) => startGuesses(...a), project: (...a) => project(...a) };

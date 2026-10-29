@@ -2,7 +2,7 @@
 # planner code (simlib -> seekharness) against a round setter: body and cap as cylinders.
 # Checks the centre found, that no move hits anything unguarded, and the failure stops.
 #   python3 src/react-ui/test/setter-centre-sim.py
-import os, sys, json, math, subprocess
+import os, sys, json, math, subprocess, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from simlib import *
 
@@ -56,6 +56,9 @@ for post in (False, True):
               c if 'error' in c else '%.3f, %.3f, %d touches (%d skipped), %d pass(es)' % (c['x'], c['y'], c['used'], c['skipped'], c['passes']))
         check('  ends at the top of Z', abs(sim.P[2] - TOP) < 1e-6, sim.P)
 check('exempt from the setter guard like the other setter routines', prog.startswith('(Tool setter'))
+# 1.41.1: on the machine the G-code reader took the "else" of an if/else whose first branch held a
+# false inner if (it set fail 1 after a good touch). The program uses no else at all.
+check('no if/else in the program (the machine got one wrong)', not re.search(r'^o\d+ else', prog, re.M))
 # 2. Things in the way of several directions: skipped while 3 or more are left
 blocks = [Cyl(CX + 24, CY, 3, -60, -10), Cyl(CX - 24, CY + 4, 3, -60, -10), POST]
 sim, c, _ = find(dict(x=CX + 2, y=CY - 1, z=-15), [BED] + setter() + blocks)

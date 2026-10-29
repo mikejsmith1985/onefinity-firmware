@@ -126,8 +126,24 @@ export function calibrate(points, size) {
   return cal;
 }
 
+// Picture pixel -> where it would be with a straight lens (the inverse of the k1 bend above)
+export function undistortPx(px, f, k1, size) {
+  if (!k1) return px;
+  const xd = (px.x - size.w / 2) / f, yd = (px.y - size.h / 2) / f;
+  let xu = xd, yu = yd;
+  for (let i = 0; i < 8; i++) { const k = 1 + k1 * (xu * xu + yu * yu); xu = xd / k; yu = yd / k; }
+  return { x: size.w / 2 + f * xu, y: size.h / 2 + f * yu };
+}
+export function distortPx(px, f, k1, size) {
+  if (!k1) return px;
+  const xu = (px.x - size.w / 2) / f, yu = (px.y - size.h / 2) / f, k = 1 + k1 * (xu * xu + yu * yu);
+  return { x: size.w / 2 + f * xu * k, y: size.h / 2 + f * yu * k };
+}
+
 // Picture pixel -> machine X/Y of a point t mm above the bed
+// (1.41.1: a calibration from the crosses also undoes the lens's bend, cal.k1)
 export function toMachine(cal, px, t = 0) {
+  if (cal.k1) px = undistortPx(px, cal.f, cal.k1, cal.size);
   const P = apply(cal.H, px.x, px.y);
   const f = (cal.hc - t) / cal.hc;
   return { x: cal.c.x + (P.x - cal.c.x) * f, y: cal.c.y + (P.y - cal.c.y) * f };
@@ -136,7 +152,8 @@ export function toMachine(cal, px, t = 0) {
 export function toPixel(cal, m, t = 0) {
   const f = cal.hc / (cal.hc - t);
   const P = { x: cal.c.x + (m.x - cal.c.x) * f, y: cal.c.y + (m.y - cal.c.y) * f };
-  return apply(cal.Hinv, P.x, P.y);
+  const q = apply(cal.Hinv, P.x, P.y);
+  return cal.k1 ? distortPx(q, cal.f, cal.k1, cal.size) : q;
 }
 function mmPerPixel(cal) {
   const cx = cal.size ? cal.size.w / 2 : 320, cy = cal.size ? cal.size.h / 2 : 240;
