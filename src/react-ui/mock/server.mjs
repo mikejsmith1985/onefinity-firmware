@@ -1,3 +1,4 @@
+import { squarePoints } from "../src/square.js";
 // Mock Onefinity controller for developing the React UI without a machine.
 // Serves /api/* and the raw /websocket state feed on :8080.
 import http from "node:http";
@@ -182,6 +183,29 @@ function bedcamMdi(text) {
     const pts = {};
     for (let i = 0; i < 8; i++) { const a = (i * Math.PI) / 4; pts[`ofx_p${i}`] = 1; pts[`ofx_x${i}`] = cx + R * Math.cos(a); pts[`ofx_y${i}`] = cy + R * Math.sin(a); }
     runFake(() => (far ? { ofx_ok: 0, ofx_fail: 1 } : { ofx_ok: 1, ofx_fail: 0, ofx_top: -15.2, xp: +(cx + 17.7).toFixed(3), yp: +(cy - 17.7).toFixed(3), zp: -1, ...pts }), 1500);
+    return true;
+  }
+  // 1.43.0: the squareness check, on a 1-2-3 block under the start position, turned 1 degree, on a
+  // machine whose X/Y are MOCK_SKEW degrees out of square (default 0.03)
+  if (text.includes("(Squareness check")) {
+    const [, a, b, ball] = /block (-?[\d.]+) x (-?[\d.]+), ball (-?[\d.]+)/.exec(text).map(Number);
+    const skew = +(process.env.MOCK_SKEW ?? 0.03), r = ball / 2, cx = state.xp, cy = state.yp;
+    const t = Math.PI / 180, uA = 1 * t, vA = uA + Math.PI / 2 + skew * t;
+    const u = [Math.cos(uA), Math.sin(uA)], v = [Math.cos(vA), Math.sin(vA)];
+    // the faces as lines p = c + s*dir, pushed out by the ball's radius along their outward normal
+    const face = (c, dir, out) => { const nn = [dir[1], -dir[0]], k = nn[0] * out[0] + nn[1] * out[1] > 0 ? 1 : -1; return { p: [c[0] + k * r * nn[0], c[1] + k * r * nn[1]], d: dir }; };
+    const F = { front: face([-b / 2 * v[0], -b / 2 * v[1]], u, [0, -1]), back: face([b / 2 * v[0], b / 2 * v[1]], u, [0, 1]),
+      left: face([-a / 2 * u[0], -a / 2 * u[1]], v, [-1, 0]), right: face([a / 2 * u[0], a / 2 * u[1]], v, [1, 0]) };
+    const pts = squarePoints({ a, b, ball }), out = { ofq_ok: 1, ofq_fail: 0, ofq_zt: -60 };
+    pts.forEach((q, i) => {
+      const f = F[q.side];
+      // where the line from q along the axis meets the face line
+      const ax = q.axis === "X" ? [1, 0] : [0, 1];
+      const den = ax[0] * f.d[1] - ax[1] * f.d[0], w = [f.p[0] - q.x, f.p[1] - q.y];
+      const s2 = (w[0] * f.d[1] - w[1] * f.d[0]) / den;
+      out[`ofq_x${i}`] = +(cx + q.x + s2 * ax[0]).toFixed(4); out[`ofq_y${i}`] = +(cy + q.y + s2 * ax[1]).toFixed(4);
+    });
+    runFake(() => out, 1500);
     return true;
   }
   // 1.42.0: the homing correction: G28.3 sets the machine reading (the homing's error changes),

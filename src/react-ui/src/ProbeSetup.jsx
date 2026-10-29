@@ -30,6 +30,10 @@ export async function setupStatus(state) {
       what: "Without moving the block: put a cutter in, run Probe Z with the touch plate on the block, then Tool setter → Calibrate with this cutter.",
       detail: setter?.corr?.f === REF_FORMAT ? `The probe reads ${Math.abs(setter.corr.c).toFixed(3)} mm ${setter.corr.c >= 0 ? "higher" : "lower"} than a cutter.` : null,
       open: { kind: "setter" }, button: "Open Tool setter" },
+    { id: "square", done: !!prefs.square?.time, title: "Check X/Y squareness",
+      what: "With a 1-2-3 block on the bed, the probe touches its four sides and works out how square X is to Y. Run it 3 times; the average is saved.",
+      detail: prefs.square?.time ? `${Math.abs(prefs.square.drift400).toFixed(2)} mm over 400 mm, ${new Date(prefs.square.time).toLocaleDateString()}.` : null,
+      open: { kind: "square" }, button: "Check squareness", optional: "block" },
     { id: "camera", done: !!(bc.cal && bc.base), title: "Calibrate the bed camera",
       what: "Probe back in, bed clear. On the Camera tab, press Calibrate: the machine touches the bed at 6 spots by itself, finds the probe's light, and takes the empty-bed picture.",
       detail: bc.cal ? `Calibrated ${new Date(bc.cal.time).toLocaleDateString()}${bc.base ? ", empty-bed picture taken" : ", empty-bed picture still needed"}.` : null,
@@ -50,9 +54,9 @@ export default function ProbeSetup({ state, onOpen, onTab, onClose }) {
           <li key={s.id} className={s.done ? "done" : s === next ? "next" : ""}>
             <span className="mark" aria-label={s.done ? "done" : "not done"}>{s.done ? "✓" : i + 1}</span>
             <div>
-              <b>{s.title}</b>{s.optional ? <span className="dim"> (if you have a bed camera)</span> : null}
+              <b>{s.title}</b>{s.optional ? <span className="dim">{s.optional === "block" ? " (if you have a 1-2-3 block)" : " (if you have a bed camera)"}</span> : null}
               {s.done && s.detail ? <p className="dim">{s.detail}</p> : <p>{s.what}</p>}
-              {(s === next || s.done) && <button className={s === next ? "primary" : "quiet"}
+              {(s === next || s.done || s.optional) && <button className={s === next ? "primary" : "quiet"}
                 onClick={() => (s.tab ? onTab(s.tab) : onOpen(s.open))}>{s.done ? "Do it again" : s.button}</button>}
             </div>
           </li>
