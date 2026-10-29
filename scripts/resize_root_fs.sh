@@ -25,6 +25,11 @@ get_fs_resize_variables () {
 should_resize_root_partition() {
     get_fs_resize_variables
 
+    if [ -d /boot/a ] && [ -d /boot/b ]; then
+        FAIL_REASON="A/B card (see ab-card): the slots are already sized"
+        return 1
+    fi
+
     if [ "$BOOT_DEV_NAME" != "$ROOT_DEV_NAME" ]; then
         FAIL_REASON="Boot and root partitions are on different devices"
         return 1

@@ -468,7 +468,7 @@ def cmd_make(dev):
     start2 = start1 + size1
     half = ((sectors - start2) // 2) // 8192 * 8192
     start3 = start2 + half
-    size3 = (sectors - start3) // 8192 * 8192
+    size3 = sectors - start3        # to the very end (see resize_root_fs.sh)
     table = ('label: dos\n'
              'start=%d, size=%d, type=c, bootable\n'
              'start=%d, size=%d, type=83\n'
