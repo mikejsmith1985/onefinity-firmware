@@ -145,6 +145,40 @@ try:
     check('motor limit mode ignored on an input pin', e.get('0ls') == 0)
     check('input still assigned', e.get('0ip') == 1 and e.get('0is') in (0, 1))
 
+    # Stop during a wait (review of 1.45.0): it must stop now, not at the timeout
+    e.send('$dom=1'); e.send('$dou=1'); e.send('#doa=1'); e.read(0.2)
+    e.set_pins({})
+    e.send(Cmd.input('digital-in-0', 'low', 6)); e.read(0.4)
+    e.send('S'); r = e.results(1.0)
+    st = e.get('xx')
+    check('Stop during M66 holds at once, output off, no stale result',
+          st in ('HOLDING', 'READY') and e.get('doa') == False and r == [], '%s %s' % (st, r))
+    e.send('c'); e.send('U'); e.read(0.3); e.send('$dou=0'); e.read(0.1)
+
+    # A limit switch turned on while its pin is an input (review of 1.45.0):
+    # kept, and in force once the input lets go of the pin
+    e.send('$0ls=1'); e.read(0.2)
+    check('limit set on an input pin: input keeps it for now', e.get('0ip') == 1)
+    e.send('$0ip=0'); e.read(0.3)
+    check('released: the limit switch is in force', e.get('0ls') == 1, str(e.get('0ls')))
+    e.send('$0ip=1'); e.send('$0im=1'); e.read(0.3)
+    check('and an input can no longer take the pin', e.get('0ip') == 0)
+    e.send('$0ls=0'); e.read(0.2)
+    e.send('$0ip=1'); e.send('$0im=1'); e.read(0.3)
+    check('limit off again: the input can have it', e.get('0ip') == 1)
+
+    # A pin with mode 0 (disabled) answers -1 at once
+    e.send('$2ip=6'); e.send('$2im=0'); e.read(0.2)
+    e.send(Cmd.input('digital-in-2', 'high', 5)); r = e.results(0.5)
+    check('assigned but disabled input answers -1 at once', r == [-1], str(r))
+    e.send('$2ip=0'); e.read(0.1)
+
+    # An unknown port answers -1 instead of reading P0
+    e.set_pins({0: 0}); e.read(0.4)
+    e.send(Cmd.input('digital-in-7', 'immediate', 0)); r = e.results(0.5)
+    check('unknown port answers -1, not P0', r == [-1], str(r))
+    e.set_pins({})
+
     # E-stop drops a wait without a result
     e.set_pins({})
     e.send(Cmd.input('digital-in-0', 'low', 5)); e.read(0.3)

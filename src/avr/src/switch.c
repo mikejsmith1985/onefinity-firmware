@@ -50,6 +50,7 @@ typedef struct {
   uint16_t lockout;
   bool initialized;
   bool user; // 1.45.0: an M66 input; no limit callback, motor mode ignored
+  switch_type_t limit_type; // 1.45.0: the motor limit setting, kept while user
 } switch_t;
 
 
@@ -165,8 +166,9 @@ bool switch_set_user(switch_id_t sw, switch_type_t type) {
   if (!_is_limit(sw)) return false;
   switch_t *s = &switches[sw];
 
-  // Refuse a pin that is in use as a limit switch
-  if (!s->user && s->type != SW_DISABLED) return false;
+  // Refuse a pin that is in use (or set) as a limit switch
+  if (s->limit_type != SW_DISABLED || (!s->user && s->type != SW_DISABLED))
+    return false;
 
   s->user = true;
   s->type = type;
@@ -176,13 +178,16 @@ bool switch_set_user(switch_id_t sw, switch_type_t type) {
 
 void switch_release_user(switch_id_t sw) {
   if (!_is_limit(sw) || !switches[sw].user) return;
-  switches[sw].type = SW_DISABLED;
   switches[sw].user = false;
+  switches[sw].type = SW_DISABLED;
+  // A limit switch set while the pin was an input takes effect now
+  switch_set_type(sw, switches[sw].limit_type);
 }
 
 
 static void _set_limit_type(switch_id_t sw, switch_type_t type) {
-  if (switch_is_user(sw)) return; // Owned by an M66 input
+  if (_is_limit(sw)) switches[sw].limit_type = type;
+  if (switch_is_user(sw)) return; // Owned by an M66 input until released
   switch_set_type(sw, type);
 }
 

@@ -128,7 +128,9 @@ def sync_speed(dist, speed):
 
 
 def input(port, mode, timeout):
-    type, index, m = 'd', 0, 0
+    # 1.45.0: an unknown port is 9, which the board answers with -1
+    # (digital) or 0 (analog) instead of reading port 0
+    type, index, m = ('a' if str(port).startswith('analog') else 'd'), 9, 0
 
     # Analog/digital & port index
     if port == 'digital-in-0': type, index = 'd', 0

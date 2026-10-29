@@ -117,6 +117,7 @@ static void _stop() {
 
   switch (state_get()) {
   case STATE_RUNNING:
+    io_stop(); // An M66 wait holds the queue: drop it so Stop works (1.45.0)
     _set_state(STATE_STOPPING);
     break;
 

@@ -131,7 +131,7 @@ void io_callback() {
   }
 
   if (done) _send_result(level);
-  else if (level == -1 && _input_switch(active_cmd.port) == SW_INVALID)
+  else if (level == -1 && !switch_is_user(_input_switch(active_cmd.port)))
     _send_result(-1); // Not assigned: don't wait for nothing
   else if (rtc_expired(timeout)) _send_result(-1);
 }
@@ -184,7 +184,11 @@ void command_input_exec(void *data) {
   active_cmd = *(input_cmd_t *)data;
   last_level = -1;
 
-  timeout = rtc_get_time() + active_cmd.timeout * 1000;
+  // Q in seconds, kept to 0 .. 1 week so the ms count can't wrap (1.45.0)
+  float q = active_cmd.timeout;
+  if (!(0 < q)) q = 0;
+  if (604800 < q) q = 604800;
+  timeout = rtc_get_time() + (uint32_t)(q * 1000);
   exec_set_cb(_exec_cb);
 }
 
