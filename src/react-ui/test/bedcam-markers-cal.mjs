@@ -14,16 +14,19 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // --- a pinhole camera over the bed
 const W = 1280, H = 720, BED = -96.5;
-function camera({ C, f = 900, tilt = 0.28, yaw = 0.02, roll = 0.015, turn = 0 }) {
+function camera({ C, f = 900, tilt = 0.28, yaw = 0.02, roll = 0.015, turn = 0, k1 = 0 }) {
   const Rx = (a) => [[1, 0, 0], [0, Math.cos(a), -Math.sin(a)], [0, Math.sin(a), Math.cos(a)]];
   const Ry = (a) => [[Math.cos(a), 0, Math.sin(a)], [0, 1, 0], [-Math.sin(a), 0, Math.cos(a)]];
   const Rz = (a) => [[Math.cos(a), -Math.sin(a), 0], [Math.sin(a), Math.cos(a), 0], [0, 0, 1]];
   const mm = (A, B) => A.map((r) => [0, 1, 2].map((j) => r[0] * B[0][j] + r[1] * B[1][j] + r[2] * B[2][j]));
   const base = [[1, 0, 0], [0, -1, 0], [0, 0, -1]];          // looking straight down, image up = machine back
   const R = mm(mm(mm(mm(Rz(turn), Rz(yaw)), Rx(-tilt)), Ry(roll)), base);
-  const project = (p) => { const d = [p.x - C[0], p.y - C[1], p.z - C[2]]; const c = R.map((r) => r[0] * d[0] + r[1] * d[1] + r[2] * d[2]); return { x: W / 2 + (f * c[0]) / c[2], y: H / 2 + (f * c[1]) / c[2] }; };
+  // k1: barrel distortion, the same model as markers.js (1.41.1)
+  const project = (p) => { const d = [p.x - C[0], p.y - C[1], p.z - C[2]]; const c = R.map((r) => r[0] * d[0] + r[1] * d[1] + r[2] * d[2]); const xn = c[0] / c[2], yn = c[1] / c[2], k = 1 + k1 * (xn * xn + yn * yn); return { x: W / 2 + f * xn * k, y: H / 2 + f * yn * k }; };
   const ray = (u, v, z) => { // pixel -> machine x, y on the plane z
-    const dc = [(u - W / 2) / f, (v - H / 2) / f, 1];
+    const xd = (u - W / 2) / f, yd = (v - H / 2) / f; let xn = xd, yn = yd;
+    for (let i = 0; i < 20; i++) { const k = 1 + k1 * (xn * xn + yn * yn); xn = xd / k; yn = yd / k; }
+    const dc = [xn, yn, 1];
     const d = [0, 1, 2].map((j) => R[0][j] * dc[0] + R[1][j] * dc[1] + R[2][j] * dc[2]); // R^T dc
     const k = (z - C[2]) / d[2];
     return { x: C[0] + k * d[0], y: C[1] + k * d[1] };
@@ -106,6 +109,12 @@ if (!cal2.error) { const a = accuracy(cal2, cam2); check("  bed within 1 mm, 19 
 const t0 = Date.now();
 const calD = calibrateMarkers(picture(cam, { extra: [{ id: "x", x: 200, y: 300 }, { id: "y", x: 120, y: 90 }] }), marksZ);
 check("two extra crosses drawn on the bed: still the right five", !calD.error && calD.worst < 0.5 && calD.pairs.every((p) => { const m = marks.find((k) => k.id === p.id); const q = cam.project({ ...m, z: zAt(m) }); return Math.hypot(q.x - p.px.x, q.y - p.px.y) < 1; }), calD.error || `worst ${calD.worst.toFixed(2)} mm, ${Date.now() - t0} ms`);
+// 3c. A webcam lens that bends the picture (1.41.1): the bend is fitted too
+const camK = camera({ C: [205, -120, BED + 820], k1: -0.12 });
+const calK = calibrateMarkers(picture(camK), marksZ);
+check("a lens that bends the picture: calibrates with the bend", !calK.error && calK.k1 < -0.05, calK.error || `k1 ${calK.k1?.toFixed(3)} (true -0.12), camera ${calK.hc?.toFixed(0)} mm`);
+if (!calK.error) { const a = accuracy(calK, camK); check("  bed within 1 mm, 19 mm stock within 1.5 mm", a.w0 < 1 && a.w19 < 1.5, `${a.w0.toFixed(2)} / ${a.w19.toFixed(2)} mm`); }
+check("a straight lens: no bend fitted (it would trade against the camera's height)", !cal.error && cal.k1 === 0, `k1 ${cal.k1}`);
 // 4. The machine's own picture (1.40.0): the three inked crosses, nothing else taken for one
 const rgba = execFileSync("python3", ["-c", "import sys;from PIL import Image;sys.stdout.buffer.write(Image.open(sys.argv[1]).convert('RGBA').tobytes())", path.join(HERE, "fixtures", "bedcam-crosses-1.40.jpg")], { maxBuffer: 1 << 24 });
 const real = detectCrosses({ width: 1280, height: 720, data: new Uint8ClampedArray(rgba) });

@@ -246,7 +246,10 @@ export function fitCamera(pairs, size, o = {}) {
     }
     if (!best || o.straight) return best;
     const b8 = refine(best.p, size, pts, prior, 8);
-    return b8 && b8.cost < best.cost ? b8 : best;
+    // Only kept when the bend clearly explains something: a lens with no bend (or 5 crosses that
+    // already fit a straight lens) would otherwise trade the bend against the camera's height.
+    const rms = (r) => Math.sqrt(r.cost / (pts.length * 2));
+    return b8 && rms(b8) < 0.5 * rms(best) && rms(best) - rms(b8) > 0.1 ? b8 : best;
   };
   const px = (r) => Math.sqrt(r.cost / (pts.length * 2));
   let best = fit(null);
