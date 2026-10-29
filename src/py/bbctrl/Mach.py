@@ -595,6 +595,10 @@ class Mach(Comm):
             axes = 'zxybc' if is_rotary_active else 'zxyabc' # TODO This should be configurable
         else: axes = '%c' % axis
 
+        # 1.42.0: a new id each time X or Y is homed. The screens compare it with the
+        # one their last homing check was made on, so they know a check is due.
+        homing_xy = False
+
         for axis in axes:
             enabled = state.is_axis_enabled(axis)
             mode = state.axis_homing_mode(axis)
@@ -615,6 +619,7 @@ class Mach(Comm):
             if mode == 'manual':
                 if position is None: raise Exception('Position not set')
                 self.mdi('G28.3 %c%f' % (axis, position))
+                if axis in 'xy': homing_xy = True
                 continue
 
             # Home axis
@@ -628,6 +633,9 @@ class Mach(Comm):
 
             self.planner.mdi(gcode, False)
             super().resume()
+            if axis in 'xy': homing_xy = True
+
+        if homing_xy: state.set('home_at', int(_time.time() * 1000))
 
 
     def unhome(self, axis): self.mdi('G28.2 %c0' % axis)

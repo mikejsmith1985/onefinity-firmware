@@ -19,7 +19,7 @@ const state = {
   messages: [],
   xp: 120.5, yp: 88.06, zp: -3.35, ap: 0, bp: 0, cp: 0,
   offset_x: 0, offset_y: 0, offset_z: 0,
-  "0homed": true, "1homed": true, "2homed": true, "3homed": true,
+  "0homed": true, "1homed": true, "2homed": true, "3homed": true, home_at: 1,
   "0tn": 0, "0tm": 816, "1tn": 0, "1tm": 816, "2tn": 0, "2tm": 816, "3tn": -133, "3tm": 0,
   "0an": 0, "1an": 1, "2an": 1, "3an": 2,
   macros_list: [], non_macros_list: [], gcode_list: { folders: [], files: [] },
@@ -138,6 +138,9 @@ function playMarks(text, ms) {
 // Bed camera (1.36.0): a fake overhead camera over a fake bed (mock/bedscene.py)
 const BED_Z = -100, STOCK = { cx: 300, cy: 250, w: 150, l: 90, t: 19, ang: (4 * Math.PI) / 180 };
 const MOCK_SETTER = [763.2, 757.9]; // where the mock's tool setter really is (1.40.0)
+// 1.42.0: how far the current homing reads off (machine = physical - hshift). MOCK_HOME_ERR="dx,dy":
+// each homing (PUT /api/home) comes out that far off. "mock:homeerr dx dy" sets it for the next homing.
+let hshift = [0, 0], nextHomeErr = (process.env.MOCK_HOME_ERR || "0,0").split(",").map(Number);
 let mockTool = 0; // 1.39.0: how much longer the tool in the spindle is than the probe (mock:tool N)
 let stockOn = false, camSize = { width: 1280, height: 720 };
 const onStock = (x, y) => {
@@ -170,13 +173,29 @@ function bedcamMdi(text) {
   }
   if (text.includes("(Bed markers: carve)")) { runFake(() => ({ zp: num(/G53 G0 Z(-?[\d.]+)/) }), 1200); return true; }
   if (text.startsWith("mock:tool ")) { mockTool = +text.slice(10); return true; }
+  if (text.startsWith("mock:homeerr ")) { nextHomeErr = text.slice(13).split(" ").map(Number); return true; }
   // 1.40.0: the probe finds the setter's centre (round body, 13.35 mm to the spindle at a touch)
+  // 1.42.0: where it reads depends on how far this homing was off (hshift, see /api/home)
   if (text.includes("(Tool setter: find centre)")) {
     const sx = num(/G53 G0 X(-?[\d.]+) Y/), sy = num(/G53 G0 X-?[\d.]+ Y(-?[\d.]+)/), R = 13.355;
-    const [cx, cy] = MOCK_SETTER, far = Math.hypot(sx - cx, sy - cy) > 12;
+    const cx = MOCK_SETTER[0] - hshift[0], cy = MOCK_SETTER[1] - hshift[1], far = Math.hypot(sx - cx, sy - cy) > 12;
     const pts = {};
     for (let i = 0; i < 8; i++) { const a = (i * Math.PI) / 4; pts[`ofx_p${i}`] = 1; pts[`ofx_x${i}`] = cx + R * Math.cos(a); pts[`ofx_y${i}`] = cy + R * Math.sin(a); }
-    runFake(() => (far ? { ofx_ok: 0, ofx_fail: 1 } : { ofx_ok: 1, ofx_fail: 0, ofx_top: -15.2, ...pts }), 1500);
+    runFake(() => (far ? { ofx_ok: 0, ofx_fail: 1 } : { ofx_ok: 1, ofx_fail: 0, ofx_top: -15.2, xp: +(cx + 17.7).toFixed(3), yp: +(cy - 17.7).toFixed(3), zp: -1, ...pts }), 1500);
+    return true;
+  }
+  // 1.42.0: the homing correction: G28.3 sets the machine reading (the homing's error changes),
+  // G92 the work reading, then back over the same physical spot
+  if (text.includes("(Tool setter: homing check)")) {
+    const out = {}; let x = state.xp, y = state.yp, z = state.zp;
+    for (const line of text.split("\n")) {
+      let g;
+      if ((g = /^G28\.3 X(-?[\d.]+) Y(-?[\d.]+)/.exec(line))) { hshift = [x + hshift[0] - +g[1], y + hshift[1] - +g[2]]; x = +g[1]; y = +g[2]; }
+      else if ((g = /^G92 (.*)/.exec(line))) for (const [, a, v] of g[1].matchAll(/([XY])(-?[\d.]+)/g)) out[a === "X" ? "offset_x" : "offset_y"] = +((a === "X" ? x : y) - +v).toFixed(4);
+      else if ((g = /^G53 G0 X(-?[\d.]+) Y(-?[\d.]+)/.exec(line))) { x = +g[1]; y = +g[2]; }
+      else if ((g = /^G53 G0 Z(-?[\d.]+)/.exec(line))) z = +g[1];
+    }
+    runFake(() => ({ ...out, xp: x, yp: y, zp: z }), 600);
     return true;
   }
   if (text.includes("(Bed camera: park)")) {
@@ -452,7 +471,9 @@ const server = http.createServer((req, res) => {
   }
   if (p === "/api/clear") { broadcast({ xx: "READY", er: "" }); return json(res, "ok"); }
   if (p.startsWith("/api/home")) {
-    broadcast({ xx: "HOMING", cycle: "homing" });
+    // the machine's position reading moves by the change in the homing's error
+    const d = [nextHomeErr[0] - hshift[0], nextHomeErr[1] - hshift[1]]; hshift = [...nextHomeErr];
+    broadcast({ xx: "HOMING", cycle: "homing", home_at: Date.now(), xp: +(state.xp - d[0]).toFixed(3), yp: +(state.yp - d[1]).toFixed(3) });
     setTimeout(() => broadcast({ "0homed": true, "1homed": true, "2homed": true, "3homed": true, xx: "READY", cycle: "idle" }), 1200);
     return json(res, "ok");
   }

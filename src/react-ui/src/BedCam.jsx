@@ -3,7 +3,7 @@ import { api } from "./controller.js";
 import { remoteGet, remotePut } from "./store.js";
 import { computeAxis, fmtLen } from "./axis.js";
 import { errText } from "./checkpoint.js";
-import { probeActive, setterProgram, findSetterCentre, REF_FORMAT } from "./setter.js";
+import { probeActive, setterProgram, REF_FORMAT } from "./setter.js";
 import { useProgramRunner, getSetter, saveSetter, setterArgs } from "./ToolSetter.jsx";
 import { readSetup } from "./setup.js";
 import {
@@ -13,6 +13,7 @@ import {
   markerSpots, markerCarveProgram, markerShowProgram, MARK, MARK_IDS, CORNER_NAMES,
 } from "./bedcam.js";
 import { calibrateMarkers } from "./markers.js";
+import { runHomeCheck, homeCheckText, homeCheckDue, travelLim } from "./homecheck.js";
 
 // Bed camera (1.36.0): a camera above the table looking down.
 //  - Calibrate: the 3D probe touches the bed at a few spots and you tap the stylus in the picture.
@@ -166,6 +167,13 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
   useEffect(() => { loadBedcam().then((d) => { setDoc(d); if (d.tGuess) setTGuess(d.tGuess); }); api.get("camera").then(setCamSt).catch(() => setCamSt({ connected: false })); }, []);
   useEffect(() => { readSetup(state.selected).then((s) => { if (s?.toolD) setToolD(s.toolD); }).catch(() => {}); }, [state.selected]);
   useEffect(() => { if (doc) parkPosition(doc).then(setPp); }, [doc]);
+  // 1.42.0: is the homing checked since the machine was homed?
+  const [hcDue, setHcDue] = useState(false);
+  useEffect(() => {
+    const f = () => getSetter().then((s) => setHcDue(homeCheckDue(state, s) && !!s.href)).catch(() => {});
+    f(); window.addEventListener("next-store:prefs", f);
+    return () => window.removeEventListener("next-store:prefs", f);
+  }, [state.home_at]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { getSetter().then((s) => setGuard(s && Number.isFinite(s.x) && s.installed !== false ? { x: s.x, y: s.y, r: (s.keep || 30) + (s.allow || 3.2) } : null)).catch(() => {}); }, []);
   const save = async (patch) => { const d = await saveBedcam(patch); setDoc(d); return d; };
 
@@ -361,22 +369,25 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
     if (r.ofs_ok !== 1 || typeof r.ofs_ref !== "number") throw new Error("The touch on the tool setter didn't finish.");
     return { trip: r.ofs_ref, setter };
   };
-  // 1.40.0: with the probe in, the setter's centre is found (and saved) rather than trusted
-  const centreSetter = async () => {
+  // 1.40.0: with the probe in, the setter's centre is found rather than trusted.
+  // 1.42.0: that is the homing check: the first time after a homing it also corrects X and Y to the
+  // reference homing (the first check ever saves the centre as the reference). Done before the
+  // board is touched, so every position after it is in the reference homing's coordinates.
+  const checkHoming = async () => {
     const setter = await getSetter();
     if (!setter || !Number.isFinite(setter.x)) throw new Error("Save the tool setter's position first (Tool setter screen), roughly is fine.");
-    const c = await findSetterCentre(runOk, setterArgs(state, config, setter, "ref"));
-    if (c.error) throw new Error(c.error);
-    await saveSetter({ ...setter, x: c.x, y: c.y });
-    // Then the probe's touch on the setter's cap, over the centre (the same as a reference touch)
-    const { trip } = await touchSetter();
-    return { trip, setter: { ...setter, x: c.x, y: c.y }, moved: c.moved, skipped: c.skipped };
+    if (!homeCheckDue(state, setter)) return { checked: false };
+    const r = await runHomeCheck({ run: runOk, getSetter, saveSetter, args: (x) => setterArgs(state, config, x, "ref"), state, lim: travelLim(state, config) });
+    if (r.error) throw new Error(homeCheckText(r, (mm) => len(mm, 2)));
+    return { checked: true, text: homeCheckText(r, (mm) => len(mm, 2)), moved: r.dist || 0, skipped: r.skipped };
   };
   const markProbe = async () => {
     const spots = todo, zMin = zAx.min + 1, z = {};
     const step = (o) => setMk((m) => ({ ...m, ...o }));
     setBusy("markers"); step({ phase: "probing", doing: "" });
     try {
+      step({ doing: "checking the homing on the tool setter" });
+      const hc = await checkHoming();
       let zRef = null;
       for (const sp of spots) {
         step({ doing: `touching the bed at the ${CORNER_NAMES[sp.id]} spot` });
@@ -387,10 +398,10 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
       }
       const zs = Object.values(z), spread = Math.max(...zs) - Math.min(...zs);
       if (spread > 3) throw new Error(`The board heights at the new spots differ by ${len(spread, 1)}. One of them is probably in a T-track slot or on something. Check the corners and start again.`);
-      step({ doing: "finding the tool setter's centre with the probe" });
-      const { trip, setter, moved, skipped } = await centreSetter();
+      step({ doing: "touching the tool setter with the probe" });
+      const { trip, setter } = await touchSetter();
       const corr = setter?.corr?.f === REF_FORMAT && typeof setter.corr.c === "number" ? setter.corr.c : 0;
-      step({ phase: "swap", z, probeTrip: trip, corr, spread, moved, skipped });
+      step({ phase: "swap", z, probeTrip: trip, corr, spread, hc: hc.checked ? hc.text : null, skipped: hc.skipped });
     } catch (e) { step({ phase: "error", err: errText(e) }); }
     setBusy("");
   };
@@ -571,6 +582,7 @@ export default function BedCam({ state, cfg, idle, send, subscribe, path, onMeas
       <div className="align bedcam-side">
         {msg && <div className={msg.ok ? "why" : "why bad"}><p>{msg.text}</p></div>}
         {!homed && <p className="err">Home the machine first. The bed camera works in machine coordinates.</p>}
+        {homed && hcDue && <p className="dim">The homing hasn't been checked on the tool setter since the machine was homed, so positions here can be off by however much this homing slipped. Measure stock checks it the first time it uses the probe, or use Check homing on the Tool setter screen.</p>}
 
         {mode === "markers" && mk ? <MarkersPanel {...{ mk, corners, planned, todo, isCarved, touched, canMove, busy, len, homed }} onSaveCorner={saveCorner}
           onShow={showSpot} onNext={() => setMk((m) => (knownHeights
@@ -762,12 +774,12 @@ function MarkersPanel({ mk, corners, planned, todo, isCarved, touched, canMove, 
       <div className="row-end">{cancel}</div>
     </>}
     {mk.phase === "ready" && <>
-      <p>The probe works. Take your hand away. The machine touches the board at the three spots, then finds the tool setter's centre with the probe (its top, then its sides from six directions).</p>
+      <p>The probe works. Take your hand away. The machine touches the board at the three spots, then touches the tool setter. The first time since the machine was homed, it first checks the homing on the setter (its top, then its sides from eight directions) and corrects X and Y.</p>
       <div className="row-end">{cancel}<button className="primary" data-autofocus disabled={!canMove || touched} onClick={onProbe}>Start</button></div>
     </>}
     {(mk.phase === "probing" || mk.phase === "vbit" || mk.phase === "carving") && <p>{mk.phase === "probing" ? `Measuring: ${mk.doing || "starting"}…` : mk.phase === "vbit" ? "Measuring the V-bit on the tool setter…" : "Carving…"}</p>}
     {mk.phase === "swap" && <>
-      {mk.known ? <p>The board's height at the new {todo.length === 1 ? "spot" : "spots"} comes from the crosses already carved, so the probe isn't needed.</p> : <p>Board measured{mk.spread > 0.05 ? ` (the three spots are within ${len(mk.spread, 2)} of each other)` : ""}. Tool setter centre found{mk.moved > 0.2 ? ` and saved (it was ${len(mk.moved, 1)} off)` : ""}{mk.skipped ? `; ${mk.skipped} of its 8 side touches were skipped because something was in the way` : ""}.</p>}
+      {mk.known ? <p>The board's height at the new {todo.length === 1 ? "spot" : "spots"} comes from the crosses already carved, so the probe isn't needed.</p> : <p>Board measured{mk.spread > 0.05 ? ` (the spots are within ${len(mk.spread, 2)} of each other)` : ""}.{mk.hc ? ` ${mk.hc}` : ""}{mk.skipped ? ` ${mk.skipped} of the setter's 8 side touches were skipped because something was in the way.` : ""}</p>}
       <p><b>{mk.known ? "Put the V-bit in." : "Take the probe out and put the V-bit in."}</b> Then it touches the tool setter with the V-bit to find how long it is.</p>
       <div className="row-end">{cancel}<button className="primary" disabled={!canMove} onClick={onVbit}>The V-bit is in: measure it</button></div>
     </>}

@@ -14,6 +14,7 @@ import { MEASURE_DEFAULTS, FAILS, ORIGINS_XY, ORIGINS_X, checkOpts, measureProgr
 import { programMoves, moveStatus } from "./progress.js";
 import { StepRail, StepBody, RunProgress, Outcome, useRunStep } from "./steps.jsx";
 import { CheckArt, MeasureArt, SetterArt } from "./art.jsx";
+import { runHomeCheck, homeCheckText, homeCheckDue, travelLim } from "./homecheck.js";
 
 // Measure stock with a 3D touch probe: finds the top and the real edges,
 // reports the size and sets the work zero.  See measure.js for the program.
@@ -99,10 +100,21 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
 
   // 1.36.0: move over the stock the bed camera found, find its top, size it again at the real height
   const runCam = useProgramRunner(state, subscribe, send);
+  // 1.42.0: the first time the probe is used after a homing, the homing is checked against the tool
+  // setter's centre (and corrected) before anything that depends on machine positions.
+  const homeCheckIfDue = async () => {
+    const st = await getSetter();
+    if (!homeCheckDue(R.current.state, st)) return;
+    await patch({ hchk: { state: "running" }, driver: ME });
+    const r = await runHomeCheck({ run: runCam, getSetter, saveSetter, args: (x) => setterArgs(R.current.state, config, x, "ref"), state: R.current.state, lim: travelLim(R.current.state, config) });
+    getSetter().then(setSetter);
+    await patch({ hchk: { state: "done", ok: !r.error, big: !!r.big, text: homeCheckText(r, (mm) => `${show(mm)} ${unit}`) } });
+  };
   const camMove = async () => {
     const c = D.cam;
     patch({ camMove: { state: "moving" }, driver: ME });
     try {
+      await homeCheckIfDue();
       const bc = await loadBedcam(), cal = revive(bc.cal), loc = bc.located;
       if (!cal || !loc) throw new Error("The bed camera's result is gone. Find the stock again, or jog by hand.");
       const z = computeAxis(state, config, "z", true);
@@ -157,6 +169,8 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
 
   // Only the screen whose Measure the controller accepted first sends the program.
   const start = async () => {
+    if (R.current.D?.hchk?.state === "running") return;
+    await homeCheckIfDue();
     const o = opts, base = p;
     const r = await uiUpdate("measure", (d) => (d && d.id === openId && d.step === "place" ? { ...d, step: "run", phase: "measure", started: false, driver: ME, runAt: Date.now() } : undefined)).catch(() => ({ ok: false }));
     if (!r.ok) return;
@@ -290,7 +304,7 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
       actions={<>
         {step !== "done" && <button className={running || step === "finishing" ? "danger" : ""} onClick={stop}>{running || step === "finishing" ? "Stop" : "Cancel"}</button>}
         {step === "setup" && <button className="primary" data-autofocus disabled={!p || errs.length > 0} onClick={() => setStep("check")}>Next</button>}
-        {step === "place" && <button className="primary" data-autofocus disabled={touched || D.camMove?.state === "moving" || (!!D.cam && !calib && !D.camMove)} onClick={start}>{calib ? "Measure the block" : "Start measuring"}</button>}
+        {step === "place" && <button className="primary" data-autofocus disabled={touched || D.camMove?.state === "moving" || D.hchk?.state === "running" || (!!D.cam && !calib && !D.camMove)} onClick={start}>{D.hchk?.state === "running" ? "Checking the homing…" : calib ? "Measure the block" : "Start measuring"}</button>}
         {(running || step === "finishing") && <button className="primary" disabled>Measuring…</button>}
         {step === "done" && result?.ok && calib && result.ballOk && <button onClick={measureAgain}>Measure again</button>}
         {step === "done" && result?.ok && calib && result.ballOk && <button className={runs.length >= 3 ? "primary" : ""} data-autofocus={runs.length >= 3 || undefined} onClick={saveBall}>Save {show(avgBall)} {unit}{runs.length > 1 ? ` (average of ${runs.length})` : ""}</button>}
@@ -348,6 +362,7 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
           </StepBody>}
 
           {step === "place" && <StepBody title="Position the stylus" art={<MeasureArt moves={planMoves} probeY={!!opts?.probeY} />}>
+            {D.hchk?.state === "running" && <div className="why"><b>Checking the homing on the tool setter</b><p>First time the probe is used since the machine was homed: it finds the setter's centre, corrects X and Y to match the reference homing, and comes back here. About 30 seconds.</p></div>}
             {D.cam && !calib && <div className="why">
               <b>The bed camera found the stock</b>
               {!D.camMove && !D.auto && <><p>The machine can go over its middle by itself: up to the top, across, then down slowly until the stylus touches the top. It stops {show(8, 0)} {unit} above it.</p>
@@ -383,6 +398,7 @@ export default function MeasureStock({ config, state, send, subscribe, metric, o
             <RunProgress title={calib ? "Measuring the block" : "Measuring the stock"} moves={planMoves} step={step === "finishing" ? null : runStep} started={!!D.started} />
           </StepBody>}
 
+          {D.hchk?.state === "done" && (step === "done" || step === "place") && <p className={D.hchk.ok && !D.hchk.big ? "dim" : "err"} role="status">{D.hchk.text}</p>}
           {step === "done" && result && <StepBody art={<MeasureArt moves={planMoves} cur={result.ok ? planMoves.length : stopAt ? stopAt.cur : -1} probeY={!!opts?.probeY} />}>{result.ok ? (calib ? <Outcome ok title={`Stylus ball: ${show(result.ball)} ${unit}`}>
             {result.ballOk ? <>
               {runs.length > 1 && <p>Runs: {runs.map((b) => show(b)).join(", ")} {unit}. Average {show(avgBall)}, spread {show(spread)} {unit}.</p>}

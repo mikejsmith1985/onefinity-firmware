@@ -8,6 +8,7 @@ import { SETTER_DEFAULTS, SETTER_FAILS, CORR_MAX, setterProgram, findSetterCentr
 import { programMoves, moveStatus } from "./progress.js";
 import { RunProgress, Outcome, useRunStep, StepBody } from "./steps.jsx";
 import { SetterArt } from "./art.jsx";
+import { runHomeCheck, homeCheckText, homeCheckDue, travelLim } from "./homecheck.js";
 
 // Tool setter screen: save where the setter is, take the reference with a
 // tool whose Z zero is right, and measure each new tool so Z stays right.
@@ -115,7 +116,7 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
   useEffect(() => {
     if (!cen || cen.phase !== "check") return;
     if (!touched && !cen.seenOpen) setCen({ ...cen, seenOpen: true });
-    else if (touched && cen.seenOpen) setCen({ phase: "ready" });
+    else if (touched && cen.seenOpen) setCen({ phase: "ready", what: cen.what });
   }, [cen, touched]);
   const centre = async () => {
     setCen({ phase: "run" }); setMsg(null);
@@ -124,12 +125,21 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
     setCen(null);
     if (stopped) { setMsg({ ok: false, text: "Stopped by the E-stop. Nothing was saved." }); return; }
     if (c.error) { setMsg({ ok: false, text: c.error }); return; }
-    update((x) => ({ ...x, x: c.x, y: c.y }));
-    setMsg({ ok: true, text: `Centre found and saved: machine X ${fmt(c.x)}, Y ${fmt(c.y)}${c.moved > 0.05 ? ` (it was ${fmt(c.moved)} ${unit} off)` : ""}${c.skipped ? `, from ${c.used} side touches (${c.skipped} skipped: something was in the way)` : ""}. The reference and calibration are kept: the setter didn't move.` });
+    // 1.42.0: the centre found now is also the reference that later homings are checked against
+    const now = Date.now(), at = state.home_at;
+    update((x) => ({ ...x, x: c.x, y: c.y, href: { x: c.x, y: c.y, time: now }, hchk: typeof at === "number" ? { at, time: now, dx: 0, dy: 0, adopted: true } : null }));
+    setMsg({ ok: true, text: `Centre found and saved: machine X ${fmt(c.x)}, Y ${fmt(c.y)}${c.moved > 0.05 ? ` (it was ${fmt(c.moved)} ${unit} off)` : ""}${c.skipped ? `, from ${c.used} side touches (${c.skipped} skipped: something was in the way)` : ""}. Later homings are checked against this one. The reference and calibration are kept.` });
+  };
+  // 1.42.0: check the homing against the setter's centre, and correct it
+  const homeCheck = async () => {
+    setCen({ phase: "run", what: "home" }); setMsg(null);
+    const r = await runHomeCheck({ run, getSetter, saveSetter, args: (st) => setterArgs(state, config, st, "ref"), state, lim: travelLim(state, config) });
+    setCen(null); getSetter().then(setS);
+    setMsg({ ok: !r.error, text: homeCheckText(r, (mm) => `${fmt(mm)} ${unit}`) });
   };
 
   const saveLocation = () => {
-    update((x) => ({ ...x, x: state.xp, y: state.yp, z: state.zp, ref: null, lastProbe: null, installed: true }));
+    update((x) => ({ ...x, x: state.xp, y: state.yp, z: state.zp, ref: null, lastProbe: null, installed: true, href: null, hchk: null }));
     setMsg({ ok: true, text: "Setter position saved. The old reference was cleared: take a new one with a tool whose Z zero is right." });
   };
 
@@ -168,6 +178,12 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
     }
   };
 
+  // 1.42.0: the homing check
+  const hc = s?.hchk, due = s ? homeCheckDue(state, s) : false;
+  const ago = (t) => new Date(t).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+  const homeLine = !s?.href ? "Not set up yet. The first check saves the setter's centre as the reference: do it after a good homing, with the hoses hanging free."
+    : due ? "Not checked since the machine was homed. It's checked by itself the next time Measure stock or Carve bed markers uses the probe (about 30 s), or check it here."
+    : hc ? `Checked since homing (${ago(hc.time)}): ${hc.adopted ? "saved as the reference" : Math.hypot(hc.dx, hc.dy) < 0.05 ? "spot on" : `it was ${fmt(Math.hypot(hc.dx, hc.dy))} ${unit} off, corrected`}.` : "";
   const status = !located ? "Setter position not saved yet."
     : ref.ok ? `Reference taken ${new Date(s.ref.time).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}${s.ref.by === "probe" ? ` with the 3D probe after Measure stock${s.ref.corrected ? ", corrected for the probe" : ""}` : ""}.`
     : ref.why === "old" ? "The saved reference was taken with an older firmware that stored it wrongly, so it isn't used. Take a new one."
@@ -195,13 +211,17 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
           </div>
           {located && <div>
             {cen?.phase === "check" ? <p><b>Push the stylus sideways</b> to show the probe works.{touched && !cen.seenOpen ? " (It already reads as touched: check the probe.)" : ""} <button className="quiet" onClick={() => setCen(null)}>Cancel</button></p>
-              : cen?.phase === "ready" ? <button className="primary" disabled={!canMove} onClick={centre}>Start: find the centre</button>
-              : <button disabled={!canMove || !!cen} onClick={() => setCen({ phase: "check", seenOpen: false })}>{cen?.phase === "run" ? "Finding the centre…" : "Find the centre with the probe"}</button>}
-            <small>With the 3D probe in: it touches the top, then the sides from eight directions (skipping any where something is in the way), and saves the exact centre. The saved position only needs to be roughly right.</small>
+              : cen?.phase === "ready" ? <button className="primary" disabled={!canMove} onClick={cen.what === "home" ? homeCheck : centre}>{cen.what === "home" ? "Start: check the homing" : "Start: find the centre"}</button>
+              : <>
+                <button disabled={!canMove || !!cen} onClick={() => setCen({ phase: "check", seenOpen: false, what: "home" })}>{cen?.phase === "run" && cen.what === "home" ? "Checking…" : "Check homing with the probe"}</button>
+                <small>{homeLine}</small>
+                <button className="quiet" disabled={!canMove || !!cen} onClick={() => setCen({ phase: "check", seenOpen: false, what: "centre" })}>{cen?.phase === "run" && cen.what !== "home" ? "Finding the centre…" : "The setter was moved: find and save its centre"}</button>
+                <small>With the 3D probe in: it touches the top, then the sides from eight directions (skipping any where something is in the way), and saves the exact centre. The saved position only needs to be roughly right. Later homings are then checked against this one.</small>
+              </>}
           </div>}
           <div>
             <button disabled={!homed || !idle || !!busy} onClick={saveLocation}>{located ? "Save setter position again" : "Save setter position"}</button>
-            <small>Jog the tool roughly over the middle of the setter, about 5 {metric ? "mm" : "mm (¼ in)"} above it, then save. Do this once, and again if you move the setter. Then Find the centre with the probe makes it exact.</small>
+            <small>Jog the tool roughly over the middle of the setter, about 5 {metric ? "mm" : "mm (¼ in)"} above it, then save. Do this once, and again if you move the setter. Then "find and save its centre" (above) makes it exact.</small>
           </div>
         </div>
 

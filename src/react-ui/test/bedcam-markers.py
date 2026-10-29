@@ -97,7 +97,10 @@ async def main():
         await page.click(f'{side} button.primary:has-text("Start")')
         t = await wait_text(page, side, r'put the V-bit in|Stopped', 30)
         check('probe measured the board and touched the setter', t and 'put the V-bit in' in t, (t or '')[:300])
-        check('setter centre found and saved (1.40.0)', t and 'centre found and saved' in t, (t or '')[:300])
+        check('homing checked first: the setter centre found and saved as the reference (1.42.0)', t and 'saved as the reference' in t, (t or '')[:300])
+        sent = http('/api/mdis')
+        ic = max(i for i, m in enumerate(sent) if '(Tool setter: find centre)' in m); it = min(i for i, m in enumerate(sent) if '(Bed camera: auto touch)' in m and i > ic - 5) if any('(Bed camera: auto touch)' in m for m in sent) else -1
+        check('  before the board is touched', ic < it, (ic, it))
         st = http('/api/next-store/prefs')['setter']
         check('  saved at the centre the probe found, reference kept', abs(st['x'] - 763.2) < 0.01 and abs(st['y'] - 757.9) < 0.01 and st.get('corr'), st)
         await shot(page, 'mk2-swap.png')
@@ -181,7 +184,7 @@ async def main():
             loc = page.locator(f'.modal button:has-text("{t}")')
             if await loc.count(): await loc.first.click()
         await page.click('button:has-text("Tool setter")'); await page.wait_for_timeout(1200)
-        await page.click('.modal button:has-text("Find the centre with the probe")'); await page.wait_for_timeout(300)
+        await page.click('.modal button:has-text("The setter was moved: find and save its centre")'); await page.wait_for_timeout(300)
         check('Tool setter: asks to push the stylus first', 'Push the stylus sideways' in await text(page, '.modal'))
         await ws(page, 'mock:touch'); await page.wait_for_timeout(900)
         await page.click('.modal button:has-text("Start: find the centre")')
