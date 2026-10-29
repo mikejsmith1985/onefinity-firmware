@@ -84,7 +84,48 @@ export function IO({ cfg, state, metric }) {
         <Group title="Switches">{Object.keys(t.switches).map((k) => row("switches", k))}</Group>
         <Group title="Outputs">{Object.keys(t.outputs).map((k) => row("outputs", k))}</Group>
       </div>
+      {t["user-io"] && <UserIo cfg={cfg} state={state} metric={metric} t={t["user-io"]} />}
     </Page>
+  );
+}
+
+// M62-M66 user I/O (1.45.0). Outputs: pins the board already drives (tool enable/direction, Load 1/2).
+// Inputs: motor limit pins, free when homing is by stall detection.
+const OUT_LABEL = { "tool-enable (pin 15)": "e", "tool-direction (pin 16)": "d", "load-1 (pin 2)": "1", "load-2 (pin 1)": "2" };
+function UserIo({ cfg, state, metric, t }) {
+  const uio = state.user_io || {};
+  const used = uio.outputs || {}, ins = uio.inputs || {};
+  const b = (k) => <Bound key={k} cfg={cfg} path={["user-io", k]} tpl={t[k]} metric={metric} />;
+  const outState = (n) => {
+    const l = used[String(n)];
+    if (!l) return <span className="dim">not used</span>;
+    return state[l + "oa"] ? <b className="good-text">ON</b> : <span>off</span>;
+  };
+  const inState = (n) => {
+    if (ins[String(n)] === undefined) return <span className="dim">not used</span>;
+    const v = state[n + "is"];
+    return v === 1 ? <b className="good-text">ACTIVE</b> : v === 0 ? <span>inactive</span> : <span className="dim">waiting</span>;
+  };
+  return (
+    <div className="cols">
+      <Group title="User outputs (M62–M65)">
+        <p className="note"><code>M64 P0</code> switches output P0 on and <code>M65 P0</code> off; <code>M62</code>/<code>M63</code> do the same with the next move. Stop and E-stop always switch them off. A program that uses an output with no pin is stopped at Run.</p>
+        {[0, 1, 2, 3].map((n) => (
+          <div key={n} className="uio-row">{b("user-output-" + n)}<span className="pin">P{n}: {outState(n)}</span></div>
+        ))}
+        {b("user-outputs-off-at-end")}
+        <p className="note">Tool enable and direction are logic-level signals, not power outputs. Check the voltage on your controller before wiring, and switch a router, vac or pump through a relay module rated for it, never directly.</p>
+      </Group>
+      <Group title="User inputs (M66)">
+        <p className="note"><code>M66 P0 L3 Q5</code> waits up to 5 s for input P0 to be active (L0 read now, L1 rise, L2 fall, L3 active, L4 inactive). The answer is in <code>#5399</code>: 1 or 0, or -1 if it timed out or the input has no pin. Only motor limit pins that are not limit switches can be used.</p>
+        {[0, 1, 2, 3].map((n) => (
+          <div key={n} className="uio-row">{b("user-input-" + n + "-pin")}{b("user-input-" + n + "-mode")}<span className="pin">P{n}: {inState(n)}</span></div>
+        ))}
+      </Group>
+      {(uio.notes || []).length > 0 && (
+        <Group title="I/O notes">{uio.notes.map((x, i) => <p key={i} className="warn-text">{x}</p>)}</Group>
+      )}
+    </div>
   );
 }
 

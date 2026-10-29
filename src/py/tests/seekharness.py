@@ -160,6 +160,15 @@ class FakeGPlan:
             elif ev[0] == 'set':
                 self._block(type = 'set', name = '_' + ev[1].lstrip('_'),
                             value = ev[2])
+            elif ev[0] == 'output':   # M62-M65 (1.45.0)
+                self._block(type = 'output', port = 'digital-out-%d' % ev[1],
+                            value = ev[2])
+            elif ev[0] == 'input':    # M66 (1.45.0)
+                modes = ['immediate', 'rise', 'fall', 'high', 'low']
+                self._block(type = 'input', port = 'digital-in-%d' % ev[1],
+                            mode = modes[ev[2]], timeout = ev[3])
+                self.syncing = ev
+                self.h.events.append(('sync-wait', self.next_id - 1))
             elif ev[0] == 'probe':
                 self._block(type = 'seek', switch = 'probe', active = True,
                             error = ev[2] == 38.2)
@@ -178,8 +187,8 @@ class FakeGPlan:
 
     def synchronize(self, result):
         if self.syncing is None: raise RuntimeError('Not synchronizing')
-        self.syncing = None
-        self.send = bool(result)
+        ev, self.syncing = self.syncing, None
+        self.send = float(result) if ev[0] == 'input' else bool(result)
         self.h.events.append(('synchronize', int(result)))
 
     def restart(self, id, position):
@@ -255,6 +264,13 @@ class FakeAVR:
                          'error': bool(flags & Cmd.SEEK_ERROR)}
             self.h.events.append(('seek', dict(self.seek)))
         elif c == Cmd.LINE: self.line(line)
+        elif c == Cmd.SET_SYNC and 'oa=' in line:   # M62-M65 output (1.45.0)
+            self.h.outputs[line[1]] = int(line.split('=')[1])
+            self.h.events.append(('out', line[1], self.h.outputs[line[1]]))
+        elif c == Cmd.INPUT:                          # M66 (1.45.0)
+            port = int(line[2])
+            self.h.events.append(('input', line[1:4]))
+            self.report(result = self.h.input_levels.get(port, -1))
 
     def line(self, line):
         target = list(self.phys.P)
@@ -300,6 +316,8 @@ class Harness:
         self.events = []
         self.executed = 0
         self.sent = {}
+        self.outputs = {}        # M62-M65 (1.45.0): label -> value
+        self.input_levels = {}   # M66 (1.45.0): port -> result the AVR gives
         self.logs = Logs()
         self.ctrl = ctrl = type('Ctrl', (), {})()
         ctrl.log = self.logs

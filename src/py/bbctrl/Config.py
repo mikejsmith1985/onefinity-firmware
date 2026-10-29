@@ -52,7 +52,7 @@ class Config(object):
         self.values = {}
 
         try:
-            self.version = "1.44.0"
+            self.version = "1.45.0"
 
             # Load config template
             with open(get_resource('http/config-template.json'), 'r',
@@ -289,3 +289,10 @@ class Config(object):
         for name, tmpl in self.template.items():
             conf = config.get(name, None)
             self._encode(name, '', conf, tmpl, with_defaults)
+
+        # M62-M66 user I/O (1.45.0): sent after the motors, so a pin that is
+        # a limit switch is never taken by an input
+        try:
+            from bbctrl import UserIO
+            UserIO.apply(self.ctrl, self.values)
+        except Exception: self.log.exception('User I/O')

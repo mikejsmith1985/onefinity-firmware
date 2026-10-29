@@ -1,3 +1,4 @@
+import { execFileSync } from "child_process";
 import { squarePoints } from "../src/square.js";
 // Mock Onefinity controller for developing the React UI without a machine.
 // Serves /api/* and the raw /websocket state feed on :8080.
@@ -62,6 +63,8 @@ regs[0] = { "reg-type": "connect-write", "reg-addr": 8192, "reg-value": 1 }; reg
 const TY = ["disabled","connect-write","max-freq-read","max-freq-fixed","freq-set","freq-signed-set","freq-scaled-set","stop-write","forward-write","reverse-write","freq-read","freq-signed-read","freq-actech-read","status-read","disconnect-write"];
 "0123".split("").forEach((r, i) => { state[r + "vt"] = TY.indexOf(regs[i]["reg-type"]); state[r + "va"] = regs[i]["reg-addr"]; state[r + "vv"] = regs[i]["reg-value"]; state[r + "vr"] = i === 2 ? 3 : 0; });
 state.mx = 1;
+// User I/O settings (1.45.0): template defaults, as Config._defaults() fills them on the controller
+{ const ut = rj("config-template.json")["user-io"]; config["user-io"] = Object.fromEntries(Object.entries(ut).map(([k, v]) => [k, v.default])); }
 config.full_version = "1.9.0"; config.macros = macros; config.settings = config.settings || {}; config.settings.units = "METRIC";
 state.macros = macros; state.macros_list = macros.map((m) => m.file_name); state.non_macros_list = state.files;
 // Same shape as the real controller's config: folders with {file_name} entries. tap_holes.nc is in no folder
@@ -90,6 +93,12 @@ const positions = process.env.MOCK_POSITIONS ? fs.readFileSync(process.env.MOCK_
 const speeds = Buffer.from(new Float32Array(spd).buffer);
 
 let timer = null;
+// M62-M66 (1.45.0): state.user_io as the controller works it out (UserIO.plan via mock/userio.py)
+function mockUserIo() {
+  try { return JSON.parse(execFileSync("python3", [new URL("./userio.py", import.meta.url).pathname], { input: JSON.stringify(config) }).toString()); }
+  catch (e) { return { outputs: {}, inputs: {}, notes: ["mock: " + e.message] }; }
+}
+
 function broadcast(diff) {
   Object.assign(state, diff);
   const msg = JSON.stringify(diff);
@@ -342,7 +351,7 @@ const server = http.createServer((req, res) => {
   if (p === "/api/client-log") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { clientLog.push(JSON.parse(b)); } catch {} json(res, "ok"); }); return; }
   if (p === "/api/mock/client-log") return json(res, clientLog);
   if (p === "/api/config/load") return json(res, config);
-  if (p === "/api/config/save") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { const c = JSON.parse(b); Object.assign(config, c); const d = {}; for (const k of ["gcode_list", "non_macros_list"]) if (c[k]) d[k] = c[k]; if (Object.keys(d).length) broadcast(d); } catch {} storeChanged("config"); json(res, "ok"); }); return; }
+  if (p === "/api/config/save") { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { const c = JSON.parse(b); Object.assign(config, c); const d = { user_io: mockUserIo() }; for (const k of ["gcode_list", "non_macros_list"]) if (c[k]) d[k] = c[k]; if (Object.keys(d).length) broadcast(d); } catch {} storeChanged("config"); json(res, "ok"); }); return; }
   if (p.startsWith("/api/ui/")) {
     const name = p.slice(8);
     if (req.method === "GET") { const e = state.ui[name]; return json(res, e ? e : { v: null, rev: uiRevs[name] || 0 }); }
@@ -523,4 +532,5 @@ setInterval(() => { for (const c of wss.clients) if (c.readyState === 1) c.send(
 // MOCK_CHATTER=1: send a small status update every 200 ms, like a real controller does while idle,
 // so the UI re-renders while you type (needed to reproduce on-screen keyboard problems).
 if (process.env.MOCK_CHATTER) setInterval(() => broadcast({ rpi_temp: 45 + Math.random() }), 200);
+state.user_io = mockUserIo();
 server.listen(PORT, () => console.log(`mock controller on :${PORT}`));

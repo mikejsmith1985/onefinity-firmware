@@ -82,6 +82,7 @@ class Comm(object):
 
     def comm_next(self): raise Exception('Not implemented')
     def comm_error(self): raise Exception('Not implemented')
+    def comm_result(self, result): pass # M66 answer (1.45.0)
 
 
     def is_active(self): return len(self.queue) or self.command is not None
@@ -221,6 +222,8 @@ class Comm(object):
                 elif 'msg' in msg:
                     self._log_msg(msg)
                     self.ctrl.mach.process_log(msg)
+                elif 'result' in msg and len(msg) == 1:
+                    self.comm_result(msg['result'])
                 elif 'firmware' in msg:
                     self.log.info('AVR firmware rebooted')
                     self.connect()

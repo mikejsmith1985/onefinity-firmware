@@ -32,6 +32,7 @@
 #include "stepper.h"
 #include "spindle.h"
 #include "outputs.h"
+#include "io.h"
 #include "jog.h"
 #include "estop.h"
 #include "seek.h"
@@ -125,6 +126,7 @@ static void _stop() {
     jog_stop();
     spindle_stop();
     outputs_stop();
+    io_stop(); // Drop an M66 wait (1.45.0)
     seek_cancel();
     break;
 

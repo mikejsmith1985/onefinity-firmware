@@ -49,6 +49,7 @@ typedef struct {
   uint16_t debounce;
   uint16_t lockout;
   bool initialized;
+  bool user; // 1.45.0: an M66 input; no limit callback, motor mode ignored
 } switch_t;
 
 
@@ -100,7 +101,8 @@ void switch_rtc_callback() {
       s->debounce = 0;
       s->initialized = true;
       s->lockout = sw.lockout;
-      if (s->cb) s->cb((switch_id_t)i, switch_is_active((switch_id_t)i));
+      if (s->cb && !s->user)
+        s->cb((switch_id_t)i, switch_is_active((switch_id_t)i));
     }
   }
 }
@@ -138,8 +140,50 @@ void switch_set_type(switch_id_t sw, switch_type_t type) {
     bool wasActive = switch_is_active(sw);
     s->type = type;
     bool isActive = switch_is_active(sw);
-    if (wasActive != isActive && s->cb) s->cb(sw, isActive);
+    if (wasActive != isActive && s->cb && !s->user) s->cb(sw, isActive);
   }
+}
+
+
+// 1.45.0: a limit switch pin used as an M66 input.  Only the motor limit
+// pins can be; the switch then never calls its limit callback (no E-stop)
+// and the motor's min/max switch mode can't change it.
+static bool _is_limit(switch_id_t sw) {return SW_MIN_0 <= sw && sw <= SW_MAX_3;}
+
+
+bool switch_is_ready(switch_id_t sw) {
+  return 0 <= sw && sw < num_switches && switches[sw].initialized;
+}
+
+
+bool switch_is_user(switch_id_t sw) {
+  return 0 <= sw && sw < num_switches && switches[sw].user;
+}
+
+
+bool switch_set_user(switch_id_t sw, switch_type_t type) {
+  if (!_is_limit(sw)) return false;
+  switch_t *s = &switches[sw];
+
+  // Refuse a pin that is in use as a limit switch
+  if (!s->user && s->type != SW_DISABLED) return false;
+
+  s->user = true;
+  s->type = type;
+  return true;
+}
+
+
+void switch_release_user(switch_id_t sw) {
+  if (!_is_limit(sw) || !switches[sw].user) return;
+  switches[sw].type = SW_DISABLED;
+  switches[sw].user = false;
+}
+
+
+static void _set_limit_type(switch_id_t sw, switch_type_t type) {
+  if (switch_is_user(sw)) return; // Owned by an M66 input
+  switch_set_type(sw, type);
 }
 
 
@@ -149,19 +193,25 @@ void switch_set_callback(switch_id_t sw, switch_callback_t cb) {
 
 
 // Var callbacks
-uint8_t get_min_sw_mode(int index) {return switch_get_type(MIN_SWITCH(index));}
-
-
-void set_min_sw_mode(int index, uint8_t value) {
-  switch_set_type(MIN_SWITCH(index), (switch_type_t)value);
+// An M66 input's pin reports as a disabled limit (1.45.0)
+static uint8_t _limit_type(switch_id_t sw) {
+  return switch_is_user(sw) ? SW_DISABLED : switch_get_type(sw);
 }
 
 
-uint8_t get_max_sw_mode(int index) {return switch_get_type(MAX_SWITCH(index));}
+uint8_t get_min_sw_mode(int index) {return _limit_type(MIN_SWITCH(index));}
+
+
+void set_min_sw_mode(int index, uint8_t value) {
+  _set_limit_type(MIN_SWITCH(index), (switch_type_t)value);
+}
+
+
+uint8_t get_max_sw_mode(int index) {return _limit_type(MAX_SWITCH(index));}
 
 
 void set_max_sw_mode(int index, uint8_t value) {
-  switch_set_type(MAX_SWITCH(index), (switch_type_t)value);
+  _set_limit_type(MAX_SWITCH(index), (switch_type_t)value);
 }
 
 
@@ -187,8 +237,13 @@ static uint8_t _get_state(int index) {
 }
 
 
-uint8_t get_min_switch(int index) {return _get_state(MIN_SWITCH(index));}
-uint8_t get_max_switch(int index) {return _get_state(MAX_SWITCH(index));}
+static uint8_t _get_limit_state(switch_id_t sw) {
+  return switch_is_user(sw) ? 2 : _get_state(sw); // 2: disabled
+}
+
+
+uint8_t get_min_switch(int index) {return _get_limit_state(MIN_SWITCH(index));}
+uint8_t get_max_switch(int index) {return _get_limit_state(MAX_SWITCH(index));}
 uint8_t get_estop_switch() {return _get_state(SW_ESTOP);}
 uint8_t get_probe_switch() {return _get_state(SW_PROBE);}
 

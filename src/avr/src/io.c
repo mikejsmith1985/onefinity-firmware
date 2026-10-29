@@ -33,6 +33,8 @@
 #include "exec.h"
 #include "rtc.h"
 #include "analog.h"
+#include "switch.h"
+#include "config.h"
 
 #include <ctype.h>
 #include <stdbool.h>
@@ -49,25 +51,93 @@ typedef struct {
 
 static input_cmd_t active_cmd = {-1,};
 static uint32_t timeout;
+static int8_t last_level; // 1.45.0: last level seen while waiting for an edge
+
+
+// User digital inputs (1.45.0).  Each is one of the eight motor limit pins,
+// numbered 1-8 in switch table order: motor 0 min, motor 0 max, motor 1 min
+// ... motor 3 max.  0 means not assigned.
+static struct {
+  uint8_t pin;
+  uint8_t mode; // switch_type_t
+} inputs[INPUTS];
+
+
+static switch_id_t _input_switch(int port) {
+  if (port < 0 || INPUTS <= port || !inputs[port].pin) return SW_INVALID;
+  return (switch_id_t)(SW_MIN_0 + inputs[port].pin - 1);
+}
+
+
+/// -1 if the input is not assigned or not read yet, else 0 or 1
+static int8_t _input_level(int port) {
+  switch_id_t sw = _input_switch(port);
+  if (sw == SW_INVALID || !switch_is_user(sw) || !switch_is_enabled(sw))
+    return -1;
+  if (!switch_is_ready(sw)) return -1; // Not debounced yet
+  return switch_is_active(sw) ? 1 : 0;
+}
+
+
+static void _apply_input(int port) {
+  // Release whatever the input had, then claim the new pin
+  for (int sw = SW_MIN_0; sw <= SW_MAX_3; sw++) {
+    bool used = false;
+    for (int i = 0; i < INPUTS; i++)
+      if (inputs[i].pin && _input_switch(i) == sw && inputs[i].mode) used = true;
+    if (!used) switch_release_user((switch_id_t)sw);
+  }
+
+  switch_id_t sw = _input_switch(port);
+  if (sw == SW_INVALID || !inputs[port].mode) return;
+  if (!switch_set_user(sw, (switch_type_t)inputs[port].mode)) {
+    // The pin is a limit switch: leave it alone and drop the assignment
+    inputs[port].pin = 0;
+  }
+}
+
+
+static void _send_result(float result) {
+  printf_P(PSTR("{\"result\": %f}\n"), (double)result);
+  active_cmd.port = -1;
+}
 
 
 void io_callback() {
   if (active_cmd.port == -1) return;
 
-  bool done = false;
-  float result = 0;
-  if (active_cmd.mode == INPUT_IMMEDIATE || rtc_expired(timeout)) done = true;
-
-  // TODO handle modes
-
-  if (done) {
-    if (active_cmd.digital) { // TODO
-    } else result = analog_get(active_cmd.port);
-
-    printf_P(PSTR("{\"result\": %f}\n"), (double)result);
-    active_cmd.port = -1;
+  if (!active_cmd.digital) {
+    // Analog: read once the timeout is up (or now when immediate)
+    if (active_cmd.mode == INPUT_IMMEDIATE || rtc_expired(timeout))
+      _send_result(analog_get(active_cmd.port));
+    return;
   }
+
+  // Digital (1.45.0).  Result as LinuxCNC's #5399: the level when it is
+  // read, or -1 when the input is not assigned or the wait timed out.
+  int8_t level = _input_level(active_cmd.port);
+  bool done = false;
+
+  switch (active_cmd.mode) {
+  case INPUT_IMMEDIATE: _send_result(level); return;
+  case INPUT_HIGH: done = level == 1; break;
+  case INPUT_LOW:  done = level == 0; break;
+
+  case INPUT_RISE: case INPUT_FALL:
+    if (last_level != -1 && level != -1 && level != last_level &&
+        level == (active_cmd.mode == INPUT_RISE ? 1 : 0)) done = true;
+    if (level != -1) last_level = level;
+    break;
+  }
+
+  if (done) _send_result(level);
+  else if (level == -1 && _input_switch(active_cmd.port) == SW_INVALID)
+    _send_result(-1); // Not assigned: don't wait for nothing
+  else if (rtc_expired(timeout)) _send_result(-1);
 }
+
+
+void io_stop() {active_cmd.port = -1;} // Stop or E-stop drops a wait
 
 
 static stat_t _exec_cb() {
@@ -112,7 +182,37 @@ unsigned command_input_size() {return sizeof(input_cmd_t);}
 
 void command_input_exec(void *data) {
   active_cmd = *(input_cmd_t *)data;
+  last_level = -1;
 
   timeout = rtc_get_time() + active_cmd.timeout * 1000;
   exec_set_cb(_exec_cb);
+}
+
+
+// Var callbacks (1.45.0)
+uint8_t get_input_pin(int port) {return inputs[port].pin;}
+
+
+void set_input_pin(int port, uint8_t pin) {
+  if (8 < pin) pin = 0;
+  if (inputs[port].pin == pin) return;
+  inputs[port].pin = pin;
+  _apply_input(port);
+}
+
+
+uint8_t get_input_mode(int port) {return inputs[port].mode;}
+
+
+void set_input_mode(int port, uint8_t mode) {
+  if (SW_NORMALLY_CLOSED < mode) mode = SW_DISABLED;
+  if (inputs[port].mode == mode) return;
+  inputs[port].mode = mode;
+  _apply_input(port);
+}
+
+
+uint8_t get_input_state(int port) {
+  int8_t level = _input_level(port);
+  return level == -1 ? 2 : level;
 }

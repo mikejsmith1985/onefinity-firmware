@@ -61,14 +61,28 @@ check('M7 with M9 fine', 'mist' not in k)
 
 codes = {'G83 X0 Y0 Z-5 R2 Q1': 'g83', 'G73 X0 Y0 Z-5 R2 Q1': 'g73', 'G84 X0 Y0 Z-5 R2': 'g84',
          'G87 X0 Y0 Z-5 R2': 'g87', 'G88 X0 Y0 Z-5 R2': 'g88', 'G41 D1': 'g41', 'G42 D1': 'g42',
-         'M62 P1': 'm62', 'M63 P1': 'm63', 'M64 P1': 'm64', 'M65 P1': 'm65',
          'G5 X1 Y1 I1 J1 P1 Q1': 'g5', 'G5.1 X1 Y1 I1 J1': 'g5.1', 'G33 Z-1 K1': 'g33', 'G76 P1 Z-1': 'g76'}
 for line, key in codes.items():
     k, _ = keys('G21 G54\nG0 X0 Y0 Z5\n' + line + '\nM30')
     check('%s is an error' % line.split()[0], k.get(key, {}).get('level') == 'error', list(k))
-for line, key in {'M66 P0 L3 Q5': 'm66', 'M19': 'm19', 'M48': 'm48', 'M53 P1': 'm53', 'M61 Q2': 'm61'}.items():
+for line, key in {'M19': 'm19', 'M48': 'm48', 'M53 P1': 'm53', 'M61 Q2': 'm61'}.items():
     k, _ = keys('G21 G54\nG0 X0 Y0 Z5\n' + line + '\nM30')
     check('%s warns' % line.split()[0], k.get(key, {}).get('level') == 'warn', list(k))
+# M62-M66 (1.45.0): no code warning; the ports are listed for the Run check
+for line in ('M62 P1', 'M63 P1', 'M64 P1', 'M65 P1', 'M66 P0 L3 Q5'):
+    k, _ = keys('G21 G54\nG0 X0 Y0 Z5\n' + line + '\nM30')
+    check('%s is not flagged' % line.split()[0], ('m' + line[1:3]) not in k, list(k))
+res = Lint.lint_lines('G21 G54\nM64 P1\nG0 X0 Y0 Z5\nM66 P2 L3 Q5\nM66 E0 L0\nM65 P1\nM30'.split('\n'))
+check('ports used are listed', res['io'] == {'out': [(1, 2)], 'in': [(2, 4)]}, str(res['io']))
+class _S:
+    def __init__(s, uio): s.uio = uio
+    def get(s, k, d = None): return s.uio if k == 'user_io' else d
+class _C:
+    def __init__(s, uio): s.state = _S(uio)
+msg = Lint.user_io_missing(_C({'outputs': {}, 'inputs': {}}), res)
+check('Run stops for ports with no pin', msg and 'output P1 (line 2)' in msg and 'input P2 for M66 (line 4)' in msg, msg)
+check('no stop when both have pins', Lint.user_io_missing(_C({'outputs': {'1': 'd'}, 'inputs': {'2': 3}}), res) is None)
+check('no stop for a program without them', Lint.user_io_missing(_C({}), Lint.lint_lines(['G0 X1', 'M30'])) is None)
 k, _ = keys('G21 G54\n(G83 in a comment)\nG0 X0 Y0 Z5\nM30')
 check('codes inside comments are not codes', 'g83' not in k)
 

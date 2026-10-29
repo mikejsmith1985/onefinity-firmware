@@ -96,6 +96,7 @@ enum {
 #define MOTORS                   4 // number of motors on the board
 #define OUTS                     6 // number of supported pin outputs
 #define ANALOG                   2 // number of supported analog inputs
+#define INPUTS                   4 // user digital inputs for M66 (1.45.0)
 #define VFDREG                  32 // number of supported VFD modbus registers
 
 // Switch settings.  See switch.c

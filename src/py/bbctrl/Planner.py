@@ -282,6 +282,20 @@ class Planner():
         if self.seek_result(0): self.restart()
 
 
+    def input_result(self, result):
+        # M66 answer from the motion board (1.45.0): -1 not assigned or timed
+        # out, else the input level.  The interpreter stores it in #5399.
+        if not getattr(self, 'waiting_input', False):
+            self.log.warning('M66 result %s with no M66 waiting' % result)
+            return
+        self.waiting_input = False
+        try:
+            if self.planner.is_synchronizing():
+                self.planner.synchronize(float(result))
+        except Exception:
+            self.log.exception('Internal error: Planner synchronize')
+
+
     def seek_result(self, result):
         # Give the waiting interpreter the probe result: #5070 = result and
         # #5061 to #5063 = where the planner is (the target, without contact)
@@ -465,13 +479,30 @@ class Planner():
             return
 
         if type == 'input':
-            # TODO handle timeout
-            self.planner.synchronize(0) # TODO Fix this
+            # M66 (1.45.0): the interpreter waits until the motion board
+            # answers with the result (Mach.comm_result -> input_result).
+            # A dry run doesn't wait: the result reads as 0, as before.
+            if self.is_dry():
+                self.planner.synchronize(0)
+                return
+            self.waiting_input = True
             return Cmd.input(block['port'], block['mode'], block['timeout'])
 
         if type == 'output':
             if self.is_dry(): return # Mist, relays etc. stay off
             value = int(float(block['value']))
+            port = block['port']
+            if port.startswith('digital-out-'):
+                # M62-M65 (1.45.0): the pin chosen in Settings > I/O
+                n = port[12:]
+                label = (self.ctrl.state.get('user_io', {}) or {}) \
+                    .get('outputs', {}).get(n)
+                if label is None:
+                    raise RuntimeError(
+                        'M62-M65 P%s: output P%s is not set to a pin. Choose '
+                        'one on the I/O tab (User outputs), then run again.'
+                        % (n, n))
+                return Cmd.output_label(label, value)
             if block['port'] == 'mist' and self.mist_follow:
                 # M7 waits for the next cutting move; M9 switches off now
                 self.mist_wanted = bool(value)
@@ -562,6 +593,7 @@ class Planner():
             self.ctrl.mach.stop()
 
         self.end_dry()
+        self.waiting_input = False
         self.planner = gplan.Planner()
         self.planner.set_resolver(self._get_var_cb)
         # TODO logger is global and will not work correctly in demo mode
@@ -614,6 +646,7 @@ class Planner():
     def stop(self):
         try:
             self.end_dry()
+            self.waiting_input = False
             self.seek_line = None
             self.guard_pos = None
             self.planner.stop()

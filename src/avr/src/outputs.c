@@ -34,6 +34,7 @@ typedef struct {
   bool active;
   output_state_t state;
   output_mode_t mode;
+  bool user; // 1.45.0: an M62-M65 output, so the spindle doesn't drive it
 } output_t;
 
 
@@ -120,14 +121,27 @@ void outputs_set_mode(uint8_t pin, output_mode_t mode) {
 
 output_state_t outputs_get_state(uint8_t pin) {
   output_t *output = _get_output(pin);
-  if (output) return OUT_TRI;
+  if (!output) return OUT_TRI; // 1.45.0: was inverted (null dereference)
   return output->state;
+}
+
+
+bool outputs_is_user(uint8_t pin) {
+  output_t *output = _get_output(pin);
+  return output ? output->user : false;
 }
 
 
 void outputs_stop() {
   outputs_set_active(SWITCH_1_PIN, false);
   outputs_set_active(SWITCH_2_PIN, false);
+
+  // M62-M65 outputs go off on stop and E-stop too (1.45.0)
+  for (int i = 0; i < OUTS; i++)
+    if (outputs[i].user) {
+      outputs[i].active = false;
+      _update_state(&outputs[i]);
+    }
 }
 
 
@@ -157,5 +171,22 @@ uint8_t get_output_mode(int id) {
 void set_output_mode(int id, uint8_t mode) {
   if (OUTS <= id) return;
   outputs[id].mode = (output_mode_t)mode;
+  _update_state(&outputs[id]);
+}
+
+
+// 1.45.0: mark an output as an M62-M65 user output.  The fault and test
+// outputs can't be: E-stop drives the fault output on.
+bool get_output_user(int id) {
+  return OUTS <= id ? false : outputs[id].user;
+}
+
+
+void set_output_user(int id, bool user) {
+  if (OUTS <= id) return;
+  if (outputs[id].pin == FAULT_PIN || outputs[id].pin == TEST_PIN) return;
+  if (outputs[id].user == user) return;
+  outputs[id].user = user;
+  outputs[id].active = false; // Either way it starts off
   _update_state(&outputs[id]);
 }

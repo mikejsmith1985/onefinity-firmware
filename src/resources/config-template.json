@@ -531,6 +531,161 @@
       "pin": 21
     }
   },
+  "user-io": {
+    "user-output-0": {
+      "type": "enum",
+      "values": [
+        "none",
+        "tool-enable (pin 15)",
+        "tool-direction (pin 16)",
+        "load-1 (pin 2)",
+        "load-2 (pin 1)"
+      ],
+      "default": "none",
+      "help": "Pin switched by M64 P0 (on), M65 P0 (off), M62/M63 P0 (with the next move)."
+    },
+    "user-output-1": {
+      "type": "enum",
+      "values": [
+        "none",
+        "tool-enable (pin 15)",
+        "tool-direction (pin 16)",
+        "load-1 (pin 2)",
+        "load-2 (pin 1)"
+      ],
+      "default": "none",
+      "help": "Pin switched by M64 P1 (on), M65 P1 (off), M62/M63 P1 (with the next move)."
+    },
+    "user-output-2": {
+      "type": "enum",
+      "values": [
+        "none",
+        "tool-enable (pin 15)",
+        "tool-direction (pin 16)",
+        "load-1 (pin 2)",
+        "load-2 (pin 1)"
+      ],
+      "default": "none",
+      "help": "Pin switched by M64 P2 (on), M65 P2 (off), M62/M63 P2 (with the next move)."
+    },
+    "user-output-3": {
+      "type": "enum",
+      "values": [
+        "none",
+        "tool-enable (pin 15)",
+        "tool-direction (pin 16)",
+        "load-1 (pin 2)",
+        "load-2 (pin 1)"
+      ],
+      "default": "none",
+      "help": "Pin switched by M64 P3 (on), M65 P3 (off), M62/M63 P3 (with the next move)."
+    },
+    "user-input-0-pin": {
+      "type": "enum",
+      "values": [
+        "none",
+        "pin 3 (motor 0 min)",
+        "pin 4 (motor 0 max)",
+        "pin 5 (motor 1 min)",
+        "pin 8 (motor 1 max)",
+        "pin 9 (motor 2 min)",
+        "pin 10 (motor 2 max)",
+        "pin 11 (motor 3 min)",
+        "pin 12 (motor 3 max)"
+      ],
+      "default": "none",
+      "help": "Pin read by M66 P0. Only a motor limit pin that is not used as a limit switch."
+    },
+    "user-input-0-mode": {
+      "type": "enum",
+      "values": [
+        "normally-open",
+        "normally-closed"
+      ],
+      "default": "normally-open",
+      "help": "Normally open: active when the switch closes to ground."
+    },
+    "user-input-1-pin": {
+      "type": "enum",
+      "values": [
+        "none",
+        "pin 3 (motor 0 min)",
+        "pin 4 (motor 0 max)",
+        "pin 5 (motor 1 min)",
+        "pin 8 (motor 1 max)",
+        "pin 9 (motor 2 min)",
+        "pin 10 (motor 2 max)",
+        "pin 11 (motor 3 min)",
+        "pin 12 (motor 3 max)"
+      ],
+      "default": "none",
+      "help": "Pin read by M66 P1. Only a motor limit pin that is not used as a limit switch."
+    },
+    "user-input-1-mode": {
+      "type": "enum",
+      "values": [
+        "normally-open",
+        "normally-closed"
+      ],
+      "default": "normally-open",
+      "help": "Normally open: active when the switch closes to ground."
+    },
+    "user-input-2-pin": {
+      "type": "enum",
+      "values": [
+        "none",
+        "pin 3 (motor 0 min)",
+        "pin 4 (motor 0 max)",
+        "pin 5 (motor 1 min)",
+        "pin 8 (motor 1 max)",
+        "pin 9 (motor 2 min)",
+        "pin 10 (motor 2 max)",
+        "pin 11 (motor 3 min)",
+        "pin 12 (motor 3 max)"
+      ],
+      "default": "none",
+      "help": "Pin read by M66 P2. Only a motor limit pin that is not used as a limit switch."
+    },
+    "user-input-2-mode": {
+      "type": "enum",
+      "values": [
+        "normally-open",
+        "normally-closed"
+      ],
+      "default": "normally-open",
+      "help": "Normally open: active when the switch closes to ground."
+    },
+    "user-input-3-pin": {
+      "type": "enum",
+      "values": [
+        "none",
+        "pin 3 (motor 0 min)",
+        "pin 4 (motor 0 max)",
+        "pin 5 (motor 1 min)",
+        "pin 8 (motor 1 max)",
+        "pin 9 (motor 2 min)",
+        "pin 10 (motor 2 max)",
+        "pin 11 (motor 3 min)",
+        "pin 12 (motor 3 max)"
+      ],
+      "default": "none",
+      "help": "Pin read by M66 P3. Only a motor limit pin that is not used as a limit switch."
+    },
+    "user-input-3-mode": {
+      "type": "enum",
+      "values": [
+        "normally-open",
+        "normally-closed"
+      ],
+      "default": "normally-open",
+      "help": "Normally open: active when the switch closes to ground."
+    },
+    "user-outputs-off-at-end": {
+      "type": "bool",
+      "default": true,
+      "help": "Turn the M62-M65 outputs off when a program ends. Stop and E-stop always turn them off."
+    }
+  },
 
   "probe": {
     "probe-diameter": {

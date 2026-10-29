@@ -34,6 +34,7 @@
 #include "config.h"
 #include "state.h"
 #include "outputs.h"
+#include "io.h"
 #include "jog.h"
 #include "exec.h"
 
@@ -68,6 +69,7 @@ void estop_trigger(stat_t reason) {
   spindle_estop();
   jog_stop();
   outputs_stop();
+  io_stop(); // Drop an M66 wait (1.45.0)
 
   // Set machine state
   state_estop();

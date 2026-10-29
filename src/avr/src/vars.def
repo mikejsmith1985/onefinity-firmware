@@ -29,6 +29,7 @@
 #define MOTORS_LABEL "0123"
 #define   OUTS_LABEL "ed12ft"
 #define ANALOG_LABEL "12"
+#define INPUTS_LABEL "0123"
 #define VFDREG_LABEL "0123456789abcdefghijklmnopqrstuv"
 
 // VAR(name, code, type, index, settable, report)
@@ -84,6 +85,12 @@ VAR(axis_position,    p, f32,   AXES,   0, 1) // Axis position
 VAR(output_active,   oa, b8,    OUTS,   1, 1) // Output pin active
 VAR(output_state,    os, u8,    OUTS,   0, 1) // Output pin state
 VAR(output_mode,     om, u8,    OUTS,   1, 1) // Output pin mode
+VAR(output_user,     ou, b8,    OUTS,   1, 1) // Output is an M62-M65 output
+
+// User digital inputs for M66 (1.45.0)
+VAR(input_pin,       ip, u8,    INPUTS, 1, 1) // 0 none, 1-8 limit pins
+VAR(input_mode,      im, u8,    INPUTS, 1, 1) // Disabled, NO or NC
+VAR(input_state,     is, u8,    INPUTS, 0, 1) // 0 off, 1 on, 2 disabled
 
 // Analog
 VAR(analog_input,    ai, f32,   ANALOG, 0, 0) // Analog input pins

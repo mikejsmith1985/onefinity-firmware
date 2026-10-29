@@ -142,6 +142,17 @@ class Mach(Comm):
     def _set_mist(self, on): self._i2c_set('1oa', 1 if on else 0)
 
 
+    def _user_outputs_off(self):
+        # M62-M65 outputs off when a program ends (1.45.0).  The motion
+        # board turns them off itself on Stop and E-stop.
+        try:
+            uio = self.ctrl.state.get('user_io', {}) or {}
+            if not self.ctrl.config.get('user-outputs-off-at-end', True): return
+            for label in sorted(set(uio.get('outputs', {}).values())):
+                self._i2c_set(label + 'oa', 0)
+        except Exception as e: self.mlog.error('User outputs: %s' % e)
+
+
     def _plugs(self): return getattr(self.ctrl, 'plugs', None)
 
 
@@ -158,6 +169,7 @@ class Mach(Comm):
         if cycle == 'idle': self.planner.end_dry()
         if cycle == 'idle' and self._get_cycle() == 'running':
             self._plug_call('job_end')
+            self._user_outputs_off()
         self.ctrl.state.set('cycle', cycle)
 
 
@@ -323,6 +335,13 @@ class Mach(Comm):
     @overrides(Comm)
     def comm_error(self):
         self.planner.reset()
+
+
+    @overrides(Comm)
+    def comm_result(self, result):
+        # M66 answer from the motion board (1.45.0)
+        self.planner.input_result(result)
+        self.flush() # The interpreter has more to send now
 
 
     @overrides(Comm)

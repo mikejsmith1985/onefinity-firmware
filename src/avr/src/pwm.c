@@ -47,11 +47,13 @@ static pwm_t pwm = {0};
 
 
 static void _set_enable(bool enable) {
+  if (outputs_is_user(TOOL_ENABLE_PIN)) return; // M62-M65 output (1.45.0)
   outputs_set_active(TOOL_ENABLE_PIN, enable);
 }
 
 
 static void _set_dir(bool clockwise) {
+  if (outputs_is_user(TOOL_DIR_PIN)) return; // M62-M65 output (1.45.0)
   outputs_set_active(TOOL_DIR_PIN, !clockwise);
 }
 

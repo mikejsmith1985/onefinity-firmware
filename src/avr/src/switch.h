@@ -70,3 +70,7 @@ bool switch_is_enabled(switch_id_t sw);
 switch_type_t switch_get_type(switch_id_t sw);
 void switch_set_type(switch_id_t sw, switch_type_t type);
 void switch_set_callback(switch_id_t sw, switch_callback_t cb);
+bool switch_is_ready(switch_id_t sw);
+bool switch_is_user(switch_id_t sw);
+bool switch_set_user(switch_id_t sw, switch_type_t type);
+void switch_release_user(switch_id_t sw);

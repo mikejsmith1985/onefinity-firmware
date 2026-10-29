@@ -181,6 +181,9 @@ a { color: #8db4ff; }
 .unit-tag, .extra { color: var(--dim); font-size: 14px; white-space: nowrap; }
 .pin { display: inline-flex; align-items: center; gap: 8px; }
 .bad-text { color: #ff8a82; }
+.good-text { color: var(--green); } .warn-text { color: var(--yellow); margin: 4px 0; }
+.uio-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0 16px; border-top: 1px solid var(--rule); }
+.uio-row .field { flex: 1 1 300px; }
 input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]), select, textarea {
   background: var(--bed); border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; min-height: 42px; color: var(--chalk); min-width: 0; }
 .ctl input[type=number], .ctl input[type=text], .ctl select { width: 190px; max-width: 100%; }

@@ -49,6 +49,7 @@ from bbctrl.Pwr import Pwr
 from bbctrl.I2C import I2C
 from bbctrl.SetterGuard import SetterGuard
 from bbctrl.Plugs import Plugs
+import bbctrl.UserIO as UserIO
 from bbctrl.Planner import Planner
 from bbctrl.Preplanner import Preplanner
 from bbctrl.State import State

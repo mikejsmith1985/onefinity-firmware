@@ -114,6 +114,14 @@ class Sim:
                 if m.group(1).startswith('_'): yield ('set', m.group(1), s.vars[m.group(1)])
                 continue
             ws = s.words(line); g=[v for k,v in ws if k=='G']; ax={k:v for k,v in ws if k in 'XYZ'}
+            # M62-M66 (1.45.0): ('output', port, value) and ('input', port, mode, timeout),
+            # sent back: the M66 result, kept in #5399
+            ms=[v for k,v in ws if k=='M']; wd={k:v for k,v in ws}
+            for v in ms:
+                if v in (62,63,64,65): yield ('output', int(wd.get('P',0)), 1 if v in (62,64) else 0)
+                if v == 66:
+                    res = yield ('input', int(wd.get('P',0)), int(wd.get('L',0)), float(wd.get('Q',0)))
+                    s.vars['5399'] = float(res)
             for v in g:
                 if v==91: s.inc=True
                 if v==90: s.inc=False

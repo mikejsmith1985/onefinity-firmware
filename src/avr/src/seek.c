@@ -109,6 +109,7 @@ stat_t command_seek(char *cmd) {
   switch_id_t sw = (switch_id_t)decode_hex_nibble(cmd[1]);
   if (sw <= 0) return STAT_INVALID_ARGUMENTS; // Don't allow seek to ESTOP
   if (!switch_is_enabled(sw)) return STAT_SEEK_NOT_ENABLED;
+  if (switch_is_user(sw)) return STAT_SEEK_NOT_ENABLED; // M66 input (1.45.0)
 
   uint8_t flags = decode_hex_nibble(cmd[2]);
   if (flags & 0xfc) return STAT_INVALID_ARGUMENTS;

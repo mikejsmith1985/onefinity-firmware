@@ -38,3 +38,4 @@ typedef enum {
 
 
 void io_callback();
+void io_stop();

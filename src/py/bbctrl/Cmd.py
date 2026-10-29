@@ -150,6 +150,11 @@ def input(port, mode, timeout):
     return '%s%s%d%d%s' % (INPUT, type, index, m, encode_float(timeout))
 
 
+def output_label(label, value):
+    # An output by its motion board label (vars.def OUTS_LABEL), 1.45.0
+    return '#%soa=%d' % (label, 1 if value else 0)
+
+
 def output(port, value):
     if port == 'mist':  return '#1oa=' + ('1' if value else '0')
     if port == 'flood': return '#2oa=' + ('1' if value else '0')

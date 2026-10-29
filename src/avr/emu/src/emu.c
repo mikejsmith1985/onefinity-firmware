@@ -26,6 +26,7 @@
 \******************************************************************************/
 
 #include <config.h>
+#include "pins.h"
 
 #include <avr/io.h>
 
@@ -154,6 +155,24 @@ void emu_callback() {
   if (ADCB_CH0_INTCTRL == ADC_CH_INTLVL_LO_gc) __STEP_LOW_LEVEL_ISR();
   for (int motor = 0; motor < 4; motor++) motor_emulate_steps(motor);
   __STEP_TIMER_ISR();
+
+  // Test hook (1.45.0): BBEMU_PINS names a file of "<port letter> <bit> <0|1>"
+  // lines, read every tick, that set input pin levels (tests only, the
+  // emulator is not part of the controller firmware)
+  static const char *pinsFile = getenv("BBEMU_PINS");
+  if (pinsFile) {
+    FILE *f = fopen(pinsFile, "r");
+    if (f) {
+      char port; int bit, level;
+      while (fscanf(f, " %c %d %d", &port, &bit, &level) == 3)
+        if ('A' <= port && port <= 'F' && 0 <= bit && bit < 8) {
+          uint8_t pin = PIN_ID((PORT_A + (port - 'A')), bit);
+          if (level) PIN_PORT(pin)->IN |= PIN_BM(pin);
+          else PIN_PORT(pin)->IN &= ~PIN_BM(pin);
+        }
+      fclose(f);
+    }
+  }
 
   // Call RTC
   __RTC_OVF_vect();

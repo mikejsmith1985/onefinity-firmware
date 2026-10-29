@@ -46,18 +46,8 @@ DEGRADED_G = {
     33: 'G33 (spindle-synchronized move) runs as a plain move',
     33.1: 'G33.1 (rigid tapping) runs as a plain move',
 }
-DEGRADED_M = {
-    62: 'M62 (digital output) is not supported on this controller; the job '
-        'stops with an error when it gets there. Use M7/M9 (Load 1) or M8/M9 (Load 2)',
-    63: 'M63 (digital output) is not supported on this controller; the job '
-        'stops with an error when it gets there. Use M7/M9 (Load 1) or M8/M9 (Load 2)',
-    64: 'M64 (digital output) is not supported on this controller; the job '
-        'stops with an error when it gets there. Use M7/M9 (Load 1) or M8/M9 (Load 2)',
-    65: 'M65 (digital output) is not supported on this controller; the job '
-        'stops with an error when it gets there. Use M7/M9 (Load 1) or M8/M9 (Load 2)',
-}
+DEGRADED_M = {}  # 1.45.0: M62-M65 work when the port has a pin (Settings > I/O)
 IGNORED_M = {
-    66: 'M66 (wait for input) is only partly supported (its timeout is not handled)',
     19: 'M19 (spindle orient) is ignored',
     48: 'M48 (overrides on) is ignored', 49: 'M49 (overrides off) is ignored',
     50: 'M50 (feed override control) is ignored',
@@ -76,7 +66,8 @@ KNOWN_G = set([0, 1, 2, 3, 4, 7, 8, 10, 17, 17.1, 18, 18.1, 19, 19.1, 20, 21,
                57, 58, 59, 59.1, 59.2, 59.3, 61, 61.1, 64, 70, 71, 80, 81, 82,
                85, 86, 89, 90, 90.1, 91, 91.1, 92, 92.1, 92.2, 92.3, 94, 97,
                98, 99])
-KNOWN_M = set([0, 1, 2, 3, 4, 5, 6, 7, 7.1, 8, 8.1, 9, 30, 60, 70, 71, 72, 73])
+KNOWN_M = set([0, 1, 2, 3, 4, 5, 6, 7, 7.1, 8, 8.1, 9, 30, 60, 62, 63, 64, 65, 66,
+               70, 71, 72, 73])
 WCS = set([54, 55, 56, 57, 58, 59, 59.1, 59.2, 59.3])
 MOTION = (0, 1, 2, 3)
 MAX_LINES_LISTED = 10
@@ -197,6 +188,7 @@ def lint_lines(lines, setup = None):
     deepest = {}          # (x, y) rounded -> lowest Z reached there (1.31.5)
     ext = [None, None, None, None]   # min x, max x, min y, max y of the moves
     ext_ok = True         # False once a move can't be followed (G91, expressions)
+    io_out, io_in = {}, {}   # port -> first line (1.45.0)
     n = 0
     WORD = GCodeText.WORD
     split = GCodeText.split
@@ -248,6 +240,12 @@ def lint_lines(lines, setup = None):
 
         # Codes -----------------------------------------------------------
         if gs or ms: _codes(rep, n, gs, ms)
+        # M62-M66 ports (1.45.0), checked against Settings > I/O at Run
+        for mc in ms:
+            if mc in (62, 63, 64, 65) and 'P' in vals:
+                io_out.setdefault(int(vals['P']), n)
+            elif mc == 66 and 'P' in vals and 'E' not in vals:
+                io_in.setdefault(int(vals['P']), n)
         # Modal state -----------------------------------------------------
         for g in gs:
             if g in (20, 70): units, metric = 'G20', False
@@ -413,6 +411,7 @@ def lint_lines(lines, setup = None):
         'issues': items,
         'stock_top': top,
         'max_speed': max_speed,
+        'io': {'out': sorted(io_out.items()), 'in': sorted(io_in.items())},
     }
 
 
@@ -460,7 +459,7 @@ def _cache():
     global _results
     if _results is None:
         from bbctrl import Work
-        _results = Work.FileCache(_lint_path, CACHE_MAX, 'lint-3')
+        _results = Work.FileCache(_lint_path, CACHE_MAX, 'lint-4')
     return _results
 
 
@@ -564,6 +563,28 @@ def tool_mismatch(config, res):
                                  why, 'laser' if sel == 'laser' else 'PWM'))
 
 
+def user_io_missing(ctrl, res):
+    '''M62-M66 ports the program uses that have no pin (1.45.0).  An output
+    stops the job with an error when it gets there; an input answers -1 at
+    once, so the program goes on as if the wait timed out.'''
+    io = res.get('io') or {}
+    if not io.get('out') and not io.get('in'): return None
+    try: uio = ctrl.state.get('user_io', {}) or {}
+    except Exception: return None
+    outs, ins = uio.get('outputs', {}), uio.get('inputs', {})
+    miss = []
+    for port, line in io.get('out', []):
+        if str(port) not in outs:
+            miss.append('output P%d (line %d)' % (port, line))
+    for port, line in io.get('in', []):
+        if str(port) not in ins:
+            miss.append('input P%d for M66 (line %d)' % (port, line))
+    if not miss: return None
+    return ('NO PIN: this program uses %s, which %s no pin. Choose one on '
+            'the I/O tab (User outputs and inputs), then run again.'
+            % (', '.join(miss), 'has' if len(miss) == 1 else 'have'))
+
+
 def _stops(ctrl, res):
     stops = []
     if res['errors']:
@@ -572,6 +593,9 @@ def _stops(ctrl, res):
     cfg = getattr(ctrl, 'config', None)
     msg = tool_mismatch(cfg, res) if cfg is not None else None
     if msg: stops.append({'key': 'tool', 'msg': msg})
+
+    msg = user_io_missing(ctrl, res)
+    if msg: stops.append({'key': 'io', 'msg': msg})
 
     want = GCodeText.norm_corner(res.get('setup', {}).get('probe-corner'))
     if want in GCodeText.CORNERS:
