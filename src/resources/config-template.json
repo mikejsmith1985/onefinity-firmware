@@ -312,7 +312,15 @@
         "OMRON MX2",
         "V70",
         "EM60",
-        "Redline VFD"
+        "Redline VFD",
+        "H100",
+        "WJ200",
+        "DMM DYN4 (Beta)",
+        "Galt G200/G500",
+        "Teco Westinghouse E510",
+        "Fuling DZB200/300",
+        "Huanyang GT-series",
+        "Delta VFD (generic)"
       ],
       "default": "Disabled",
       "code": "st"

@@ -60,6 +60,16 @@ typedef enum
   SPINDLE_TYPE_V70,
   SPINDLE_TYPE_REDLINE_VFD,
   SPINDLE_TYPE_EM60,
+  // 1.44.0: ported from Buildbotics 1.0.x-2.0.x.  Appended so the numbers of
+  // the types above (saved in every controller's config) don't change.
+  SPINDLE_TYPE_H100,
+  SPINDLE_TYPE_WJ200,
+  SPINDLE_TYPE_DMM_DYN4,
+  SPINDLE_TYPE_GALT_G200,
+  SPINDLE_TYPE_TECO_E510,
+  SPINDLE_TYPE_FULING_DZB200,
+  SPINDLE_TYPE_HUANYANG_GT,
+  SPINDLE_TYPE_DELTA,
 } spindle_type_t;
 
 typedef void (*deinit_cb_t)();

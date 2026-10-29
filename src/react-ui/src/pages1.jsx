@@ -100,6 +100,11 @@ const UNSUPPORTED = [
   { id: "custom-modbus-vfd", name: "Custom Modbus VFD" }, { id: "ac-tech-vfd", name: "AC-Tech VFD" }, { id: "nowforever-vfd", name: "Nowforever VFD" },
   { id: "delta-vfd", name: "Delta VFD015M21A (Beta)" }, { id: "yl600-vfd", name: "YL600, YL620, YL620-A VFD (Beta)" }, { id: "fr-d700-vfd", name: "FR-D700 (Beta)" },
   { id: "sunfar-e300-vfd", name: "Sunfar E300 (Beta)" }, { id: "omron-mx2-vfd", name: "OMRON MX2" }, { id: "v70-vfd", name: "V70" },
+  // 1.44.0: register programs ported from Buildbotics (motion board tables in vfd_spindle.c)
+  { id: "h100-vfd", name: "H100" }, { id: "wj200-vfd", name: "WJ200" }, { id: "dmm-dyn4-vfd", name: "DMM DYN4 (Beta)" },
+  { id: "galt-g200-vfd", name: "Galt G200/G500" }, { id: "teco-e510-vfd", name: "Teco Westinghouse E510" },
+  { id: "fuling-dzb200-vfd", name: "Fuling DZB200/300" }, { id: "huanyang-gt-vfd", name: "Huanyang GT-series" },
+  { id: "delta-generic-vfd", name: "Delta VFD (generic)" },
 ];
 const merge = (a, b) => { const o = { ...a }; for (const [k, v] of Object.entries(b || {})) o[k] = v && typeof v === "object" && !Array.isArray(v) ? merge(a?.[k] || {}, v) : v; return o; };
 

@@ -194,6 +194,84 @@ const vfd_reg_t em60_regs[] PROGMEM = {
   {REG_DISABLED},
 };
 
+// 1.44.0: register programs ported from Buildbotics bbctrl-firmware
+// (v0.4.16 to v2.0.8).  Untested on a Onefinity: each comes from upstream.
+const vfd_reg_t dmm_dyn4_regs[] PROGMEM = {
+  {REG_MAX_FREQ_FIXED,   0x00, 6000}, // Maximum operating frequency
+  {REG_FREQ_SIGN_SET,    0x0e, 0},    // Set frequency in 0.1Hz
+  {REG_STOP_WRITE,       0x0e, 0},    // Stop
+  {REG_FREQ_SIGN_READ,   0x14, 0},    // Read operating frequency
+  {REG_STATUS_READ,      0x02, 0},    // Read status
+  {REG_DISCONNECT_WRITE, 0x0e, 0},    // Stop on disconnect
+  {REG_DISABLED},
+};
+
+const vfd_reg_t galt_g200_regs[] PROGMEM = {
+  {REG_MAX_FREQ_READ,    0x0003, 0}, // Read max operating frequency in 0.01Hz
+  {REG_FREQ_SET,         0x2001, 0}, // Set frequency in 0.01Hz
+  {REG_FREQ_READ,        0x3000, 0}, // Read frequency with 0.01Hz
+  {REG_FWD_WRITE,        0x2000, 1}, // Run forward
+  {REG_REV_WRITE,        0x2000, 2}, // Run reverse
+  {REG_STOP_WRITE,       0x2000, 5}, // Stop
+  {REG_STATUS_READ,      0x2100, 0}, // Read status
+  {REG_DISCONNECT_WRITE, 0x2000, 5}, // Stop on disconnect
+  {REG_DISABLED},
+};
+
+const vfd_reg_t teco_e510_regs[] PROGMEM = {
+  {REG_MAX_FREQ_READ, 0x0102, 0}, // Read max frequency
+  {REG_FREQ_SET,      0x2502, 0}, // Set frequency
+  {REG_FREQ_READ,     0x2524, 0}, // Read frequency
+  {REG_FWD_WRITE,     0x2501, 1}, // Run forward
+  {REG_REV_WRITE,     0x2501, 2}, // Run reverse
+  {REG_STOP_WRITE,    0x2501, 0}, // Stop
+  {REG_STATUS_READ,   0x2520, 0}, // Read status
+  {REG_DISABLED},
+};
+
+const vfd_reg_t fuling_dzb200_regs[] PROGMEM = {
+  {REG_MAX_FREQ_READ,   0x0004,     0}, // Read max frequency
+  {REG_FREQ_SCALED_SET, 0x2000, 10000}, // Set scaled frequency
+  {REG_FREQ_READ,       0x3001,     0}, // Read frequency
+  {REG_FWD_WRITE,       0x1000,     1}, // Run forward
+  {REG_REV_WRITE,       0x1000,     2}, // Run reverse
+  {REG_STOP_WRITE,      0x1000,     5}, // Stop
+  {REG_STATUS_READ,     0x5001,     0}, // Read status
+  {REG_DISABLED},
+};
+
+// INVT derived, function code PX.YY is Modbus reg 0xXXYY
+const vfd_reg_t huanyang_gt_regs[] PROGMEM = {
+  {REG_MAX_FREQ_READ,    0x0003,     0}, // P0.03 max frequency
+  {REG_FREQ_SCALED_SET,  0x2000, 10000}, // Set frequency as % of max
+  {REG_FREQ_READ,        0x3000,     0}, // Output freq
+  {REG_FWD_WRITE,        0x1000,     1}, // Run forward
+  {REG_REV_WRITE,        0x1000,     2}, // Run reverse
+  {REG_STOP_WRITE,       0x1000,     5}, // Break to stop
+  {REG_STATUS_READ,      0x1001,     0}, // Status
+  {REG_DISCONNECT_WRITE, 0x1000,     5}, // Break to stop on disconnect
+  {REG_DISABLED},
+};
+
+// Upstream's generic Delta program (newer Delta drives).  The original
+// Delta VFD015M21A program above is kept unchanged for existing configs.
+const vfd_reg_t delta_regs[] PROGMEM = {
+  {REG_CONNECT_WRITE,    0x2002,  2}, // Reset fault
+  {REG_MAX_FREQ_READ,    0x211b,  0}, // Max frequency
+  {REG_FREQ_SET,         0x2001,  0}, // Frequency
+  {REG_STOP_WRITE,       0x2000,  1}, // Stop drive
+  {REG_FWD_WRITE,        0x2000, 18}, // Forward
+  {REG_REV_WRITE,        0x2000, 34}, // Reverse
+  {REG_FREQ_READ,        0x2103,  0}, // Output freq
+  {REG_STATUS_READ,      0x2100,  0}, // Status
+  {REG_DISCONNECT_WRITE, 0x2000,  1}, // Stop on disconnect
+  {REG_DISABLED},
+};
+
+// VFD aliases (as upstream)
+#define wj200_regs omron_mx2_regs
+#define h100_regs  v70_regs
+
 static vfd_reg_t regs[VFDREG];
 static vfd_reg_t custom_regs[VFDREG];
 
@@ -497,6 +575,14 @@ void vfd_spindle_init()
   case SPINDLE_TYPE_EM60:
     _load(em60_regs);
     break;
+  case SPINDLE_TYPE_H100:          _load(h100_regs);          break;
+  case SPINDLE_TYPE_WJ200:         _load(wj200_regs);         break;
+  case SPINDLE_TYPE_DMM_DYN4:      _load(dmm_dyn4_regs);      break;
+  case SPINDLE_TYPE_GALT_G200:     _load(galt_g200_regs);     break;
+  case SPINDLE_TYPE_TECO_E510:     _load(teco_e510_regs);     break;
+  case SPINDLE_TYPE_FULING_DZB200: _load(fuling_dzb200_regs); break;
+  case SPINDLE_TYPE_HUANYANG_GT:   _load(huanyang_gt_regs);   break;
+  case SPINDLE_TYPE_DELTA:         _load(delta_regs);         break;
     
   default:
     break;
