@@ -37,10 +37,11 @@ apt-get install -y -q --no-install-recommends \
 # Build-only packages, removed at the end
 # (No libevent/re2: with libevent present the 2021 build also wants re2's
 # headers, which its configure check can't compile; gplan uses neither)
+# (The kernel headers stay: the image ships with them, and bbserial can be
+# rebuilt on the controller with them)
 BUILD_PKGS="build-essential scons git python3-dev zlib1g-dev libbz2-dev
-  libexpat1-dev libsqlite3-dev libyaml-dev liblz4-dev
-  linux-headers-$KVER"
-apt-get install -y -q --no-install-recommends $BUILD_PKGS
+  libexpat1-dev libsqlite3-dev libyaml-dev liblz4-dev"
+apt-get install -y -q --no-install-recommends $BUILD_PKGS linux-headers-$KVER
 
 step "Users: pi (screen), bbmc (owner of the controller's files, uid 1001)"
 usermod -s /bin/bash pi
@@ -139,7 +140,7 @@ if make -C /lib/modules/$KVER/build M=$PWD modules > $BS/make.log 2>&1; then
     echo "bbserial built: $(modinfo -F vermagic bbserial.ko)" >> $INFO
 else
     echo "bbserial did NOT build; the standard driver is used" | tee -a $INFO
-    tail -30 $BS/make.log | tee -a $INFO
+    grep -E "error|bbserial.c:[0-9]+" $BS/make.log | head -20 | tee -a $INFO
 fi
 cd /; rm -rf $BS
 echo $SERIAL > /etc/onefinity-serial

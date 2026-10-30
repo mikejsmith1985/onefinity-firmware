@@ -461,7 +461,9 @@ static long _dev_ioctl(struct file *file, unsigned cmd, unsigned long arg) {
   switch (cmd) {
   case TCGETS: { // Get serial port settings
     struct ktermios *term = _get_term();
-    if (copy_to_user((void __user *)arg, &term, sizeof(struct termios)))
+    // 1.50.0: copy the settings, not the pointer to them (the 2017 code
+    // copied &term; Linux 6.x refuses to build that)
+    if (copy_to_user((void __user *)arg, term, sizeof(struct termios)))
       return -EFAULT;
     return 0;
   }
