@@ -35,8 +35,10 @@ apt-get install -y -q --no-install-recommends \
     libpython3.13 wireless-tools i2c-tools avahi-daemon logrotate \
     openssh-server
 # Build-only packages, removed at the end
+# (No libevent/re2: with libevent present the 2021 build also wants re2's
+# headers, which its configure check can't compile; gplan uses neither)
 BUILD_PKGS="build-essential scons git python3-dev zlib1g-dev libbz2-dev
-  libexpat1-dev libsqlite3-dev libyaml-dev liblz4-dev libre2-dev libevent-dev
+  libexpat1-dev libsqlite3-dev libyaml-dev liblz4-dev
   linux-headers-$KVER"
 apt-get install -y -q --no-install-recommends $BUILD_PKGS
 
