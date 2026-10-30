@@ -50,10 +50,10 @@ def dump(cfg, path, out):
     while p.has_more():
         cmd = p.next()
         p.set_active(cmd['id'])
+        # As plan.py does: there is no machine to wait for, so answer at once
+        if p.is_synchronizing(): p.synchronize(0)
         out.write(json.dumps(clean(cmd), sort_keys = True) + '\n')
         n += 1
-        if cmd.get('type') in ('input', 'seek'):
-            p.synchronize(0)     # answer waits (M66) and probe results
     return n
 
 
