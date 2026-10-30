@@ -28,7 +28,9 @@ echo "Base: $(. /etc/os-release; echo $PRETTY_NAME), kernel $KVER" >> $INFO
 step "Packages"
 apt-get update -q
 apt-get install -y -q --no-install-recommends \
-    xserver-xorg-core xserver-xorg-input-libinput xinit x11-xserver-utils \
+    xserver-xorg-core xserver-xorg-input-libinput xserver-xorg-video-fbdev \
+    xserver-xorg-legacy \
+    xinit x11-xserver-utils \
     ratpoison chromium rpi-chromium-mods fonts-dejavu-core \
     python3-venv python3-setuptools python3-tornado python3-serial \
     python3-pyudev python3-smbus2 python3-watchdog python3-rpi-lgpio \
@@ -71,9 +73,17 @@ echo America/New_York > /etc/timezone
 sed -i 's/^XKBLAYOUT=.*/XKBLAYOUT="us"/' /etc/default/keyboard 2>/dev/null || true
 
 step "Boot settings: serial port for the motion board, I2C, no serial console"
+# config.txt: the 2017 card's hardware settings (legacy framebuffer turned
+# 180°, HDMI boost, power-off line on GPIO 21) instead of Raspberry Pi OS's
+# defaults (KMS, camera/display auto-detect), plus the new OS's needs
 CFG=/boot/firmware/config.txt
-sed -i '/# --- Onefinity controller/,$d' $CFG
-cat $F/config-onefinity.txt >> $CFG
+cp $F/config-onefinity.txt $CFG
+cat >> $CFG <<'EOT'
+
+# First start of a single-system card: the initramfs grows the root file
+# system to fill the card ("resize" in cmdline.txt, removed once done)
+auto_initramfs=1
+EOT
 CMD=/boot/firmware/cmdline.txt
 sed -i 's/console=serial0,[0-9]* \?//; s/console=ttyAMA0,[0-9]* \?//' $CMD
 grep -q ' quiet' $CMD || sed -i 's/$/ quiet/' $CMD
@@ -177,6 +187,22 @@ install -m 644 -o 1000 -g 1000 $F/bash_profile /home/pi/.bash_profile
 install -m 644 -o 1000 -g 1000 /dev/null /home/pi/.hushlogin
 install -m 644 $F/xorg-onefinity.conf /etc/X11/xorg.conf.d/10-onefinity.conf 2>/dev/null ||
     { mkdir -p /etc/X11/xorg.conf.d; install -m 644 $F/xorg-onefinity.conf /etc/X11/xorg.conf.d/10-onefinity.conf; }
+# Raspberry Pi OS ships the console login on tty1 switched off; its first
+# start wizard (userconfig, masked above) is what switches it on.  Without
+# it there is no autologin, so no X and no screen app (found on the machine
+# Oct 30 with the 1.50.0 image)
+systemctl enable getty@tty1.service
+# X on the firmware framebuffer isn't a KMS driver, so it runs with root
+# rights through the Xorg wrapper (as the 2017 card's X did)
+printf 'allowed_users=console\nneeds_root_rights=yes\n' > /etc/X11/Xwrapper.config
+[ -e /etc/systemd/system/getty.target.wants/getty@tty1.service ] ||
+    { echo "getty@tty1 not enabled"; exit 1; }
+step "Logs kept across restarts, hardware watchdog, A/B trial check"
+mkdir -p /etc/systemd/journald.conf.d /etc/systemd/system.conf.d /var/log/journal
+install -m 644 $F/journald-onefinity.conf /etc/systemd/journald.conf.d/99-onefinity.conf
+install -m 644 $F/watchdog-onefinity.conf /etc/systemd/system.conf.d/99-onefinity-watchdog.conf
+install -m 644 $F/onefinity-trial-check.service /etc/systemd/system/
+systemctl enable onefinity-trial-check.service
 systemctl set-default multi-user.target
 # The OS never changes under the machine: no automatic updates (a new kernel
 # would also leave bbserial behind)

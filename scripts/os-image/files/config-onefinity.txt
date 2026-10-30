@@ -1,14 +1,30 @@
+# Onefinity controller (scripts/os-image): the 2017 card's settings for this
+# controller's hardware, plus what the new OS needs.  On an A/B card
+# (build-ab.sh) the old card's own config.txt is used with the last block
+# added, so both slots start with the same settings.
 
-[all]
-# --- Onefinity controller (scripts/os-image) ---
-# The motion board talks on the Pi's full UART (PL011) on GPIO 14/15, so
-# Bluetooth gives it up.  CTS (flow control from the board) is GPIO 16.
-# 32-bit kernel (kernel7.img): bbserial is built for it.
-arm_64bit=0
-dtoverlay=disable-bt
-enable_uart=1
-gpio=16=a3
+# Screen: the firmware's framebuffer (no KMS overlay), 1280x720, turned 180°
+# because the screen is mounted upside down; stronger HDMI signal
+disable_overscan=1
+framebuffer_width=1280
+framebuffer_height=720
+display_rotate=2
+config_hdmi_boost=8
 # Front panel LCD and the power chip
 dtparam=i2c_arm=on
+dtparam=audio=on
+# The motion board talks on the Pi's full UART (PL011) on GPIO 14/15, so
+# Bluetooth gives it up (the new firmware maps this old name to disable-bt)
+dtoverlay=pi3-disable-bt
 # USB: camera, touchscreen, gamepad, Wi-Fi adapter
 max_usb_current=1
+# The controller's power board: GPIO 21 goes high when the Pi has shut down
+dtoverlay=gpio-poweroff,gpiopin=21
+
+# --- Onefinity OS (Raspberry Pi OS Trixie) also needs ---
+# 32-bit kernel (kernel7.img): bbserial is built for it.  The UART on, and
+# CTS (flow control from the motion board) on GPIO 16, which the 2017 card
+# set from rc.local
+arm_64bit=0
+enable_uart=1
+gpio=16=a3

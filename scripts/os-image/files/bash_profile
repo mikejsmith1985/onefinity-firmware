@@ -1,4 +1,6 @@
-# The controller's screen: start X with the browser on the first console
+# The controller's screen: start X with the browser on the first console.
+# Its output is kept in ~/xsession.log (the previous start's in .old).
 if [ -z "$DISPLAY" ] && [ "$(tty)" = /dev/tty1 ]; then
-    exec startx ~/.xinitrc -- -nocursor >/tmp/xsession.log 2>&1
+    [ -e ~/xsession.log ] && mv -f ~/xsession.log ~/xsession.log.old
+    exec startx ~/.xinitrc -- -nocursor >~/xsession.log 2>&1
 fi

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 ################################################################################
-# ab-card: an SD card with two complete systems, slot A and slot B (1.47.0).
+# ab-card: an SD card with two complete systems, slot A and slot B (1.47.0;
+# trial-check 1.51.0).
 #
 # Card layout (made by "ab-card make" from the running system):
 #   p1  FAT32 boot   Raspberry Pi boot firmware, config.txt, tryboot.txt,
@@ -807,6 +808,74 @@ def cmd_dismiss():
     clear_trial(card_state()['boot'])
 
 
+# --- Trial check: a slot on trial that isn't working goes back by itself -----
+def screen_and_browser():
+    "Which of the screen's programs are running: X and the browser"
+    proc = os.environ.get('AB_PROC', '/proc')
+    names = set()
+    for pid in os.listdir(proc):
+        if not pid.isdigit(): continue
+        name = read(os.path.join(proc, pid, 'comm'))
+        if name: names.add(name.strip())
+    return {'screen': 'Xorg' in names,
+            'browser': bool(names & {'chromium', 'chrome', 'chromium-browse'})}
+
+def web_up():
+    import urllib.request
+    url = os.environ.get('AB_HEALTH_URL', 'http://127.0.0.1/api/config/load')
+    try:
+        r = urllib.request.urlopen(url, timeout = 10)
+        return r.getcode() == 200
+    except Exception: return False
+
+def health():
+    h = screen_and_browser()
+    h['web'] = web_up()
+    return h
+
+def record_trial(boot, s, result, h):
+    path = os.path.join(boot, 'ab-trial.json')
+    t = json.loads(read(path, '{}') or '{}')
+    t.setdefault('slot', s['running'])
+    t['check'] = {'result': result, 'time': now(),
+                  'not_working': sorted(k for k, v in h.items() if not v)}
+    with BootRW(boot): write(path, json.dumps(t))
+
+def cmd_trial_check(wait = None, steady = None):
+    """Run at every start.  On a slot on trial (started once with "try"):
+    the controller's web server, X and the browser must all be up and stay
+    up for `steady` seconds within `wait` seconds of the check starting.  If
+    they aren't, restart: the try flag is one-shot, so the normal slot starts
+    and shows that the trial ended.  Nothing is done on a slot that isn't on
+    trial; once it is kept, a slot is on its own."""
+    wait = wait or int(os.environ.get('AB_TRIAL_WAIT', 420))
+    steady = steady or int(os.environ.get('AB_TRIAL_STEADY', 60))
+    s = card_state()
+    if not s['ab'] or not s['trial']:
+        print('trial-check: not a slot on trial, nothing to do'); return True
+    print('trial-check: slot %s is on trial; checking for %d s' %
+          (s['running'].upper(), wait))
+    start, good_since, h = time.time(), None, {}
+    while time.time() - start < wait:
+        h = health()
+        if all(h.values()):
+            good_since = good_since or time.time()
+            if time.time() - good_since >= steady:
+                print('trial-check: working (web server, screen, browser)')
+                record_trial(s['boot'], s, 'working', h)
+                return True
+        else: good_since = None
+        time.sleep(float(os.environ.get('AB_TRIAL_POLL', 5)))
+    bad = sorted(k for k, v in h.items() if not v)
+    print('trial-check: not working after %d s (%s); going back to slot %s' %
+          (wait, ', '.join(bad) or 'not steady', s['default'].upper()))
+    record_trial(s['boot'], s, 'not working', h)
+    os.sync()
+    if not os.environ.get('AB_NO_REBOOT'):
+        subprocess.call(['systemctl', 'reboot'])
+    return False
+
+
 def as_job(name, fn, *args):
     global use_job, job
     os.makedirs(RUN_DIR, exist_ok = True)
@@ -847,6 +916,8 @@ def main():
     sub.add_parser('keep')
     sw = sub.add_parser('switch'); sw.add_argument('slot', choices = ('a', 'b'))
     sub.add_parser('dismiss')
+    sub.add_parser('trial-check', help = 'go back to the normal slot if this '
+                   'slot on trial is not working (run at start)')
     b = sub.add_parser('bundle'); b.add_argument('out')
     b.add_argument('--label', default = 'Saved system')
     args = ap.parse_args()
@@ -871,6 +942,7 @@ def main():
         elif args.cmd == 'keep': cmd_keep()
         elif args.cmd == 'switch': cmd_switch(args.slot)
         elif args.cmd == 'dismiss': cmd_dismiss()
+        elif args.cmd == 'trial-check': cmd_trial_check()
         elif args.cmd == 'bundle': cmd_bundle(args.out, args.label)
     except Exception as e:
         sys.stderr.write('ab-card: %s\n' % e)

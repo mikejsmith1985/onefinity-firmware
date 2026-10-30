@@ -1,0 +1,10 @@
+[Unit]
+Description=A/B card: go back to the normal slot if this slot on trial isn't working
+After=bbctrl.service getty@tty1.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ab-card trial-check
+
+[Install]
+WantedBy=multi-user.target

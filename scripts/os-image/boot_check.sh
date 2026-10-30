@@ -39,6 +39,11 @@ O=/root/bootcheck.txt
 {
   echo "== failed units"; systemctl --failed --no-legend
   echo "== bbctrl"; systemctl is-active bbctrl
+  # The screen needs the tty1 login (autologin starts X); Raspberry Pi OS
+  # ships it off.  No screen here, so only whether it's switched on
+  echo "== tty1 login (must be enabled)"; systemctl is-enabled getty@tty1
+  echo "== A/B trial check"; systemctl is-enabled onefinity-trial-check
+  echo "== journal kept"; systemd-analyze cat-config systemd/journald.conf | grep -i '^Storage'
   echo "== web"
   /opt/bbctrl/venv/bin/python - <<'PY'
 import urllib.request, json

@@ -16,7 +16,7 @@ while true; do
     ARGS="--kiosk --no-first-run --noerrdialogs --disable-infobars
       --disable-session-crashed-bubble --disable-translate
       --disable-features=Translate,TranslateUI --password-store=basic
-      --check-for-update-interval=31536000 --disable-3d-apis
+      --check-for-update-interval=31536000 --disable-3d-apis --disable-gpu
       --overscroll-history-navigation=0 http://localhost/"
     # The same 750 MB ceiling the 2017 card set, so the browser can't starve
     # the controller
