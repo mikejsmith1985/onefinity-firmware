@@ -23,6 +23,7 @@ What's in it, besides Raspberry Pi OS Lite:
 | Screen | pi auto-logs in on tty1, X + ratpoison + Chromium kiosk on http://localhost/, 750 MB memory cap |
 | Network | NetworkManager; `config-wifi` hands over to `config-wifi-nm` |
 | Settings from the old card | `onefinity-data.tar.gz` on the boot partition is imported on first boot (`pull-controller-data.py` makes it from a running controller) |
+| Login | bbmc (uid 1001) has no password; put `onefinity-password.txt` (one line) on the boot partition to set one at the next start (the file is deleted). SSH is on, so without a password there is no SSH login |
 | Updates | apt timers off, kernel held (bbserial is built for this kernel) |
 
 ## Checks

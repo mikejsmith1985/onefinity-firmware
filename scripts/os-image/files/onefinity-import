@@ -7,6 +7,19 @@ BOOT=/boot/firmware
 # has cfg80211.ieee80211_regdom=US); make sure it isn't blocked
 rfkill unblock wifi 2>/dev/null || true
 
+# A login password for bbmc, if one was put on the boot partition (one line).
+# Used once, then the file is deleted.
+P=$BOOT/onefinity-password.txt
+if [ -s "$P" ]; then
+    mount -o remount,rw $BOOT 2>/dev/null
+    PW=$(head -n1 "$P" | tr -d '\r\n')
+    if [ -n "$PW" ] && printf 'bbmc:%s\n' "$PW" | chpasswd; then
+        echo "onefinity-import: bbmc password set from $P"
+    fi
+    shred -u "$P" 2>/dev/null || rm -f "$P"
+    unset PW
+fi
+
 F=$BOOT/onefinity-data.tar.gz
 [ -e "$F" ] || exit 0
 mkdir -p /var/lib/bbctrl

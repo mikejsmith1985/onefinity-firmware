@@ -47,7 +47,10 @@ step "Users: pi (screen), bbmc (owner of the controller's files, uid 1001)"
 usermod -s /bin/bash pi
 for g in netdev video dialout i2c gpio; do groupadd -f $g; done
 id bbmc >/dev/null 2>&1 || useradd -m -u 1001 -s /bin/bash -G netdev,video,dialout,i2c,gpio bbmc
-echo 'bbmc:onefinity' | chpasswd
+# No password is built into the image (the build script is public).  The
+# account stays locked unless onefinity-password.txt is put on the boot
+# partition; onefinity-import sets it on the next start and deletes the file.
+passwd -l bbmc >/dev/null
 passwd -l pi >/dev/null
 for g in video input render tty dialout; do usermod -aG $g pi 2>/dev/null || true; done
 systemctl disable userconfig.service 2>/dev/null || true
