@@ -1,7 +1,7 @@
 [Unit]
 Description=Onefinity: import settings from the old card (first boot)
 After=local-fs.target
-Before=bbctrl.service
+Before=bbctrl.service NetworkManager.service
 
 [Service]
 Type=oneshot

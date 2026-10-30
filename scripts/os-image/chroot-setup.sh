@@ -71,6 +71,8 @@ cat $F/config-onefinity.txt >> $CFG
 CMD=/boot/firmware/cmdline.txt
 sed -i 's/console=serial0,[0-9]* \?//; s/console=ttyAMA0,[0-9]* \?//' $CMD
 grep -q ' quiet' $CMD || sed -i 's/$/ quiet/' $CMD
+# Wi-Fi country (Raspberry Pi OS blocks Wi-Fi until one is set)
+grep -q ieee80211_regdom $CMD || sed -i 's/$/ cfg80211.ieee80211_regdom=US/' $CMD
 cat $CMD >> $INFO
 systemctl mask serial-getty@ttyAMA0.service serial-getty@serial0.service \
     hciuart.service bluetooth.service 2>/dev/null || true

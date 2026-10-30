@@ -3,6 +3,10 @@
 # onefinity-data.tar.gz was put on the boot partition (its contents are what
 # was in /var/lib/bbctrl).  Done once; the file is renamed afterwards.
 BOOT=/boot/firmware
+# Raspberry Pi OS keeps Wi-Fi blocked until a country is set (cmdline.txt
+# has cfg80211.ieee80211_regdom=US); make sure it isn't blocked
+rfkill unblock wifi 2>/dev/null || true
+
 F=$BOOT/onefinity-data.tar.gz
 [ -e "$F" ] || exit 0
 mkdir -p /var/lib/bbctrl
