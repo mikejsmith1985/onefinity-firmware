@@ -21,7 +21,7 @@ def main():
         if i == 0: continue                      # header (python version)
         if x == y:
             exact += 1
-            if '"program"' in x: program = json.loads(x)['program']
+            if x.startswith('{"program": '): program = json.loads(x)['program']
             continue
         X, Y = json.loads(x), json.loads(y)
         def walk(p, q, where):
