@@ -1,0 +1,28 @@
+#!/bin/bash
+# Sets up /dev/ttyAMA0 for the motion board before bbctrl starts.
+# /etc/onefinity-serial: "bbserial" (Buildbotics' driver, 64 KB buffers, the
+# same as the 2017 card) or "stock" (Linux's own PL011 driver).
+MODE=$(cat /etc/onefinity-serial 2>/dev/null || echo bbserial)
+pinctrl set 16 a3 2>/dev/null || true      # CTS, also set in config.txt
+
+current() {
+    if lsmod | grep -q '^bbserial'; then echo bbserial; else echo stock; fi
+}
+
+if [ "$MODE" = bbserial ] && [ "$(current)" != bbserial ]; then
+    DEV=$(basename "$(readlink -f /sys/class/tty/ttyAMA0/device)" 2>/dev/null)
+    if [ -n "$DEV" ] && [ -e /sys/bus/amba/drivers/uart-pl011/$DEV ]; then
+        echo "$DEV" > /sys/bus/amba/drivers/uart-pl011/unbind
+    fi
+    if modprobe bbserial && sleep 1 && [ -c /dev/ttyAMA0 ]; then
+        echo "onefinity-serial: bbserial driver on /dev/ttyAMA0"
+    else
+        echo "onefinity-serial: bbserial failed; using the standard driver"
+        modprobe -r bbserial 2>/dev/null
+        [ -n "$DEV" ] && echo "$DEV" > /sys/bus/amba/drivers/uart-pl011/bind
+    fi
+elif [ "$MODE" = stock ]; then
+    echo "onefinity-serial: standard PL011 driver on /dev/ttyAMA0"
+fi
+echo "onefinity-serial: now $(current)"
+exit 0

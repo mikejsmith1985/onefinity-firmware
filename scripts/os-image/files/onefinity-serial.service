@@ -1,0 +1,12 @@
+[Unit]
+Description=Onefinity: serial port for the motion board
+After=systemd-modules-load.service systemd-udevd.service
+Before=bbctrl.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/onefinity-serial
+
+[Install]
+WantedBy=multi-user.target

@@ -1033,7 +1033,7 @@ class ScreenRotationHandler(bbctrl.APIHandler):
 
     @gen.coroutine
     def get(self):
-        with open("/boot/config.txt", 'rt') as config:
+        with open(bbctrl.boot_path('config.txt'), 'rt') as config:
             lines = config.readlines()
             for line in lines:
                 if line.startswith('display_rotate'):

@@ -582,6 +582,24 @@ class Camera(object):
 
 
 
+def _open_ended(get):
+    '''A response that stays open (the camera stream).  Tornado 5 and older
+    have web.asynchronous for this; Tornado 6 (1.50.0, newer OS) needs the
+    handler to wait until the browser goes away.'''
+    if hasattr(web, 'asynchronous'): return web.asynchronous(get)
+
+    from tornado import gen
+    from tornado.concurrent import Future
+
+    @gen.coroutine
+    def wrapper(self, *args, **kwargs):
+        self._closed = Future()
+        get(self, *args, **kwargs)
+        yield self._closed
+
+    return wrapper
+
+
 class VideoHandler(web.RequestHandler):
     boundary = '-f36a3a39e5c955484390e0e3a6b031d1---'
 
@@ -591,7 +609,7 @@ class VideoHandler(web.RequestHandler):
         self.camera = app.camera
 
 
-    @web.asynchronous
+    @_open_ended
     def get(self):
         self.request.connection.stream.max_write_buffer_size = 10000
 
@@ -630,4 +648,7 @@ class VideoHandler(web.RequestHandler):
         self.write_frame(frame)
 
 
-    def on_connection_close(self): self.camera.remove_client(self)
+    def on_connection_close(self):
+        if self.camera is not None: self.camera.remove_client(self)
+        f = getattr(self, '_closed', None)
+        if f is not None and not f.done(): f.set_result(None)

@@ -38,6 +38,8 @@
 #include <linux/spinlock.h>
 #include <linux/tty.h>
 #include <asm/ioctls.h>
+#include <linux/version.h>
+#include <linux/uaccess.h>
 #include <asm/termios.h>
 
 
@@ -385,7 +387,7 @@ static int _dev_open(struct inode *inodep, struct file *filep) {
 
 static ssize_t _dev_read(struct file *filep, char *buffer, size_t len,
                          loff_t *offset) {
-  if (debug) printk(KERN_INFO "bbserial: read() len=%d overruns=%d\n", len,
+  if (debug) printk(KERN_INFO "bbserial: read() len=%zu overruns=%d\n", len,
                     _port.overruns);
 
   ssize_t bytes = 0;
@@ -404,7 +406,7 @@ static ssize_t _dev_read(struct file *filep, char *buffer, size_t len,
 static ssize_t _dev_write(struct file *filep, const char *buffer, size_t len,
                           loff_t *offset) {
   if (debug)
-    printk(KERN_INFO "bbserial: write() len=%d tx=%d rx=%d\n",
+    printk(KERN_INFO "bbserial: write() len=%zu tx=%d rx=%d\n",
            len, RING_BUF_FILL(_port.tx_buf), RING_BUF_FILL(_port.rx_buf));
 
   ssize_t bytes = 0;
@@ -427,7 +429,7 @@ static int _dev_release(struct inode *inodep, struct file *filep) {
 }
 
 
-static unsigned _dev_poll(struct file *file, poll_table *wait) {
+static __poll_t _dev_poll(struct file *file, poll_table *wait) {
   if (debug) {
     unsigned events = poll_requested_events(wait);
     printk(KERN_INFO "bbserial: poll(in=%s, out=%s)\n",
@@ -438,7 +440,7 @@ static unsigned _dev_poll(struct file *file, poll_table *wait) {
   poll_wait(file, &_port.read_wait,  wait);
   poll_wait(file, &_port.write_wait, wait);
 
-  unsigned ret = 0;
+  __poll_t ret = 0;
   if (RING_BUF_FILL(_port.rx_buf))  ret |= POLLIN  | POLLRDNORM;
   if (RING_BUF_SPACE(_port.tx_buf)) ret |= POLLOUT | POLLWRNORM;
 
@@ -588,7 +590,11 @@ static int _probe(struct amba_device *dev, const struct amba_id *id) {
   }
 
   // Register device class
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+  _port.class = class_create("bbs");
+#else
   _port.class = class_create(THIS_MODULE, "bbs");
+#endif
   if (IS_ERR(_port.class)) {
     unregister_chrdev(_port.major, DEVICE_NAME);
     clk_disable_unprepare(_port.clk);
@@ -610,7 +616,16 @@ static int _probe(struct amba_device *dev, const struct amba_id *id) {
 }
 
 
-static int _remove(struct amba_device *dev) {
+// 1.50.0: amba .remove returns void since Linux 5.13
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 13, 0)
+#define REMOVE_RET void
+#define REMOVE_OK
+#else
+#define REMOVE_RET int
+#define REMOVE_OK 0
+#endif
+
+static REMOVE_RET _remove(struct amba_device *dev) {
   if (debug) printk(KERN_INFO "bbserial: removing\n");
 
   unsigned long flags;
@@ -634,11 +649,10 @@ static int _remove(struct amba_device *dev) {
 
   // Unload char dev
   device_destroy(_port.class, MKDEV(_port.major, 0));
-  class_unregister(_port.class);
-  class_destroy(_port.class);
+  class_destroy(_port.class); // also unregisters it
   unregister_chrdev(_port.major, DEVICE_NAME);
 
-  return 0;
+  return REMOVE_OK;
 }
 
 

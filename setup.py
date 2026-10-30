@@ -30,6 +30,7 @@ setup(
         'scripts/sethostname',
         'scripts/reset-video',
         'scripts/config-wifi',
+        'scripts/config-wifi-nm',
         'scripts/config-screen',
         'scripts/edit-config',
         'scripts/edit-boot-config',

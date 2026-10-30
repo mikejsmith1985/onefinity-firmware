@@ -1,0 +1,4 @@
+# 1.50.0: for building against an installed kernel's headers (newer OS image):
+#   make -C /lib/modules/<version>/build M=$PWD modules
+obj-m := bbserial.o
+ccflags-y := -Wno-declaration-after-statement

@@ -1,0 +1,14 @@
+
+[all]
+# --- Onefinity controller (scripts/os-image) ---
+# The motion board talks on the Pi's full UART (PL011) on GPIO 14/15, so
+# Bluetooth gives it up.  CTS (flow control from the board) is GPIO 16.
+# 32-bit kernel (kernel7.img): bbserial is built for it.
+arm_64bit=0
+dtoverlay=disable-bt
+enable_uart=1
+gpio=16=a3
+# Front panel LCD and the power chip
+dtparam=i2c_arm=on
+# USB: camera, touchscreen, gamepad, Wi-Fi adapter
+max_usb_current=1

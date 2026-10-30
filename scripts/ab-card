@@ -126,6 +126,10 @@ def now(): return datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
 
 def bbctrl_version():
     try:
+        from importlib.metadata import version     # Python 3.8+
+        return version('bbctrl')
+    except Exception: pass
+    try:
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')

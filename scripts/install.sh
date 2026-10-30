@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# The newer OS image (1.50.0+) has its own installer
+if [ -e /etc/onefinity-os ]; then exec ./scripts/install-os2.sh "$@"; fi
+
 UPDATE_AVR=true
 UPDATE_PY=true
 REBOOT=false

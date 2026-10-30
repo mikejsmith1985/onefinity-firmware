@@ -34,7 +34,6 @@ import tornado
 import argparse
 import datetime
 
-from pkg_resources import Requirement, resource_filename
 
 from bbctrl.RequestHandler import RequestHandler
 from bbctrl.APIHandler import APIHandler
@@ -78,7 +77,27 @@ ctrl = None
 
 
 def get_resource(path):
-    return resource_filename(Requirement.parse('bbctrl'), 'bbctrl/' + path)
+    # 1.50.0: next to this file (pkg_resources is gone on newer Pythons; this
+    # is where it pointed for the installed package anyway)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), path)
+
+
+def get_version():
+    try:
+        from importlib.metadata import version     # Python 3.8+
+        return version('bbctrl')
+    except Exception: pass
+    try:
+        import pkg_resources                       # Python 3.5 (Stretch)
+        return pkg_resources.require('bbctrl')[0].version
+    except Exception: return 'unknown'
+
+
+def boot_path(name = ''):
+    "The boot partition (Raspberry Pi OS Bookworm and later: /boot/firmware)"
+    d = '/boot/firmware' if os.path.exists('/boot/firmware/config.txt') \
+        else '/boot'
+    return os.path.join(d, name) if name else d
 
 
 def on_exit(sig = 0, func = None):

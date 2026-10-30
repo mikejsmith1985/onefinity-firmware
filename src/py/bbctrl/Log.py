@@ -30,7 +30,6 @@ import sys
 import io
 import datetime
 import traceback
-import pkg_resources
 from inspect import getframeinfo, stack
 import bbctrl
 
@@ -117,7 +116,7 @@ class Log(object):
         self._open()
 
         # Log header
-        version = pkg_resources.require('bbctrl')[0].version
+        version = bbctrl.get_version()
         self._log('Log started v%s' % version)
         self._log_time(ioloop)
 

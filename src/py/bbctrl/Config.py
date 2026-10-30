@@ -27,12 +27,10 @@
 
 import os
 import json
-import pkg_resources
-from pkg_resources import Requirement, resource_filename
 
 
 def get_resource(path):
-    return resource_filename(Requirement.parse('bbctrl'), 'bbctrl/' + path)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), path)
 
 
 # Settings that only list files, not how a program is planned
@@ -52,7 +50,7 @@ class Config(object):
         self.values = {}
 
         try:
-            self.version = "1.48.0"
+            self.version = "1.50.0"
 
             # Load config template
             with open(get_resource('http/config-template.json'), 'r',

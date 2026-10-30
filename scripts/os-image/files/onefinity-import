@@ -1,0 +1,16 @@
+#!/bin/bash
+# First boot: the controller's settings and files from the old card, if
+# onefinity-data.tar.gz was put on the boot partition (its contents are what
+# was in /var/lib/bbctrl).  Done once; the file is renamed afterwards.
+BOOT=/boot/firmware
+F=$BOOT/onefinity-data.tar.gz
+[ -e "$F" ] || exit 0
+mkdir -p /var/lib/bbctrl
+if tar -xzf "$F" -C /var/lib/bbctrl --no-same-owner; then
+    echo "onefinity-import: settings imported from $F"
+    mount -o remount,rw $BOOT 2>/dev/null
+    mv "$F" "$F.imported-$(date +%Y%m%d-%H%M%S)"
+else
+    echo "onefinity-import: could not read $F"
+fi
+exit 0

@@ -1,0 +1,126 @@
+#!/bin/bash
+#
+# config-wifi for the newer OS image (1.50.0+), where NetworkManager runs the
+# network.  Same options and the same JSON as config-wifi, which hands over to
+# this script when NetworkManager is running.
+#
+#   -a  access point (hotspot)   -d  Wi-Fi off   -s SSID  -p password
+#   -c  channel   -x/-X  built-in Wi-Fi off/on   -r  reboot   -j  JSON
+
+AP=false
+DISABLE=false
+SSID=
+PASS=
+CHANNEL=7
+REBOOT=false
+INTERNAL_WIFI=
+CLIENT=onefinity-wifi
+HOTSPOT=onefinity-ap
+MOD_DISABLE=/etc/modprobe.d/blacklist-internal-wifi.conf
+
+json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+
+query_config() {
+    if [ -e $MOD_DISABLE ]; then INTERNAL=false; else INTERNAL=true; fi
+
+    if nmcli -t -f NAME con show | grep -qx "$HOTSPOT"; then
+        S=$(nmcli -g 802-11-wireless.ssid con show $HOTSPOT)
+        C=$(nmcli -g 802-11-wireless.channel con show $HOTSPOT)
+        echo "{\"ssid\": $(json_str "$S"), \"channel\": ${C:-0}, \"mode\": \"ap\", \"internal\": $INTERNAL}"
+        return
+    fi
+
+    # The Wi-Fi network this controller is set to join (connected or not)
+    S=
+    if nmcli -t -f NAME con show | grep -qx "$CLIENT"; then
+        S=$(nmcli -g 802-11-wireless.ssid con show $CLIENT)
+    else
+        # One made some other way (for example on the card before first boot)
+        N=$(nmcli -t -f NAME,TYPE con show --active | grep ':802-11-wireless$' |
+                head -1 | cut -d: -f1)
+        [ -n "$N" ] && S=$(nmcli -g 802-11-wireless.ssid con show "$N")
+    fi
+
+    if [ -n "$S" ]; then
+        echo "{\"ssid\": $(json_str "$S"), \"mode\": \"client\", \"internal\": $INTERNAL}"
+    else
+        echo "{\"mode\": \"disabled\", \"internal\": $INTERNAL}"
+    fi
+}
+
+remove_wifi() {
+    # Every Wi-Fi connection, so only the new one is tried
+    nmcli -t -f NAME,TYPE con show | grep ':802-11-wireless$' | cut -d: -f1 |
+        while read -r N; do nmcli con delete "$N" >/dev/null; done
+}
+
+configure_client() {
+    remove_wifi
+    if [ ${#PASS} -ne 0 ]; then
+        nmcli con add type wifi ifname '*' con-name $CLIENT ssid "$SSID" \
+              wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASS" \
+              connection.autoconnect yes >/dev/null
+    else
+        nmcli con add type wifi ifname '*' con-name $CLIENT ssid "$SSID" \
+              connection.autoconnect yes >/dev/null
+    fi
+    $REBOOT || nmcli con up $CLIENT >/dev/null 2>&1 || true
+}
+
+configure_ap() {
+    remove_wifi
+    nmcli con add type wifi ifname '*' con-name $HOTSPOT ssid "$SSID" \
+          802-11-wireless.mode ap 802-11-wireless.band bg \
+          802-11-wireless.channel "$CHANNEL" ipv4.method shared \
+          ipv4.addresses 192.168.43.1/24 \
+          wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASS" \
+          connection.autoconnect yes >/dev/null
+    $REBOOT || nmcli con up $HOTSPOT >/dev/null 2>&1 || true
+}
+
+set_internal_wifi() {
+    if [ "$INTERNAL_WIFI" == off -a ! -e $MOD_DISABLE ]; then
+        echo -e "blacklist brcmfmac\nblacklist brcmutil" > $MOD_DISABLE
+        REBOOT=true
+    elif [ "$INTERNAL_WIFI" == on -a -e $MOD_DISABLE ]; then
+        rm -f $MOD_DISABLE
+        REBOOT=true
+    fi
+}
+
+while [ $# -ne 0 ]; do
+    case "$1" in
+        -a) AP=true ;;
+        -d) DISABLE=true ;;
+        -x) INTERNAL_WIFI=off ;;
+        -X) INTERNAL_WIFI=on ;;
+        -r) REBOOT=true ;;
+        -s) SSID="$2"; shift ;;
+        -p) PASS="$2"; shift ;;
+        -c) CHANNEL="$2"; shift ;;
+        -j) query_config; exit 0 ;;
+        *) echo "Unknown argument '$1'"; exit 1 ;;
+    esac
+    shift
+done
+
+if [ -n "$INTERNAL_WIFI" -a -z "$SSID" ] && ! $DISABLE && ! $AP; then
+    set_internal_wifi
+
+elif $DISABLE; then
+    remove_wifi
+
+else
+    LANG=C LC_ALL=C
+    if [ ${#SSID} -eq 0 -o 32 -lt ${#SSID} ]; then
+        echo "Invalid or missing SSID '$SSID'"; exit 1
+    fi
+    if [ ${#PASS} -ne 0 ] && [ ${#PASS} -lt 8 -o 128 -lt ${#PASS} ]; then
+        echo "Invalid passsword"; exit 1
+    fi
+    if $AP; then configure_ap; else configure_client; fi
+    set_internal_wifi
+fi
+
+if $REBOOT; then nohup reboot >/dev/null 2>&1 & fi
+exit 0
