@@ -100,8 +100,16 @@ def boot_path(name = ''):
     return os.path.join(d, name) if name else d
 
 
+_main_pid = os.getpid()
+
 def on_exit(sig = 0, func = None):
     global ctrl
+
+    # 1.50.0: the planning worker is a forked copy of this process and has
+    # this handler too.  Stopping it ran the server's own shutdown in the
+    # worker, which then waited for ever on the server's worker pool, so a
+    # stop (an install, a restart) hung until systemd killed it.
+    if os.getpid() != _main_pid: os._exit(0)
 
     print('Exit handler triggered: signal = %d', sig)
 

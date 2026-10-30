@@ -187,6 +187,12 @@ class AVREmu(object):
 
         try:
             data = os.read(self.avrIn, 4096)
+            # 1.50.0: on Tornado 6 a closed pipe reads as empty instead of
+            # an ERROR event; the emulator exits when it reboots, so start it
+            # again (demo mode only)
+            if data == b'':
+                self._start()
+                return
             if data is not None: self.read_cb(data)
 
         except Exception as e:

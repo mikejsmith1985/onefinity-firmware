@@ -78,6 +78,16 @@ echo i2c-dev > /etc/modules-load.d/onefinity.conf
 
 step "Motion planner (CAMotics gplan) for Python $(python3 -c 'import sys;print(sys.version.split()[0])')"
 PYV=$(python3 -c 'import sys; print("%d%d" % sys.version_info[:2])')
+mkdir -p /usr/local/lib/onefinity
+if [ -e $B/gplan-cache/gplan-cp$PYV.so ]; then
+    # Built by an earlier run of build.sh from the same pinned sources
+    echo "Using the planner from an earlier build" | tee -a $INFO
+    cp $B/gplan-cache/gplan-cp$PYV.so /usr/local/lib/onefinity/
+    sha256sum /usr/local/lib/onefinity/gplan-cp$PYV.so >> $INFO
+    mkdir -p /root/gplan-test/camotics
+    cp $B/gplan-cache/gplan-cp$PYV.so /root/gplan-test/camotics/gplan.so
+    touch /root/gplan-test/camotics/__init__.py
+else
 GP=/root/gplan-build
 rm -rf $GP; mkdir -p $GP; cd $GP
 fetch() {   # repo commit
@@ -110,6 +120,7 @@ sha256sum /usr/local/lib/onefinity/gplan-cp$PYV.so >> $INFO
 mkdir -p /root/gplan-test/camotics
 cp camotics/gplan.so /root/gplan-test/camotics/; touch /root/gplan-test/camotics/__init__.py
 cd /; rm -rf $GP
+fi
 
 step "Serial driver bbserial for kernel $KVER"
 BS=/root/bbserial-build

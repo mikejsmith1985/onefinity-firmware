@@ -156,6 +156,27 @@ class BugReportHandler(bbctrl.RequestHandler):
         for i in range(1, 8):
             check_add_basename('%s.%d' % (path, i))
         check_add_basename('/var/log/syslog')
+
+        # 1.50.0: the newer OS keeps its system log in the journal only; also
+        # say which OS and serial driver this controller runs
+        def add_output(name, cmd):
+            try:
+                data = subprocess.check_output(cmd, stderr = subprocess.STDOUT,
+                                               timeout = 20)
+                info = tarfile.TarInfo(self.basename + '/' + name)
+                info.size = len(data)
+                info.mtime = time.time()
+                tar.addfile(info, io.BytesIO(data))
+            except Exception: pass
+
+        if not os.path.isfile('/var/log/syslog'):
+            add_output('journal.txt', ['journalctl', '-b', '-n', '20000',
+                                       '--no-pager'])
+            add_output('journal-previous-boot.txt',
+                       ['journalctl', '-b', '-1', '-n', '5000', '--no-pager'])
+        add_output('dmesg.txt', ['dmesg'])
+        check_add('/etc/onefinity-os', 'onefinity-os.txt')
+        check_add('/etc/onefinity-serial', 'onefinity-serial.txt')
         check_add('config.json')
         check_add(ctrl.get_upload(ctrl.state.get('selected', '')))
 
@@ -193,7 +214,7 @@ class NetworkData(bbctrl.APIHandler):
     def get(self):
         try:
             ipAddresses = subprocess.check_output(
-                "ip -4 addr | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'", shell=True).decode().split()
+                r"ip -4 addr | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'", shell=True).decode().split()
             ipAddresses.remove("127.0.0.1")
             regex = re.compile(r'/255$/')
             filtered = [i for i in ipAddresses if not regex.match(i)]
@@ -217,7 +238,7 @@ class NetworkHandler(bbctrl.APIHandler):
     def get(self):
         try:
             ipAddresses = subprocess.check_output(
-                "ip -4 addr | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'", shell=True).decode().split()
+                r"ip -4 addr | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'", shell=True).decode().split()
             ipAddresses.remove("127.0.0.1")
             regex = re.compile(r'/255$/')
             filtered = [i for i in ipAddresses if not regex.match(i)]

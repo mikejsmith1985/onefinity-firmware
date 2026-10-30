@@ -26,6 +26,7 @@
 ################################################################################
 
 import os
+import sys
 import time
 import json
 import hashlib
@@ -155,7 +156,9 @@ class Plan(object):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             cmd = (
-                '/usr/bin/env', 'python3',
+                # 1.50.0: the controller's own Python (the venv on the newer
+                # OS; /usr/bin/python3 on the 2017 card, as before)
+                sys.executable or '/usr/bin/python3',
                 bbctrl.get_resource('plan.py'),
                 os.path.abspath(self.gcode), json.dumps(self.state),
                 json.dumps(self.config),

@@ -66,6 +66,10 @@ rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -r "$HERE"/files "$HERE"/chroot-setup.sh "$HERE"/plan_dump.py "$STAGE"/
 cp "$HERE"/../gplan-patches.sh "$STAGE"/ 2>/dev/null || true
 cp "$PKG" "$STAGE"/firmware.tar.bz2
+# A planner built by an earlier run (same pinned sources) is reused; delete
+# $WORK/gplan-cp*.so to build it again
+mkdir -p "$STAGE"/gplan-cache
+cp "$WORK"/gplan-cp*.so "$STAGE"/gplan-cache/ 2>/dev/null || true
 [ -n "$DATA" ] && cp "$DATA" "$ROOT/boot/firmware/onefinity-data.tar.gz"
 
 echo "== Setting up inside the image (log: $LOG)"
