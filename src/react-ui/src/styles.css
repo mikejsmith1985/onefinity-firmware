@@ -521,3 +521,9 @@ svg.art { width: 100%; height: auto; display: block; background: var(--bed); bor
 .abtrial { border: 1px solid var(--yellow); border-radius: 6px; padding: 8px 10px; margin: 0 0 12px; }
 .abtrial p { margin: 4px 0 8px; }
 ol.abwhat { margin: 6px 0; padding-left: 22px; } ol.abwhat li { margin: 3px 0; }
+
+/* 1.48.0: hands-off probe tuning, the 6 runs */
+.tune-runs { display: flex; gap: 6px; margin: 8px 0; }
+.tune-runs span { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line, #444); opacity: 0.55; font-variant-numeric: tabular-nums; }
+.tune-runs span.done { opacity: 1; background: rgba(60, 170, 100, 0.25); }
+.tune-runs span.on { opacity: 1; border-color: var(--accent, #4a8dff); background: rgba(74, 141, 255, 0.2); }

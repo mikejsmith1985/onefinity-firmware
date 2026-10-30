@@ -2,6 +2,8 @@
 // messages (src/avr/src/messages.def) plus a few common planner phrases. Anything unmatched is
 // shown unchanged, with no advice.
 const RULES = [
+  // 1.48.0: the controller E-stops itself when a probe touch finds nothing (estop_why)
+  [/^probe found nothing$/i, "A probe touch found nothing where it expected, so the controller stopped itself.", "Nothing was pressed. Usually the size given is bigger than the stock (the touch fell short of the edge), or the probe started too far from it. Check, then Clear E-stop and run it again."],
   [/user.*e-?stop/i, "You pressed E-stop.", "Make sure the machine and work area are safe, then click Clear E-stop. If the axes moved while stopped, re-home before cutting."],
   [/switch.*e-?stop/i, "The E-stop switch is pressed or its wiring is open.", "Release the switch and check its cable and connector. Then click Clear E-stop. If it keeps tripping, check the E-stop setting on the I/O tab."],
   [/power shutdown/i, "The controller shut down because of a power problem.", "Check the power supply and its connections. The I/O tab shows power faults. Click Clear E-stop once the supply is stable."],

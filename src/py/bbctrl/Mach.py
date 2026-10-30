@@ -191,6 +191,9 @@ class Mach(Comm):
         # When a probe has failed, we have to e-stop or things
         # end up in a bad state, where positions and offsets are incorrect
         if log['msg'] == 'Switch not found':
+            # 1.48.0: the motion board reports this E-stop as "User triggered
+            # EStop", so the screens said "You pressed E-stop". Say why.
+            self.ctrl.state.set('estop_why', 'Switch not found')
             self.estop()
 
     def _end_cycle(self):
@@ -665,6 +668,7 @@ class Mach(Comm):
 
 
     def clear(self):
+        self.ctrl.state.set('estop_why', '')
         if self._is_estopped():
             self.planner.reset()
             super().clear()

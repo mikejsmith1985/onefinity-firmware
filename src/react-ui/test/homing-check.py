@@ -104,7 +104,7 @@ async def main():
         t = await text(page, '.modal')
         check('Measure stock: checks the homing first, says why', 'Checking the homing on the tool setter' in t or 'Checking the homing' in t, t[:300])
         await shot(page, 'hc3-checking.png')
-        t = await wait_text(page, '.modal', r'Measured|Stopped|failed|didn', 40)
+        t = await wait_text(page, '.modal', r'Measured [0-9]|Measuring stopped', 40)
         await page.wait_for_timeout(500); t = await text(page, '.modal')
         await shot(page, 'hc4-done.png')
         check('  homing reported as off and corrected', 'homing was 5.5' in t and 'Corrected' in t and 'dragging' in t, t[:600])

@@ -163,6 +163,26 @@ function runFake(fn, ms = 500) { broadcast({ xx: "RUNNING", cycle: "running" });
 // 1.38.0: the probe's LED (MOCK_NO_LED=1: a camera that can't see it)
 const probeLed = () => (process.env.MOCK_NO_LED ? null : (state.pt === 2 ? state.pw === 1 : state.pw === 0) ? "red" : "green");
 const probeRest = () => (state.pt === 2 ? 0 : 1);
+// 1.43.0/1.48.0: the touches the squareness program gets on a 1-2-3 block under (cx, cy), turned
+// 1 degree, on a machine MOCK_SKEW degrees out of square (default 0.03)
+const MOCK_BALL = 1.95;   // the mock stylus's real ball (1.48.0)
+function mockSquare(a, b, ball, cx, cy) {
+  const skew = +(process.env.MOCK_SKEW ?? 0.03), r = ball / 2;
+  const t = Math.PI / 180, uA = 1 * t, vA = uA + Math.PI / 2 + skew * t;
+  const u = [Math.cos(uA), Math.sin(uA)], v = [Math.cos(vA), Math.sin(vA)];
+  // the faces as lines p = c + s*dir, pushed out by the ball's radius along their outward normal
+  const face = (c, dir, out) => { const nn = [dir[1], -dir[0]], k = nn[0] * out[0] + nn[1] * out[1] > 0 ? 1 : -1; return { p: [c[0] + k * r * nn[0], c[1] + k * r * nn[1]], d: dir }; };
+  const F = { front: face([-b / 2 * v[0], -b / 2 * v[1]], u, [0, -1]), back: face([b / 2 * v[0], b / 2 * v[1]], u, [0, 1]),
+    left: face([-a / 2 * u[0], -a / 2 * u[1]], v, [-1, 0]), right: face([a / 2 * u[0], a / 2 * u[1]], v, [1, 0]) };
+  const out = {};
+  squarePoints({ a, b, ball }).forEach((q, i) => {
+    const f = F[q.side], ax = q.axis === "X" ? [1, 0] : [0, 1];
+    const den = ax[0] * f.d[1] - ax[1] * f.d[0], w = [f.p[0] - q.x, f.p[1] - q.y];
+    const s2 = (w[0] * f.d[1] - w[1] * f.d[0]) / den;
+    out[`ofq_x${i}`] = +(cx + q.x + s2 * ax[0]).toFixed(4); out[`ofq_y${i}`] = +(cy + q.y + s2 * ax[1]).toFixed(4);
+  });
+  return out;
+}
 function bedcamMdi(text) {
   const num = (re) => { const m = re.exec(text); return m ? +m[1] : null; };
   if (text.startsWith("mock:stock ")) { stockOn = text.endsWith("on"); return true; }
@@ -185,6 +205,7 @@ function bedcamMdi(text) {
   }
   if (text.includes("(Bed markers: carve)")) { runFake(() => ({ zp: num(/G53 G0 Z(-?[\d.]+)/) }), 1200); return true; }
   if (text.startsWith("mock:tool ")) { mockTool = +text.slice(10); return true; }
+  if (text === "mock:probe-estop") { broadcast({ log: { level: "warning", msg: "Switch not found" } }); broadcast({ estop_why: "Switch not found", xx: "ESTOPPED", er: "User triggered EStop", cycle: "idle" }); return true; }
   if (text.startsWith("mock:homeerr ")) { nextHomeErr = text.slice(13).split(" ").map(Number); return true; }
   // 1.40.0: the probe finds the setter's centre (round body, 13.35 mm to the spindle at a touch)
   // 1.42.0: where it reads depends on how far this homing was off (hshift, see /api/home)
@@ -198,25 +219,35 @@ function bedcamMdi(text) {
   }
   // 1.43.0: the squareness check, on a 1-2-3 block under the start position, turned 1 degree, on a
   // machine whose X/Y are MOCK_SKEW degrees out of square (default 0.03)
+  // 1.48.0: hands-off tuning, all 6 runs as one program (MOCK_TUNE_FAIL=N: run N stops)
+  if (text.includes("(Probe tuning:")) {
+    const [, a, b] = /block (-?[\d.]+) x (-?[\d.]+)/.exec(text).map(Number);
+    const token = +[...text.matchAll(/#<_oft_done> = (\d+)/g)].pop()[1], ball = MOCK_BALL, cx = state.xp, cy = state.yp;
+    const failAt = +(process.env.MOCK_TUNE_FAIL || 0);
+    const t = Math.PI / 180, alpha = (1 + +(process.env.MOCK_SKEW ?? 0.03)) * t;
+    const out = { oft_abort: 0, oft_done: 0 };
+    const q = mockSquare(a, b, ball, cx, cy);
+    for (let k = 1; k <= 6; k++) {
+      if (failAt === k) { out.oft_abort = 1; out.oft_run = k; break; }
+      out.oft_run = k;
+      if (k <= 3) {   // the ends, touched along X through the start: (block + ball) / cos(turn) apart
+        const d = (a + ball) / Math.cos(alpha);
+        Object.assign(out, { [`oft_c${k}a`]: +(cx - d / 2).toFixed(4), [`oft_c${k}b`]: +(cx + d / 2).toFixed(4), [`oft_c${k}ok`]: 1 });
+      } else {
+        const i = k - 3;
+        out[`oft_s${i}ok`] = 1; out[`oft_s${i}fail`] = 0;
+        for (let j = 0; j < 8; j++) { out[`oft_s${i}x${j}`] = q[`ofq_x${j}`]; out[`oft_s${i}y${j}`] = q[`ofq_y${j}`]; }
+      }
+    }
+    if (!out.oft_abort) out.oft_done = token;
+    broadcast({ xx: "RUNNING", cycle: "mdi", oft_run: 1 });
+    let k = 1;
+    const tick = setInterval(() => { k++; if (k <= 6 && !(failAt && k > failAt)) broadcast({ oft_run: k }); else { clearInterval(tick); broadcast({ ...out, xx: "READY", cycle: "idle" }); } }, +(process.env.MOCK_TUNE_MS || 700));
+    return true;
+  }
   if (text.includes("(Squareness check")) {
     const [, a, b, ball] = /block (-?[\d.]+) x (-?[\d.]+), ball (-?[\d.]+)/.exec(text).map(Number);
-    const skew = +(process.env.MOCK_SKEW ?? 0.03), r = ball / 2, cx = state.xp, cy = state.yp;
-    const t = Math.PI / 180, uA = 1 * t, vA = uA + Math.PI / 2 + skew * t;
-    const u = [Math.cos(uA), Math.sin(uA)], v = [Math.cos(vA), Math.sin(vA)];
-    // the faces as lines p = c + s*dir, pushed out by the ball's radius along their outward normal
-    const face = (c, dir, out) => { const nn = [dir[1], -dir[0]], k = nn[0] * out[0] + nn[1] * out[1] > 0 ? 1 : -1; return { p: [c[0] + k * r * nn[0], c[1] + k * r * nn[1]], d: dir }; };
-    const F = { front: face([-b / 2 * v[0], -b / 2 * v[1]], u, [0, -1]), back: face([b / 2 * v[0], b / 2 * v[1]], u, [0, 1]),
-      left: face([-a / 2 * u[0], -a / 2 * u[1]], v, [-1, 0]), right: face([a / 2 * u[0], a / 2 * u[1]], v, [1, 0]) };
-    const pts = squarePoints({ a, b, ball }), out = { ofq_ok: 1, ofq_fail: 0, ofq_zt: -60 };
-    pts.forEach((q, i) => {
-      const f = F[q.side];
-      // where the line from q along the axis meets the face line
-      const ax = q.axis === "X" ? [1, 0] : [0, 1];
-      const den = ax[0] * f.d[1] - ax[1] * f.d[0], w = [f.p[0] - q.x, f.p[1] - q.y];
-      const s2 = (w[0] * f.d[1] - w[1] * f.d[0]) / den;
-      out[`ofq_x${i}`] = +(cx + q.x + s2 * ax[0]).toFixed(4); out[`ofq_y${i}`] = +(cy + q.y + s2 * ax[1]).toFixed(4);
-    });
-    runFake(() => out, 1500);
+    runFake(() => ({ ofq_ok: 1, ofq_fail: 0, ofq_zt: -60, ...mockSquare(a, b, ball, state.xp, state.yp) }), 1500);
     return true;
   }
   // 1.42.0: the homing correction: G28.3 sets the machine reading (the homing's error changes),
@@ -506,7 +537,7 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
-  if (p === "/api/clear") { broadcast({ xx: "READY", er: "" }); return json(res, "ok"); }
+  if (p === "/api/clear") { broadcast({ xx: "READY", er: "", estop_why: "" }); return json(res, "ok"); }
   if (p.startsWith("/api/home")) {
     // the machine's position reading moves by the change in the homing's error
     const d = [nextHomeErr[0] - hshift[0], nextHomeErr[1] - hshift[1]]; hshift = [...nextHomeErr];

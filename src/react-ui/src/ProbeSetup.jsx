@@ -4,6 +4,7 @@ import { getPrefs } from "./checkpoint.js";
 import { getSetter } from "./ToolSetter.jsx";
 import { loadBedcam } from "./BedCam.jsx";
 import { REF_FORMAT, refStatus } from "./setter.js";
+import { savePendingTune } from "./ProbeTuning.jsx";
 
 // Probe setup (1.38.0): the one-off steps for the 3D probe, tool setter and bed
 // camera, in order, with what's done ticked. Each step opens the screen that
@@ -43,12 +44,15 @@ export async function setupStatus(state) {
 
 export default function ProbeSetup({ state, onOpen, onTab, onClose }) {
   const [steps, setSteps] = useState(null);
-  useEffect(() => { setupStatus(state).then(setSteps); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // 1.48.0: a hands-off tuning run that finished while no screen had it open is saved now
+  useEffect(() => { savePendingTune(state).catch(() => null).then(() => setupStatus(state)).then(setSteps); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   if (!steps) return null;
   const next = steps.find((s) => !s.done);
   return (
     <Modal title="Probe setup" wide onClose={onClose} actions={<button data-autofocus onClick={onClose}>Close</button>}>
       <p>The one-off steps for the 3D probe, the tool setter and the bed camera, in order. Each one opens the screen that does it; this comes back when you close it.</p>
+      <div className="why"><b>Hands-off: stylus and squareness together</b><p>With a 1-2-3 block on the bed: one start runs the stylus calibration 3 times and the squareness check 3 times, and saves both averages. About 6 minutes, and you can walk away.</p>
+        <button className="primary" onClick={() => onOpen({ kind: "tune" })}>Tune the probe automatically</button></div>
       <ol className="setup-steps">
         {steps.map((s, i) => (
           <li key={s.id} className={s.done ? "done" : s === next ? "next" : ""}>

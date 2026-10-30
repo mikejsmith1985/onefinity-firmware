@@ -15,8 +15,15 @@ export function machState(state) {
   if (xx !== "ESTOPPED" && (cycle === "jogging" || cycle === "homing")) return cycle.toUpperCase();
   return xx || "";
 }
+// 1.48.0: an E-stop the controller made itself after "Switch not found" reads as "User triggered
+// EStop" from the motion board; estop_why says what really happened.
+export function estopText(state) {
+  if (state.estop_why === "Switch not found" && /user/i.test(state.er || "User triggered EStop")) return "Probe found nothing";
+  return state.er || "User triggered EStop";
+}
+
 function statusText(state, mach) {
-  if (mach === "ESTOPPED") return state.er || "Emergency stop";
+  if (mach === "ESTOPPED") return state.er || state.estop_why ? estopText(state) : "Emergency stop";
   if (mach === "HOLDING") return state.pr || "Paused";
   const m = state.messages;
   return m && m.length ? m[m.length - 1].text.replace(/^#/, "") : "";
@@ -107,8 +114,8 @@ export default function App() {
         <span className="ver">{cfg.config ? `v${cfg.config.full_version}` : ""}{cfg.net.ip ? ` · ${cfg.net.ip}` : ""}</span>
         <button className="quiet" onClick={() => setPower(true)}>Power</button>
       </nav>
-      {mach === "ESTOPPED" && explain(state.er || "User triggered EStop") && (
-        <div className="banner" role="alert"><b>{explain(state.er || "User triggered EStop").what}</b> {explain(state.er || "User triggered EStop").advice}</div>
+      {mach === "ESTOPPED" && explain(estopText(state)) && (
+        <div className="banner" role="alert"><b>{explain(estopText(state)).what}</b> {explain(estopText(state)).advice}</div>
       )}
 
       {page === "control" && <ControlPage ctl={ctl} cfg={cfg} mach={mach} metric={metric} />}

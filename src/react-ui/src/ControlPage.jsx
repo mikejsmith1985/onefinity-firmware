@@ -1,6 +1,7 @@
 import { traceTap } from "./clientlog.js";
 import ProbeSetup from "./ProbeSetup.jsx";
 import Squareness from "./Squareness.jsx";
+import ProbeTuning from "./ProbeTuning.jsx";
 import React, { useEffect, useState } from "react";
 import { loadPath, api } from "./controller.js";
 import Dro from "./Dro.jsx";
@@ -114,7 +115,10 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
       {probe === "square" && cfg.config && (
         <Squareness config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
       )}
-      {probe && probe !== "measure" && probe !== "setter" && probe !== "square" && cfg.config && (
+      {probe === "tune" && cfg.config && (
+        <ProbeTuning config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
+      )}
+      {probe && probe !== "measure" && probe !== "setter" && probe !== "square" && probe !== "tune" && cfg.config && (
         <ProbeDialog openId={openId} type={probe} config={cfg.config} state={state} send={send} subscribe={subscribe} rotary={rotary} metric={metric} onClose={() => setProbe(null)} />
       )}
     </main>
