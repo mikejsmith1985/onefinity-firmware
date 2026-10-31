@@ -897,12 +897,16 @@ def cmd_trial_check(wait = None, steady = None):
         print('trial-check: not a slot on trial, nothing to do'); return True
     print('trial-check: slot %s is on trial; checking for %d s' %
           (s['running'].upper(), wait))
-    start, good_since, h = time.time(), None, {}
-    while time.time() - start < wait:
+    # A monotonic clock: the system clock jumps when the network time arrives
+    # (from the image's build date to today), which ended the 1.51.1 trial on
+    # the machine after 3 minutes with everything working
+    clock = time.monotonic
+    start, good_since, h = clock(), None, {}
+    while clock() - start < wait:
         h = health()
         if all(h.values()):
-            good_since = good_since or time.time()
-            if time.time() - good_since >= steady:
+            good_since = good_since or clock()
+            if clock() - good_since >= steady:
                 print('trial-check: working (web server, screen, browser, network)')
                 record_trial(s['boot'], s, 'working', h)
                 return True

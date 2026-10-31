@@ -108,6 +108,21 @@ check('no network: diagnostics', ab.cmd_trial_check() is False and
 os.environ['AB_NO_DIAG'] = '1'
 os.environ['AB_FAKE_ADDR'] = '192.168.4.120'
 
+# The system clock jumps forward (network time arrives) while checking:
+# the wait must still be measured in real seconds (1.51.1 gave up early)
+import time as _time
+_real = _time.time
+_calls = [0]
+def _jumping():
+    _calls[0] += 1
+    return _real() + (26 * 86400 if _calls[0] > 1 else 0)   # jumps after the 1st read
+_time.time = _jumping
+set_procs('Xorg', 'chromium')
+os.environ['AB_HEALTH_URL'] = UP
+os.environ['AB_FAKE_ADDR'] = '192.168.4.89'
+check('clock jump: still working', ab.cmd_trial_check() is True)
+_time.time = _real
+
 # The trial file made by "try" keeps its fields
 with open(os.path.join(boot, 'ab-trial.json'), 'w') as f:
     json.dump({'slot': 'b', 'time': '2026-10-30 18:00'}, f)
