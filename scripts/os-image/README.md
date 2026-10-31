@@ -73,3 +73,25 @@ sets a country, and the touch must be turned with the screen
 card and the screen-rotation setting have it).  trial-check also needs a
 network address, and records diagnostics in ab-trial.json, which the normal
 slot shows (`trial_ended` in `/api/abcard`).
+
+## Patch files and USB sticks (1.52.0)
+
+    build-patch.sh <out.tar.gz> <label> <dir> [version] [os_match]
+
+A patch file holds only the files that change (`<dir>/root/...` at their place
+in the system, `<dir>/boot/...` for the slot's boot files). `ab-card patch`
+writes them over the other slot; nothing is erased, existing folders keep
+their owners and modes, and the slot has to be tried again before it can be
+kept. `os_match` (e.g. `trixie`) keeps a patch for the new OS off the 2017
+system.
+
+Admin > SD card: **Load a patch into slot X** (upload), or **Look on the USB
+stick**: the tool mounts the stick itself, read-only (the 2017 system's udev
+mounts sticks where other programs can't see them), and lists OS files and
+patch files in its top folder, to write or patch the other slot straight from
+the stick. API: `GET /api/abcard/usb`; `PUT /api/abcard` with
+`{"action": "write_file"|"patch_file", "path": ...}`; uploads take
+`?kind=patch`; `fetch` takes `"kind": "patch"`.
+
+An upload cut off part way no longer leaves the card "being written" until a
+restart: an upload quiet for two minutes stops counting.

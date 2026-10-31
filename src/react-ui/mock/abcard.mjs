@@ -31,6 +31,11 @@ function job(action, steps, done) {
   }, Number(process.env.MOCK_ABCARD_STEP_MS || 400));
 }
 
+function patchJob(other, label) {
+  job("patch", [[10, "Checking the patch file"], [50, `Writing the patch into slot ${other.toUpperCase()}`], [100, `Slot ${other.toUpperCase()} is patched and ready to try`]],
+    () => { const sl = s.slots[other]; sl.patches = [...(sl.patches || []), { label, written: now() }]; sl.proven = false; });
+}
+
 const fail = (res, msg) => { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ message: msg, code: 400 })); };
 
 export function abcard(req, res, p, json) {
@@ -39,11 +44,14 @@ export function abcard(req, res, p, json) {
     req.on("end", () => { const q = JSON.parse(b || "{}"); if (q.reset) resetAbCard(q.reset); else Object.assign(s, q); json(res, "ok"); });
     return true;
   }
-  if (p === "/api/abcard" && req.method === "GET") { json(res, s); return true; }
-  if (p === "/api/abcard/upload" && req.method === "PUT") {
+  if (p === "/api/abcard" && req.method === "GET") { const { usb, ...rest } = s; json(res, rest); return true; }
+  if (p === "/api/abcard/usb" && req.method === "GET") { json(res, s.usb || []); return true; }
+  if (p.startsWith("/api/abcard/upload") && req.method === "PUT") {
+    const patchKind = /[?&]kind=patch/.test(req.url);
     let n = 0; req.on("data", (d) => (n += d.length));
     req.on("end", () => {
       const other = s.other;
+      if (patchKind) { patchJob(other, "Uploaded patch"); return json(res, "ok"); }
       job("write", [[10, "Checking the OS file"], [40, `Writing the system into slot ${other.toUpperCase()}`], [90, "Carrying over settings, Wi-Fi and calibration"], [100, `Slot ${other.toUpperCase()} is ready to try`]],
         () => { s.slots[other] = { bootable: true, label: "Uploaded OS file", version: "2.0.0", os: "Raspberry Pi OS (bookworm)", written: now(), bytes: n }; });
       json(res, "ok");
@@ -78,6 +86,15 @@ export function abcard(req, res, p, json) {
         if (!s.slots[q.slot]?.proven) return fail(res, `Slot ${S(q.slot)} has not been tried and kept yet.`);
         Object.assign(s, { default: q.slot, running: q.slot, other: q.slot === "a" ? "b" : "a", trial: false });
       } else if (q.action === "dismiss") delete s.trial_ended;
+      else if (q.action === "write_file" || q.action === "patch_file") {
+        if (busy) { res.writeHead(409, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ message: "A card job is already running" })); }
+        const f = (s.usb || []).find((x) => x.path === q.path);
+        if (!f) return fail(res, "Not a file on a USB stick");
+        const other = s.other;
+        if (q.action === "patch_file") patchJob(other, f.label || f.name);
+        else job("write", [[40, `Writing the system into slot ${other.toUpperCase()}`], [100, `Slot ${other.toUpperCase()} is ready to try`]],
+          () => { s.slots[other] = { bootable: true, label: f.label || f.name, version: f.version, os: "Raspberry Pi OS (trixie)", written: now() }; });
+      }
       else return fail(res, "Unknown action");
       json(res, "ok");
     });

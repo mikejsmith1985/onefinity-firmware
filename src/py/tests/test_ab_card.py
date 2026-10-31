@@ -321,6 +321,92 @@ try:
     check('slot A is not marked as tried', not st['slots']['a'].get('proven'))
     bad, out = tool(envB, 'switch', 'a', fail = True)
     check('so it can\'t be made the normal slot without a trial', bad, out)
+    # --- 1.52.0: a patch file over the other slot (A), not a whole OS --------
+    sh('umount', nrootA2); mnts.remove(nrootA2)
+    pd = os.path.join(work, 'patch'); os.makedirs(pd)
+    put(os.path.join(pd, 'ab-patch.json'), json.dumps({'format': 1, 'label': 'Fix 1',
+                                                         'version': '9.9.9', 'os_match': 'stretch'}))
+    put(os.path.join(pd, 'root/etc/patched'), 'yes\n')
+    put(os.path.join(pd, 'root/usr/bin/ping'), 'new ping\n')
+    os.symlink('../mail', os.path.join(pd, 'root/etc/rel-link'))
+    put(os.path.join(pd, 'boot/kernel7.img'), 'patched kernel')
+    patch = os.path.join(work, 'fix1.tar.gz')
+    # with a directory entry for etc/ (mode 700): the slot's etc/ must keep its own
+    os.chmod(os.path.join(pd, 'root/etc'), 0o700)
+    sh('tar', '-czf', patch, '-C', pd, 'ab-patch.json', 'root', 'boot')
+    pdigest = hashlib.sha256(open(patch, 'rb').read()).hexdigest()
+    bad, out = tool(envB, 'patch', patch, '--sha256', '00' * 32, fail = True)
+    check('patch: wrong checksum refused', bad and 'checksum' in out, out[-200:])
+    bad, out = tool(envB, 'patch', bundle2, fail = True)
+    check('patch: an OS file is not a patch file', bad and 'not a patch file' in out, out[-200:])
+    wrong = os.path.join(work, 'wrongos.tar')
+    put(os.path.join(work, 'w/ab-patch.json'), json.dumps({'format': 1, 'label': 'x', 'os_match': 'trixie'}))
+    put(os.path.join(work, 'w/root/etc/should-not-be-here'), 'x')
+    sh('tar', '-cf', wrong, '-C', os.path.join(work, 'w'), 'ab-patch.json', 'root')
+    bad, out = tool(envB, 'patch', wrong, fail = True)
+    check('patch: refused when the slot has another OS', bad and 'trixie' in out, out[-200:])
+    unsafe = os.path.join(work, 'unsafe.tar')
+    put(os.path.join(work, 'u/ab-patch.json'), json.dumps({'format': 1}))
+    put(os.path.join(work, 'u/etc/x'), 'x')
+    sh('tar', '-cf', unsafe, '-C', os.path.join(work, 'u'), 'ab-patch.json', 'etc')
+    bad, out = tool(envB, 'patch', unsafe, fail = True)
+    check('patch: entries outside root/ and boot/ refused', bad and 'may not write' in out, out[-200:])
+    good, out = tool(envB, 'patch', patch, '--sha256', pdigest)
+    check('patch: written', good and 'patched and ready to try' in out, out[-300:])
+    nrootA3 = os.path.join(work, 'nrootA3'); mount(dst + 'p2', nrootA3)
+    check('patch: the changed files are in slot A',
+          read(os.path.join(nrootA3, 'etc/patched')) == 'yes\n' and
+          read(os.path.join(nrootA3, 'usr/bin/ping')) == 'new ping\n')
+    check('patch: relative link target kept', os.readlink(os.path.join(nrootA3, 'etc/rel-link')) == '../mail')
+    check('patch: everything else in slot A untouched (nothing erased)',
+          read(os.path.join(nrootA3, 'etc/new-os-file')) == 'new\n' and
+          read(os.path.join(nrootA3, 'var/lib/bbctrl/config.json')) == '{"probe": "reference"}\n' and
+          '/dev/mmcblk0p2  /' in read(os.path.join(nrootA3, 'etc/fstab')))
+    check('patch: existing folders keep their modes', oct(os.stat(os.path.join(nrootA3, 'etc')).st_mode & 0o777) == '0o755',
+          oct(os.stat(os.path.join(nrootA3, 'etc')).st_mode & 0o777))
+    check('patch: never wrote the refused patches', not os.path.exists(os.path.join(nrootA3, 'etc/should-not-be-here')))
+    sh('umount', nrootA3); mnts.remove(nrootA3)
+    check('patch: slot A boot file replaced, fallback follows',
+          read(os.path.join(nboot, 'a', 'kernel7.img')) == 'patched kernel' == read(os.path.join(nboot, 'kernel7.img')))
+    good, out = tool(envB, 'status'); st = json.loads(out)
+    sa = st['slots']['a']
+    check('patch: recorded on the slot, new version, to be tried again',
+          sa['version'] == '9.9.9' and sa['patches'][-1]['label'] == 'Fix 1' and
+          sa['patches'][-1]['sha256'] == pdigest and not sa.get('proven') and sa['bootable'], sa)
+    check('patch: the normal slot is unchanged', st['default'] == 'b' and
+          read(os.path.join(nboot, 'config.txt')).rstrip().endswith('os_prefix=b/') and
+          read(os.path.join(nboot, 'tryboot.txt')).rstrip().endswith('os_prefix=a/'))
+
+    # --- 1.52.0: OS and patch files on a USB stick --------------------------
+    stick_img = os.path.join(work, 'stick.img'); sh('truncate', '-s', '64M', stick_img)
+    sh('mkfs.ext4', '-q', '-F', stick_img)
+    stick = loop(stick_img)
+    sm = os.path.join(work, 'stickmnt'); mount(stick, sm)
+    shutil.copy(patch, os.path.join(sm, 'fix1.tar.gz'))
+    shutil.copy(bundle2, os.path.join(sm, 'os2.tar.xz'))
+    put(os.path.join(sm, 'notes.tar'), ''); sh('tar', '-cf', os.path.join(sm, 'notes.tar'), '-C', work, 'patch')
+    put(os.path.join(sm, 'readme.txt'), 'hi')
+    sh('umount', sm); mnts.remove(sm)
+    envU = dict(envB, AB_USB_DEVS = stick)
+    good, out = tool(envU, 'usb'); files = json.loads(out) if good else []
+    check('usb: lists the OS file and the patch file, not other files',
+          sorted((f['name'], f['kind']) for f in files) == [('fix1.tar.gz', 'patch'), ('os2.tar.xz', 'os')], out[-400:])
+    check('usb: labels read from the files', {f['name']: f['label'] for f in files}.get('fix1.tar.gz') == 'Fix 1', files)
+    usbmnt = os.path.join(envB['AB_RUN_DIR'], 'usb', os.path.basename(stick))
+    mnts.append(usbmnt)
+    check('usb: the stick is mounted read-only by the tool',
+          any(l.split()[1] == usbmnt and l.split()[3].startswith('ro') for l in read('/proc/mounts').splitlines()))
+    fp = [f['path'] for f in files if f['kind'] == 'patch'][0]
+    good, out = tool(envU, 'patch', fp)
+    check('usb: patch written straight from the stick', good and 'patched' in out, out[-200:])
+    check('usb: the file on the stick is kept', os.path.exists(fp))
+    good, out = tool(envU, 'status'); st = json.loads(out)
+    check('usb: two patches recorded', len(st['slots']['a']['patches']) == 2, st['slots']['a'])
+    good, out = tool(dict(envU, AB_USB_DEVS = ''), 'usb')
+    check('usb: a stick taken out is unmounted', good and json.loads(out) == [] and
+          not any(l.split()[1] == usbmnt for l in read('/proc/mounts').splitlines()), out)
+    mnts.remove(usbmnt)
+    mount(dst + 'p2', nrootA2)
     # pretend slot A was tried and kept
     sh('mount', '-o', 'remount,rw', nboot)
     j = json.loads(read(os.path.join(nboot, 'a', 'slot.json'))); j['proven'] = True

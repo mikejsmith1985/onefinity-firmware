@@ -15,6 +15,7 @@ open(fake, 'w').write('''#!/bin/bash
 echo "$@" >> %s
 case "$1" in
   status) echo '{"ab": true, "running": "a"}' ;;
+  usb) echo '[{"path": "/run/ab-card/usb/sda1/os.tar.gz", "kind": "os"}]' ;;
   try) if [ -e %s/refuse ]; then echo "ab-card: Slot B has no system to try" >&2; exit 1; fi ;;
 esac
 ''' % (calls, tmp))
@@ -39,7 +40,8 @@ ctrl.state = State(cycle = 'idle')
 class App(tornado.web.Application):
     def get_ctrl(self, cid = None): return ctrl
 app = App([(r'/api/abcard', Web.ABCardHandler),
-           (r'/api/abcard/upload', Web.ABCardUploadHandler)])
+           (r'/api/abcard/upload', Web.ABCardUploadHandler),
+           (r'/api/abcard/usb', Web.ABCardUSBHandler)])
 sock, port = bind_unused_port()
 base = 'http://127.0.0.1:%d' % port
 @tornado.gen.coroutine
@@ -122,4 +124,39 @@ check('not busy once the job is over', not Web.ab_busy())
 r = go('/api/abcard/upload?sha256=nothex', 'PUT', b'x' * 10)
 check('a malformed checksum is refused before the file is taken, with a JSON reason',
       r.code == 400 and json.loads(r.body)['message'].startswith('The checksum') and not os.path.exists(os.path.join(Web.AB_DOWNLOADS, 'bundle.tar.part')))
+
+# --- 1.52.0: patch files, USB sticks, a cut-off upload ----------------------
+os.unlink(path)
+Web.ab_spawned[0] = 0
+r = go('/api/abcard/upload?kind=patch', 'PUT', b'p' * 1000)
+time.sleep(0.3)
+check('a patch upload goes to ab-card patch', r.code == 200 and last_calls() == ['patch %s' % path], r.body)
+Web.ab_spawned[0] = 0
+r = go('/api/abcard/upload?kind=other', 'PUT', b'p' * 10)
+check('an unknown kind of upload is refused', r.code == 400 and last_calls() == [], r.body)
+r = go('/api/abcard', 'PUT', json.dumps({'action': 'fetch', 'url': 'https://x/p.tar', 'kind': 'patch'}).encode())
+time.sleep(0.3)
+check('fetch of a patch file', r.code == 200 and last_calls() == ['fetch https://x/p.tar --patch'], r.body)
+Web.ab_spawned[0] = 0
+r = go('/api/abcard/usb')
+check('USB stick files come from ab-card usb', r.code == 200 and json.loads(r.body)[0]['kind'] == 'os' and last_calls() == ['usb'], r.body)
+r = go('/api/abcard', 'PUT', json.dumps({'action': 'write_file', 'path': '/var/lib/bbctrl/config.json'}).encode())
+check('write_file refuses a file that is not on a USB stick', r.code == 400 and last_calls() == [], r.body)
+r = go('/api/abcard', 'PUT', json.dumps({'action': 'write_file', 'path': '/run/ab-card/usb/../../../etc/shadow'}).encode())
+check('write_file refuses a path climbing out of the USB folder', r.code == 400 and last_calls() == [], r.body)
+r = go('/api/abcard', 'PUT', json.dumps({'action': 'write_file', 'path': '/run/ab-card/usb/sda1/os.tar.gz', 'sha256': 'ef' * 32}).encode())
+time.sleep(0.3)
+check('write_file: an OS file on the stick is written into the other slot', r.code == 200 and
+      last_calls() == ['write /run/ab-card/usb/sda1/os.tar.gz --sha256 ' + 'ef' * 32], r.body)
+Web.ab_spawned[0] = 0
+r = go('/api/abcard', 'PUT', json.dumps({'action': 'patch_file', 'path': '/run/ab-card/usb/sda1/fix.tar.gz'}).encode())
+time.sleep(0.3)
+check('patch_file: a patch on the stick goes to ab-card patch', r.code == 200 and
+      last_calls() == ['patch /run/ab-card/usb/sda1/fix.tar.gz'], r.body)
+Web.ab_spawned[0] = 0
+Web.ab_uploading[0] = time.time() - 600
+check('an upload quiet for minutes (cut off) no longer blocks the card', not Web.ab_busy())
+Web.ab_uploading[0] = time.time()
+check('an upload still arriving does', Web.ab_busy())
+Web.ab_uploading[0] = 0
 done()

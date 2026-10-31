@@ -520,6 +520,11 @@ svg.art { width: 100%; height: auto; display: block; background: var(--bed); bor
 .abjob p { margin: 4px 0; }
 .abtrial { border: 1px solid var(--yellow); border-radius: 6px; padding: 8px 10px; margin: 0 0 12px; }
 .abtrial p { margin: 4px 0 8px; }
+.abusb { border-top: 1px solid var(--rule); margin-top: 12px; padding-top: 10px; }
+.abusb .abhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.abfiles { list-style: none; margin: 8px 0 0; padding: 0; }
+.abfiles li { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid var(--rule); border-radius: 6px; padding: 6px 10px; margin: 0 0 6px; }
+.abfiles li span { min-width: 0; overflow-wrap: anywhere; }
 ol.abwhat { margin: 6px 0; padding-left: 22px; } ol.abwhat li { margin: 3px 0; }
 
 /* 1.48.0: hands-off probe tuning, the 6 runs */

@@ -54,13 +54,38 @@ check("kept: banner gone, B starts normally", await until(async () => !(await p.
 check("slot A, tried before, can be started from", await p.getByRole("button", { name: "Start from slot A" }).isEnabled());
 
 // OS file into slot A
-await p.locator("input[type=file]").setInputFiles({ name: "onefinity-os-2.0.0.tar.xz", mimeType: "application/x-xz", buffer: Buffer.alloc(3 << 20, 7) });
+await p.locator("input[type=file][data-kind=os]").setInputFiles({ name: "onefinity-os-2.0.0.tar.xz", mimeType: "application/x-xz", buffer: Buffer.alloc(3 << 20, 7) });
 check("load dialog names the file", await p.getByText("onefinity-os-2.0.0.tar.xz").isVisible());
 await p.getByPlaceholder("64 hex digits, from the release page").fill("ab".repeat(32));
 await p.getByRole("button", { name: "Load", exact: true }).click();
 check("slot A gets the OS file", await until(() => p.locator(".abslot").first().getByText("Uploaded OS file").isVisible(), 15000));
 check("an untried slot can't be made the normal one", await p.getByRole("button", { name: "Start from slot A" }).isDisabled() &&
   await p.getByText("hasn't been tried and kept yet").isVisible());
+
+// 1.52.0: a patch file uploaded, and files on a USB stick
+await p.locator("input[type=file][data-kind=patch]").setInputFiles({ name: "fix-touch.tar.gz", mimeType: "application/gzip", buffer: Buffer.alloc(4000, 1) });
+check("patch dialog: only the files in it change, try again after", await p.getByText(/Nothing else in it changes/).isVisible() &&
+  await p.getByText(/has to be tried again/).isVisible());
+await p.getByRole("button", { name: "Patch", exact: true }).click();
+check("patch progress named", await until(() => p.getByText("Patching the other slot").isVisible()));
+check("slot A shows the patch", await until(() => p.locator(".abslot").first().getByText(/Patched: Uploaded patch/).isVisible(), 15000));
+await mock({ usb: [{ path: "/run/ab-card/usb/sda1/onefinity-os-1.52.0.tar.gz", name: "onefinity-os-1.52.0.tar.gz", size: 917e6, kind: "os", label: "Onefinity OS 1.52.0", version: "1.52.0" },
+                   { path: "/run/ab-card/usb/sda1/fix2.tar.gz", name: "fix2.tar.gz", size: 2300, kind: "patch", label: "Fix 2" }] });
+await p.getByRole("button", { name: "Look on the USB stick" }).click();
+check("USB stick: OS file and patch listed with kind and size", await until(() => p.getByText("onefinity-os-1.52.0.tar.gz").isVisible()) &&
+  await p.getByText(/Whole system · Onefinity OS 1\.52\.0 · v1\.52\.0 · 0\.9 GB/).isVisible() && await p.getByText(/Patch · Fix 2 · 2 KB/).isVisible());
+await shot("5a-usb");
+await p.getByRole("button", { name: "Patch slot A" }).click();
+check("USB patch confirm says the stick isn't changed", await p.getByText(/The stick isn't changed/).isVisible());
+await p.getByRole("button", { name: "Patch", exact: true }).click();
+check("slot A patched from the stick", await until(() => p.locator(".abslot").first().getByText(/Patched: Fix 2 .*\(2 patches\)/).isVisible(), 15000));
+await p.getByRole("button", { name: "Write into slot A" }).click();
+check("USB OS file: erase warning", await p.getByText(/is erased/).isVisible());
+await p.getByRole("button", { name: "Write", exact: true }).click();
+check("slot A written from the stick", await until(() => p.locator(".abslot").first().getByText("Onefinity OS 1.52.0 · v1.52.0").isVisible(), 15000));
+await mock({ usb: [] });
+await p.getByRole("button", { name: "Look on the USB stick" }).click();
+check("no stick: says where to put the files", await until(() => p.getByText(/Put them in the top folder of the stick/).isVisible()));
 
 await mock({ trial_ended: { slot: "a", time: "2026-11-02 10:00" } });
 await p.reload();

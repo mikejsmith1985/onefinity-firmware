@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 ################################################################################
 # ab-card: an SD card with two complete systems, slot A and slot B (1.47.0;
-# trial-check 1.51.0).
+# trial-check 1.51.0; patch files and USB sticks 1.52.0).
 #
 # Card layout (made by "ab-card make" from the running system):
 #   p1  FAT32 boot   Raspberry Pi boot firmware, config.txt, tryboot.txt,
@@ -809,6 +809,149 @@ def cmd_dismiss():
     clear_trial(card_state()['boot'])
 
 
+# --- Patch files: a few changed files for the other slot (1.52.0) ------------
+# A tar (optionally compressed) holding ab-patch.json first, then root/
+# and/or boot/ with only the files that change.  Written over the other
+# slot's system (nothing is erased), so a small fix doesn't need a whole OS
+# file.  ab-patch.json: {"format": 1, "label": ..., "version": ... (the
+# slot's version afterwards, optional), "os_match": ... (optional: text that
+# must be in the slot's OS name, e.g. "trixie")}.
+def tar_names(path):
+    return subprocess.check_output(['tar', '-tf', path],
+                                   stderr = subprocess.DEVNULL).decode(
+                                       errors = 'replace').splitlines()
+
+def first_member(path):
+    "The first name in a tar file, without reading the rest of it"
+    p = subprocess.Popen(['tar', '-tf', path], stdout = subprocess.PIPE,
+                         stderr = subprocess.DEVNULL)
+    try: line = p.stdout.readline().decode(errors = 'replace').strip()
+    finally:
+        p.kill(); p.wait()
+    return line
+
+def cmd_patch(path, sha256 = None):
+    s = need_ab()
+    other = s['other']
+    if not slot_bootable(s['boot'], other):
+        raise Fail('Slot %s has no system to patch' % other.upper())
+    if not os.path.exists(path): raise Fail('%s not found' % path)
+    progress(1, 'Checking the patch file')
+    digest = sha256_of(path, 1, 20)
+    if sha256 and digest != sha256.lower().strip():
+        raise Fail('The patch file\'s checksum does not match (got %s)' % digest)
+    try: meta = json.loads(tar_member(path, 'ab-patch.json'))
+    except Exception:
+        raise Fail('This is not a patch file for the A/B card '
+                   '(no ab-patch.json inside)')
+    if meta.get('format') != 1:
+        raise Fail('Unknown patch file format %r' % meta.get('format'))
+    names = [n for n in tar_names(path) if n != 'ab-patch.json']
+    for n in names:
+        if n.startswith('/') or '..' in n.split('/') or \
+                not re.match(r'^(root|boot)(/|$)', n):
+            raise Fail('The patch file has an entry it may not write: %s' % n)
+    has_root = any(n.startswith('root/') and n != 'root/' for n in names)
+    has_boot = any(n.startswith('boot/') and n != 'boot/' for n in names)
+    if not has_root and not has_boot: raise Fail('The patch file changes nothing')
+
+    dev = part_dev(s['disk'], SLOT_PART[other])
+    for src, mnt in mounts():
+        if os.path.realpath(src) == os.path.realpath(dev): run('umount', mnt)
+    where = os.path.join(RUN_DIR, 'other')
+    mount(dev, where)
+    try:
+        want = meta.get('os_match')
+        if want and want.lower() not in (os_name(where) or '').lower():
+            raise Fail('This patch is for "%s"; slot %s has %s' %
+                       (want, other.upper(), os_name(where) or 'an unknown OS'))
+        if has_root:
+            progress(30, 'Writing the patch into slot %s' % other.upper())
+            # Existing folders keep their owners and modes
+            run('tar', '-C', where, '--numeric-owner', '--xattrs',
+                '--xattrs-include=*', '--no-overwrite-dir',
+                '--strip-components=1', '-xpf', path, 'root/')
+    finally:
+        os.sync(); umount(where)
+    boot = s['boot']
+    with BootRW(boot):
+        if has_boot:
+            progress(80, 'Writing slot %s\'s boot files' % other.upper())
+            run('tar', '-C', os.path.join(boot, other), '--no-same-owner',
+                '--strip-components=1', '-xf', path, 'boot/')
+        p = os.path.join(boot, other, 'slot.json')
+        info = json.loads(read(p, '{}') or '{}')
+        info.setdefault('patches', []).append(
+            {'label': meta.get('label', 'patch'), 'sha256': digest,
+             'written': now()})
+        info['patches'] = info['patches'][-10:]
+        if meta.get('version'): info['version'] = meta['version']
+        # A changed slot is tried again before it can be made the normal one
+        info['proven'] = False
+        write(p, json.dumps(info))
+        if other == 'a' and has_boot: refresh_fallback(boot)
+    set_default(boot, s['default'])
+    progress(100, 'Slot %s is patched and ready to try' % other.upper())
+
+
+# --- USB sticks: OS and patch files read straight from a stick (1.52.0) -------
+# The 2017 system's udev mounts sticks where other programs can't see them,
+# so the tool mounts them itself, read-only, in its own view.
+OS_FILE_EXT = ('.tar', '.tar.gz', '.tgz', '.tar.xz', '.txz', '.tar.bz2', '.tbz2')
+
+def usb_dir(): return os.path.join(RUN_DIR, 'usb')
+
+def usb_partitions():
+    if os.environ.get('AB_USB_DEVS') is not None:            # tests
+        return os.environ['AB_USB_DEVS'].split()
+    out = []
+    for d in usb_disks():
+        name = os.path.basename(d['device'])
+        parts = sorted(p for p in os.listdir('/sys/block/' + name)
+                       if p.startswith(name))
+        out += ['/dev/' + p for p in parts] or [d['device']]
+    return out
+
+def usb_files():
+    "Mount USB sticks read-only and list the OS and patch files on them"
+    base = usb_dir()
+    os.makedirs(base, exist_ok = True)
+    devs = usb_partitions()
+    names = dict((os.path.join(base, os.path.basename(d)), d) for d in devs)
+    for src, mnt in mounts():       # sticks taken out
+        if mnt.startswith(base + '/') and mnt not in names:
+            subprocess.call(['umount', '-l', mnt])
+    files = []
+    for where, dev in sorted(names.items()):
+        if not os.path.ismount(where):
+            os.makedirs(where, exist_ok = True)
+            if subprocess.call(['mount', '-o', 'ro', dev, where],
+                               stdout = subprocess.DEVNULL,
+                               stderr = subprocess.DEVNULL):
+                continue
+        for n in sorted(os.listdir(where)):
+            p = os.path.join(where, n)
+            if not os.path.isfile(p) or not n.lower().endswith(OS_FILE_EXT):
+                continue
+            first = first_member(p)
+            kind = {'ab-bundle.json': 'os', 'ab-patch.json': 'patch'}.get(first)
+            if not kind: continue
+            try: meta = json.loads(tar_member(p, first))
+            except Exception: meta = {}
+            files.append({'path': p, 'name': n, 'size': os.path.getsize(p),
+                          'kind': kind, 'label': meta.get('label'),
+                          'version': meta.get('version'),
+                          'device': dev})
+    return files
+
+def usb_file(path):
+    "A path that must be a file found on a USB stick by usb_files()"
+    real = os.path.realpath(path)
+    if not real.startswith(usb_dir() + '/') or not os.path.isfile(real):
+        raise Fail('%s is not a file on a USB stick' % path)
+    return real
+
+
 # --- Trial check: a slot on trial that isn't working goes back by itself -----
 def screen_and_browser():
     "Which of the screen's programs are running: X and the browser"
@@ -959,10 +1102,14 @@ def main():
     w.add_argument('--sha256')
     f = sub.add_parser('fetch'); f.add_argument('url')
     f.add_argument('--sha256')
+    f.add_argument('--patch', action = 'store_true', help = 'the file is a patch file')
     sub.add_parser('try')
     sub.add_parser('keep')
     sw = sub.add_parser('switch'); sw.add_argument('slot', choices = ('a', 'b'))
     sub.add_parser('dismiss')
+    pa = sub.add_parser('patch', help = 'write a patch file over the other slot')
+    pa.add_argument('file'); pa.add_argument('--sha256')
+    sub.add_parser('usb', help = 'OS and patch files on USB sticks (JSON)')
     sub.add_parser('trial-check', help = 'go back to the normal slot if this '
                    'slot on trial is not working (run at start)')
     b = sub.add_parser('bundle'); b.add_argument('out')
@@ -983,8 +1130,21 @@ def main():
                 prog_range[:] = [0, 40]
                 path = cmd_fetch(args.url, args.sha256)
                 prog_range[:] = [40, 100]
-                cmd_write(path, args.sha256)
-            as_job('write', fetch_write)
+                if args.patch:
+                    try: cmd_patch(path, args.sha256)
+                    finally:
+                        if os.path.exists(path): os.unlink(path)
+                else: cmd_write(path, args.sha256)
+            as_job('patch' if args.patch else 'write', fetch_write)
+        elif args.cmd == 'patch':
+            def patch_job():
+                try: cmd_patch(args.file, args.sha256)
+                finally:
+                    if args.file.startswith(DOWNLOADS) and os.path.exists(args.file):
+                        os.unlink(args.file)
+            as_job('patch', patch_job)
+        elif args.cmd == 'usb':
+            print(json.dumps(usb_files(), indent = 1, sort_keys = True))
         elif args.cmd == 'try': cmd_try()
         elif args.cmd == 'keep': cmd_keep()
         elif args.cmd == 'switch': cmd_switch(args.slot)

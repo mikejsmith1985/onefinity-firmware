@@ -484,11 +484,17 @@ def ab_job_running():
     except Exception: return False
 
 
-ab_uploading = [False]
+# When the last piece of an upload arrived (0: no upload).  An upload cut off
+# part way may never be told it ended (seen on the 2017 card, Oct 31: the page
+# stayed "being written" until a restart), so one that has been quiet for two
+# minutes no longer counts.
+ab_uploading = [0]
 ab_spawned = [0]    # a job just started may not have written job.json yet
+AB_UPLOAD_QUIET = 120
 
 def ab_busy():
-    return ab_uploading[0] or ab_job_running() or time.time() - ab_spawned[0] < 10
+    return (ab_uploading[0] and time.time() - ab_uploading[0] < AB_UPLOAD_QUIET) \
+        or ab_job_running() or time.time() - ab_spawned[0] < 10
 
 
 def ab_check_idle(handler):
@@ -528,6 +534,14 @@ class ABCardHandler(bbctrl.APIHandler):
             'copy': lambda: ['copy'],
             'fetch': lambda: ['fetch', self.json['url']] +
                 (['--sha256', self.json['sha256']] if self.json.get('sha256')
+                 else []) + (['--patch'] if self.json.get('kind') == 'patch'
+                             else []),
+            # A file on a USB stick (from GET /api/abcard/usb)
+            'write_file': lambda: ['write', ab_usb_path(self.json['path'])] +
+                (['--sha256', self.json['sha256']] if self.json.get('sha256')
+                 else []),
+            'patch_file': lambda: ['patch', ab_usb_path(self.json['path'])] +
+                (['--sha256', self.json['sha256']] if self.json.get('sha256')
                  else []),
         }
         if ab_busy():
@@ -538,7 +552,7 @@ class ABCardHandler(bbctrl.APIHandler):
             args = jobs[action]()
             for a in args:
                 if a.startswith('-') and a not in ('--yes', '--sha256', '--size',
-                                                   '--mounted-ok'):
+                                                   '--mounted-ok', '--patch'):
                     raise HTTPError(400, 'Bad argument')
             ab_spawn(args)
             self.write_json('ok')
@@ -556,6 +570,23 @@ class ABCardHandler(bbctrl.APIHandler):
         if action in ('try', 'switch'):
             self.get_ctrl().lcd.goodbye('Restarting...')
         self.write_json('ok')
+
+
+def ab_usb_path(path):
+    "Only files the tool found on a USB stick (it mounts them under /run/ab-card/usb)"
+    real = os.path.realpath(path or '')
+    if not real.startswith('/run/ab-card/usb/'):
+        raise HTTPError(400, 'Not a file on a USB stick')
+    return real
+
+
+class ABCardUSBHandler(bbctrl.APIHandler):
+    "OS and patch files on USB sticks plugged into the controller (1.52.0)"
+    @gen.coroutine
+    def get(self):
+        out, err, ret = yield ab_card('usb')
+        if ret: raise HTTPError(500, err.strip() or 'ab-card failed')
+        self.write(out)
 
 
 @tornado.web.stream_request_body
@@ -576,12 +607,16 @@ class ABCardUploadHandler(bbctrl.RequestHandler):
         if self.sha and not re.match(r'^[0-9a-fA-F]{64}$', self.sha):
             raise HTTPError(400, 'The checksum should be 64 hex digits')
         self.request.connection.set_max_body_size(16 << 30)
+        self.kind = self.get_argument('kind', 'os')
+        if self.kind not in ('os', 'patch'): raise HTTPError(400, 'Bad kind')
         self.path = os.path.join(AB_DOWNLOADS, 'bundle.tar')
         self.file = open(self.path + '.part', 'wb')
-        ab_uploading[0] = True
+        ab_uploading[0] = time.time()
 
 
-    def data_received(self, chunk): self.file.write(chunk)
+    def data_received(self, chunk):
+        self.file.write(chunk)
+        ab_uploading[0] = time.time()
 
 
     def write_error(self, status_code, **kwargs):
@@ -598,7 +633,7 @@ class ABCardUploadHandler(bbctrl.RequestHandler):
 
 
     def _done(self):
-        if self.file is not None: ab_uploading[0] = False
+        if self.file is not None: ab_uploading[0] = 0
         if self.file is not None and not self.file.closed:
             self.file.close()
             try: os.unlink(self.path + '.part')
@@ -608,8 +643,8 @@ class ABCardUploadHandler(bbctrl.RequestHandler):
     def put(self):
         self.file.close()
         os.rename(self.path + '.part', self.path)
-        ab_spawn(['write', self.path] + (['--sha256', self.sha] if self.sha
-                                          else []))
+        ab_spawn(['patch' if self.kind == 'patch' else 'write', self.path] +
+                 (['--sha256', self.sha] if self.sha else []))
         self.set_header('Content-Type', 'application/json')
         self.write(json.dumps('ok'))
 
@@ -1450,6 +1485,7 @@ class Web(tornado.web.Application):
             (r'/api/upgrade', UpgradeHandler),
             (r'/api/abcard', ABCardHandler),
             (r'/api/abcard/upload', ABCardUploadHandler),
+            (r'/api/abcard/usb', ABCardUSBHandler),
             (r'/api/file(/[^/]+)?', bbctrl.FileHandler),
             (r'/api/path/([^/]+)((/positions)|(/speeds))?', PathHandler),
             (r'/api/home(/[xyzabcXYZABC]((/set)|(/clear))?)?', HomeHandler),

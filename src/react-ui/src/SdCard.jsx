@@ -1,16 +1,19 @@
 // A/B SD card (1.47.0): two complete systems on one card, made, filled,
 // tried and switched from here.  The controller side is scripts/ab-card.
+// 1.52.0: patch files (only the files that change) and files on a USB stick.
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./controller.js";
 import { Group, Modal, Confirm } from "./ui.jsx";
 
 const gb = (b) => (b ? `${(b / 1e9).toFixed(1)} GB` : "—");
+const size = (b) => (!b ? "—" : b < 1e5 ? `${Math.max(1, Math.round(b / 1e3))} KB` : b < 1e8 ? `${(b / 1e6).toFixed(1)} MB` : gb(b));
 const S = (x) => x?.toUpperCase();
 
-function upload(file, sha, onProgress) {
+function upload(file, sha, onProgress, kind = "os") {
   return new Promise((resolve, reject) => {
     const x = new XMLHttpRequest();
-    x.open("PUT", `/api/abcard/upload${sha ? `?sha256=${encodeURIComponent(sha)}` : ""}`);
+    const q = [kind === "patch" ? "kind=patch" : "", sha ? `sha256=${encodeURIComponent(sha)}` : ""].filter(Boolean).join("&");
+    x.open("PUT", `/api/abcard/upload${q ? `?${q}` : ""}`);
     x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     x.onload = () => (x.status < 300 ? resolve() : reject(new Error((() => { try { return JSON.parse(x.responseText).message; } catch { return x.responseText || `Upload failed (${x.status})`; } })())));
     x.onerror = () => reject(new Error("The upload was cut off"));
@@ -29,12 +32,20 @@ export function SdCard({ state }) {
   const [sending, setSending] = useState(null);
   const [restarting, setRestarting] = useState("");
   const fileIn = useRef(null);
+  const patchIn = useRef(null);
+  const [kind, setKind] = useState("os");
+  const [usb, setUsb] = useState(null);
+  const [usbErr, setUsbErr] = useState("");
+  const [usbPick, setUsbPick] = useState(null);
+  const [looking, setLooking] = useState(false);
   const idle = (state?.cycle || "idle") === "idle";
   const running = st?.job?.state === "running";
   const busy = running || sending !== null;
 
   const load = () => api.get("abcard").then((s) => { setSt(s); setErr(""); }).catch((e) => setErr(e.message));
+  const loadUsb = () => { setLooking(true); setUsbErr(""); return api.get("abcard/usb").then((f) => setUsb(f)).catch((e) => setUsbErr(e.message)).finally(() => setLooking(false)); };
   useEffect(() => { load(); }, []);
+  useEffect(() => { if (st?.ab && usb === null && !looking) loadUsb(); }, [st?.ab]);
   useEffect(() => { const t = setInterval(load, running || sending !== null ? 1500 : 8000); return () => clearInterval(t); }, [running, sending]);
   useEffect(() => { if (st && !st.targets.some((t) => t.device === target)) setTarget(st.targets[0]?.device || ""); }, [st]);
 
@@ -44,7 +55,7 @@ export function SdCard({ state }) {
   };
   const sendFile = async () => {
     setDlg(null); setErr(""); setSending(0);
-    try { await upload(file, sha.trim(), setSending); } catch (e) { setErr(e.message); }
+    try { await upload(file, sha.trim(), setSending, kind); } catch (e) { setErr(e.message); }
     setSending(null); load();
   };
 
@@ -53,7 +64,7 @@ export function SdCard({ state }) {
   const job = st.job;
   const jobBox = job && (
     <div className="abjob" role="status">
-      <p><b>{{ make: "Making an A/B card", copy: "Copying into the other slot", write: "Writing the OS file" }[job.action] || job.action}</b>{job.state === "done" ? " — finished" : job.state === "error" ? " — failed" : ""}</p>
+      <p><b>{{ make: "Making an A/B card", copy: "Copying into the other slot", write: "Writing the OS file", patch: "Patching the other slot" }[job.action] || job.action}</b>{job.state === "done" ? " — finished" : job.state === "error" ? " — failed" : ""}</p>
       {job.state === "running" && <div className="bar"><i style={{ width: `${job.progress}%` }} /></div>}
       <p className={job.state === "error" ? "err" : "dim"}>{job.message}</p>
       {job.state === "done" && job.action === "make" && (
@@ -114,7 +125,8 @@ export function SdCard({ state }) {
           {x === st.default && <span className="flag">Starts normally</span>}
           {x === cur && st.trial && <span className="flag warn">On trial</span>}
         </div>
-        {s.bootable ? <p>{s.label || "System"}{s.version ? ` · v${s.version}` : ""}<br /><small className="dim">{s.os || ""}{s.written ? ` · written ${s.written}` : ""}</small></p> : <p className="dim">Empty</p>}
+        {s.bootable ? <p>{s.label || "System"}{s.version ? ` · v${s.version}` : ""}<br /><small className="dim">{s.os || ""}{s.written ? ` · written ${s.written}` : ""}</small>
+          {s.patches?.length > 0 && <><br /><small className="dim">Patched: {s.patches[s.patches.length - 1].label} · {s.patches[s.patches.length - 1].written}{s.patches.length > 1 ? ` (${s.patches.length} patches)` : ""}</small></>}</p> : <p className="dim">Empty</p>}
       </div>
     );
   };
@@ -151,14 +163,26 @@ export function SdCard({ state }) {
             <div className="btnrow">
               <button disabled={!idle || running || sending !== null} onClick={() => setDlg("copy")}>Copy this system into slot {S(other)}</button>
               <button disabled={!idle || running || sending !== null} onClick={() => fileIn.current.click()}>Load an OS file into slot {S(other)}</button>
-              <input ref={fileIn} type="file" hidden accept=".tar,.gz,.tgz,.bz2,.xz" onChange={(e) => { if (e.target.files[0]) { setFile(e.target.files[0]); setSha(""); setDlg("file"); } e.target.value = ""; }} />
+              <button disabled={!idle || running || sending !== null || !os.bootable} onClick={() => patchIn.current.click()}>Load a patch into slot {S(other)}</button>
+              <input ref={fileIn} type="file" hidden data-kind="os" accept=".tar,.gz,.tgz,.bz2,.xz" onChange={(e) => { if (e.target.files[0]) { setFile(e.target.files[0]); setKind("os"); setSha(""); setDlg("file"); } e.target.value = ""; }} />
+              <input ref={patchIn} type="file" hidden data-kind="patch" accept=".tar,.gz,.tgz,.bz2,.xz" onChange={(e) => { if (e.target.files[0]) { setFile(e.target.files[0]); setKind("patch"); setSha(""); setDlg("patch"); } e.target.value = ""; }} />
             </div>
             <div className="btnrow">
               <button className="primary" disabled={!idle || busy || !os.bootable} onClick={() => setDlg("try")}>Try slot {S(other)}</button>
               <button disabled={!idle || busy || !os.bootable || !os.proven} onClick={() => setDlg("switch")}>Start from slot {S(other)}</button>
             </div>
             {os.bootable && !os.proven && <p className="dim">Slot {S(other)} hasn't been tried and kept yet, so it can only be tried.</p>}
-            <p className="dim"><b>Try</b> restarts into slot {S(other)} once; turning the controller off and on comes back to slot {S(cur)}. <b>Start from</b> makes slot {S(other)} the one that starts normally.</p>
+            <p className="dim"><b>Try</b> restarts into slot {S(other)} once; turning the controller off and on comes back to slot {S(cur)}. <b>Start from</b> makes slot {S(other)} the one that starts normally. A <b>patch</b> changes only the files in it.</p>
+            <div className="abusb">
+              <div className="abhead"><b>USB stick</b><button disabled={looking} onClick={loadUsb}>{looking ? "Looking…" : "Look on the USB stick"}</button></div>
+              {usbErr ? <p className="err">{usbErr}</p> : usb === null ? null : usb.length === 0 ? <p className="dim">No OS or patch files on a USB stick. Put them in the top folder of the stick.</p> : (
+                <ul className="abfiles">{usb.map((f) => (
+                  <li key={f.path}>
+                    <span><b>{f.name}</b><br /><small className="dim">{f.kind === "patch" ? "Patch" : "Whole system"}{f.label ? ` · ${f.label}` : ""}{f.version ? ` · v${f.version}` : ""} · {size(f.size)}</small></span>
+                    <button disabled={!idle || running || sending !== null || (f.kind === "patch" && !os.bootable)} onClick={() => { setUsbPick(f); setDlg("usb"); }}>{f.kind === "patch" ? `Patch slot ${S(other)}` : `Write into slot ${S(other)}`}</button>
+                  </li>))}
+                </ul>)}
+            </div>
           </>}
           {busyNote}
         </Group>
@@ -174,6 +198,19 @@ export function SdCard({ state }) {
           <label className="stack">SHA-256 checksum (optional)<input value={sha} onChange={(e) => setSha(e.target.value)} placeholder="64 hex digits, from the release page" /><small>With a checksum the file is checked before anything is written.</small></label>
         </Modal>
       )}
+      {dlg === "patch" && (
+        <Modal title={`Patch slot ${S(other)}?`} onClose={() => setDlg(null)} actions={<><button onClick={() => setDlg(null)}>Cancel</button><button className="primary" onClick={sendFile}>Patch</button></>}>
+          <p>The files in <em>{file?.name}</em> ({size(file?.size)}) are written over slot {S(other)} ({os.label || "system"}). Nothing else in it changes.</p>
+          <p>Slot {S(other)} then has to be tried again before it can be made the normal slot.</p>
+          <label className="stack">SHA-256 checksum (optional)<input value={sha} onChange={(e) => setSha(e.target.value)} placeholder="64 hex digits, from the release page" /><small>With a checksum the file is checked before anything is written.</small></label>
+        </Modal>
+      )}
+      {dlg === "usb" && usbPick && <Confirm title={usbPick.kind === "patch" ? `Patch slot ${S(other)}?` : `Write into slot ${S(other)}?`} confirmLabel={usbPick.kind === "patch" ? "Patch" : "Write"} danger={usbPick.kind !== "patch" && os.bootable} onCancel={() => setDlg(null)}
+        onConfirm={() => act({ action: usbPick.kind === "patch" ? "patch_file" : "write_file", path: usbPick.path })}>
+        {usbPick.kind === "patch"
+          ? <><p>The files in <em>{usbPick.name}</em> from the USB stick are written over slot {S(other)}. Nothing else in it changes.</p><p>Slot {S(other)} then has to be tried again before it can be made the normal slot.</p></>
+          : <p><em>{usbPick.name}</em> from the USB stick is written into slot {S(other)}. This controller's settings, calibration, probe reference, hostname and network settings are copied across with it.{os.bootable ? ` What is in slot ${S(other)} now (${os.label || "a system"}) is erased.` : ""}</p>}
+        <p>The stick isn't changed. Leave it in until this finishes.</p></Confirm>}
       {dlg === "try" && <Confirm title={`Try slot ${S(other)}?`} confirmLabel="Restart and try" onCancel={() => setDlg(null)} onConfirm={() => { setRestarting(`Restarting into slot ${S(other)}. Reconnect in about a minute.`); act({ action: "try" }); }}>
         <p>The controller restarts into slot {S(other)} ({os.label || "system"}). Check it over, then come back here to keep it.</p>
         <p>To go back, restart or turn the controller off and on: it starts slot {S(cur)} again.</p></Confirm>}
