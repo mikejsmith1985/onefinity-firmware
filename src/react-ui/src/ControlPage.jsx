@@ -1,6 +1,7 @@
 import { traceTap } from "./clientlog.js";
 import ProbeSetup from "./ProbeSetup.jsx";
 import Squareness from "./Squareness.jsx";
+import SquareMachine from "./SquareMachine.jsx";
 import ProbeTuning from "./ProbeTuning.jsx";
 import React, { useEffect, useState } from "react";
 import { loadPath, api } from "./controller.js";
@@ -30,6 +31,9 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
   // 1.38.0: Probe setup checklist; hidden while the tool it opened is up, back when that closes
   const setupOn = !!useUi(state, "probe-setup").v;
   const setSetup = (on) => (on ? uiSet("probe-setup", { on: true }) : uiClose("probe-setup"));
+  // 1.53.0: Square the machine; like Probe setup, hidden while the Squareness check it opens is up
+  const squaringOn = !!useUi(state, "squaring").v;
+  const setSquaring = (on) => (on ? uiSet("squaring", { on: true }) : uiClose("squaring"));
   const probe = toolUi?.kind || null, openId = toolUi?.id || null;
   const setProbe = (k, extra) => (k
     ? uiOpen("tool", { kind: k, id: `${Date.now()}-${ME}`, ...(extra || {}) })
@@ -106,8 +110,15 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
       )}
       {setupOn && !probe && !homeFirst && (
         <ProbeSetup state={state} onClose={() => setSetup(false)}
-          onOpen={(o) => { const { kind, ...extra } = o; if (homed) setProbe(kind, extra); else { setHomeErr(""); setHomeFirst(kind); } }}
+          onOpen={(o) => { const { kind, ...extra } = o;
+            // squaring starts with loose feet: it must not ask to home first
+            if (kind === "squaring") { setSetup(false); setSquaring(true); return; }
+            if (homed) setProbe(kind, extra); else { setHomeErr(""); setHomeFirst(kind); } }}
           onTab={(tab) => { setSetup(false); window.dispatchEvent(new CustomEvent("next-work-tab", { detail: tab })); }} />
+      )}
+      {squaringOn && !probe && !homeFirst && !setupOn && (
+        <SquareMachine state={state} send={send} metric={metric} onClose={() => setSquaring(false)}
+          onOpen={(o) => { if (homed) setProbe(o.kind); else { setHomeErr(""); setHomeFirst(o.kind); } }} />
       )}
       {probe === "setter" && cfg.config && (
         <ToolSetter openId={openId} config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />

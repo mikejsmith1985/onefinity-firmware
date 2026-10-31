@@ -5,6 +5,7 @@ import { getSetter } from "./ToolSetter.jsx";
 import { loadBedcam } from "./BedCam.jsx";
 import { REF_FORMAT, refStatus } from "./setter.js";
 import { savePendingTune } from "./ProbeTuning.jsx";
+import { squaringStatus } from "./SquareMachine.jsx";
 
 // Probe setup (1.38.0): the one-off steps for the 3D probe, tool setter and bed
 // camera, in order, with what's done ticked. Each step opens the screen that
@@ -13,7 +14,7 @@ import { savePendingTune } from "./ProbeTuning.jsx";
 // swap to the cutter, Tool setter -> Measure tool.
 
 export async function setupStatus(state) {
-  const [prefs, setter, bc] = await Promise.all([getPrefs().catch(() => ({})), getSetter().catch(() => ({})), loadBedcam().catch(() => ({}))]);
+  const [prefs, setter, bc, sqm] = await Promise.all([getPrefs().catch(() => ({})), getSetter().catch(() => ({})), loadBedcam().catch(() => ({})), squaringStatus().catch(() => null)]);
   const m = prefs.measure || {};
   const located = setter && Number.isFinite(setter.x);
   return [
@@ -35,6 +36,10 @@ export async function setupStatus(state) {
       what: "With a 1-2-3 block on the bed, the probe touches its four sides and works out how square X is to Y. Run it 3 times; the average is saved.",
       detail: prefs.square?.time ? `${Math.abs(prefs.square.drift400).toFixed(2)} mm over 400 mm, ${new Date(prefs.square.time).toLocaleDateString()}.` : null,
       open: { kind: "square" }, button: "Check squareness", optional: "block" },
+    { id: "squaring", done: !!sqm?.finished || (Number.isFinite(prefs.square?.drift400) && Math.abs(prefs.square.drift400) <= 0.1 && !(sqm?.step && sqm.step !== "start" && !sqm.finished)), title: "Square the machine",
+      what: "When the check above says out of square: a guided walk through squaring the frame (feet) and seating the gantry against the front feet, then the check again. Doesn't home until the feet are tight.",
+      detail: sqm?.finished ? `Done ${new Date(sqm.finished).toLocaleDateString()}${Number.isFinite(sqm.result) ? `: ${Math.abs(sqm.result).toFixed(2)} mm over 400 mm` : ""}.` : sqm?.step && sqm.step !== "start" ? "Started: carries on where it was." : null,
+      open: { kind: "squaring" }, button: sqm?.step && sqm.step !== "start" && !sqm.finished ? "Carry on" : "Square the machine", optional: "fix" },
     { id: "camera", done: !!(bc.cal && bc.base), title: "Calibrate the bed camera",
       what: "Probe back in, bed clear. On the Camera tab, press Calibrate: the machine touches the bed at 6 spots by itself, finds the probe's light, and takes the empty-bed picture.",
       detail: bc.cal ? `Calibrated ${new Date(bc.cal.time).toLocaleDateString()}${bc.base ? ", empty-bed picture taken" : ", empty-bed picture still needed"}.` : null,
@@ -58,7 +63,7 @@ export default function ProbeSetup({ state, onOpen, onTab, onClose }) {
           <li key={s.id} className={s.done ? "done" : s === next ? "next" : ""}>
             <span className="mark" aria-label={s.done ? "done" : "not done"}>{s.done ? "✓" : i + 1}</span>
             <div>
-              <b>{s.title}</b>{s.optional ? <span className="dim">{s.optional === "block" ? " (if you have a 1-2-3 block)" : " (if you have a bed camera)"}</span> : null}
+              <b>{s.title}</b>{s.optional ? <span className="dim">{s.optional === "block" ? " (if you have a 1-2-3 block)" : s.optional === "fix" ? " (when it's out of square)" : " (if you have a bed camera)"}</span> : null}
               {s.done && s.detail ? <p className="dim">{s.detail}</p> : <p>{s.what}</p>}
               {(s === next || s.done || s.optional) && <button className={s === next ? "primary" : "quiet"}
                 onClick={() => (s.tab ? onTab(s.tab) : onOpen(s.open))}>{s.done ? "Do it again" : s.button}</button>}
