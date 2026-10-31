@@ -783,10 +783,11 @@ def cmd_bundle(out, label):
         'os': os_name(ROOT), 'made': now()}))
     run('tar', '-cf', out, '-C', stage, 'ab-bundle.json')
     names = sorted(n for n in os.listdir(src) if is_slot_file(n))
-    run('tar', '-rf', out, '-C', src, '--transform', r's,^,boot/,', *names)
+    run('tar', '-rf', out, '-C', src, '--transform', r's,^,boot/,S', *names)
     cmd = ['tar', '-rf', out, '-C', ROOT, '--one-file-system',
            '--numeric-owner', '--xattrs', '--xattrs-include=*',
-           '--transform', r's,^\.,root,']
+           # S: names only, never symlink targets ("../x" stays "../x")
+           '--transform', r's,^\.,root,S']
     for e in EXCLUDES: cmd += ['--exclude', e]
     run(*(cmd + ['.']), ok = (0, 1))
     shutil.rmtree(stage)

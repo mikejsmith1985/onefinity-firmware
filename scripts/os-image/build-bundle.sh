@@ -81,12 +81,17 @@ echo "== Writing $OUT"
 rm -f "$OUT"
 tar -C $S -cf "$OUT" ab-bundle.json
 tar -C $S -rf "$OUT" --owner=0 --group=0 boot
+# The transform's S flag renames entries only, never symlink targets.  /dev
+# is made at boot (devtmpfs), and the 2017 system's tar can't recreate
+# /etc/mtab's absolute link (found rehearsing the write): it goes in as a
+# relative link instead
 tar -C $W/r -rf "$OUT" --numeric-owner --xattrs --xattrs-include='*' \
-    --transform 's,^\.,root,' .
-if [ -n "$EXTRA" ]; then
-    tar -C $S/extra -rf "$OUT" --numeric-owner --transform 's,^\.,root,' \
-        ./etc/NetworkManager/system-connections/onefinity-wifi.nmconnection
-fi
+    --exclude='./dev/*' --exclude=./etc/mtab --transform 's,^\.,root,S' .
+mkdir -p $S/extra/etc
+ln -sfn ../proc/self/mounts $S/extra/etc/mtab
+X=./etc/mtab
+[ -n "$EXTRA" ] && X="$X ./etc/NetworkManager/system-connections/onefinity-wifi.nmconnection"
+tar -C $S/extra -rf "$OUT" --numeric-owner --transform 's,^\.,root,S' $X
 rm -rf $S
 
 echo "== Checks"
@@ -100,6 +105,9 @@ chk "root: tty1 login, trial check" "grep -q 'root/etc/systemd/system/getty.targ
 chk "root: Wi-Fi radio on" "tar -xOf '$OUT' root/var/lib/NetworkManager/NetworkManager.state | grep -q '^WirelessEnabled=true'"
 chk "root: NetworkManager keyfile only" "tar -xOf '$OUT' root/etc/NetworkManager/conf.d/99-onefinity.conf | grep -q '^plugins=keyfile'"
 chk "root: touch turned with the screen" "tar -xOf '$OUT' root/usr/share/X11/xorg.conf.d/40-libinput.conf | grep -q 'TransformationMatrix.*-1 0 1 0 -1 1 0 0 1'"
+chk "symlink targets untouched (none start with root.)" "! grep -q -- '-> root\\.' $LIST"
+chk "relative links kept (var/log/README -> ../..)" "grep -q 'root/var/log/README -> \\.\\./' $LIST"
+chk "etc/mtab relative" "grep -q 'root/etc/mtab -> \\.\\./proc/self/mounts' $LIST"
 chk "root: ab-card checks the network" "tar -xOf '$OUT' root/opt/bbctrl/venv/bin/ab-card | grep -q \"h\\['network'\\]\""
 [ -z "$EXTRA" ] || chk "root: Wi-Fi connection, private" "grep -q -- '-rw------- 0/0 .* root/etc/NetworkManager/system-connections/onefinity-wifi.nmconnection$' $LIST"
 [ $fail = 0 ] || { echo "CHECKS FAILED"; exit 1; }
