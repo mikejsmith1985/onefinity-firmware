@@ -224,11 +224,12 @@ if rotated:
     t = re.sub(r'(\n)(\s+)(MatchIsTouchscreen.*?\n)(.*?EndSection)',
                r'\1\2\3\2Option "TransformationMatrix" "-1 0 1 0 -1 1 0 0 1"\1\4',
                t, flags = re.S)
-open(p, 'w').write(t)
+with open(p, 'w') as f: f.write(t)
+with open(p) as f: done = f.read().count('"TransformationMatrix" "-1 0 1 0 -1 1 0 0 1"')
+if done != (1 if rotated else 0):
+    raise SystemExit('touch transform: %d lines in %s' % (done, p))
 print('touch turned 180' if rotated else 'touch not turned')
 PY
-grep -q 'TransformationMatrix "-1 0 1 0 -1 1 0 0 1"' /usr/share/X11/xorg.conf.d/40-libinput.conf ||
-    { echo "touch transform missing"; exit 1; }
 step "Logs kept across restarts, hardware watchdog, A/B trial check"
 mkdir -p /etc/systemd/journald.conf.d /etc/systemd/system.conf.d /var/log/journal
 install -m 644 $F/journald-onefinity.conf /etc/systemd/journald.conf.d/99-onefinity.conf
