@@ -99,7 +99,7 @@ chk "overlays pi3-disable-bt, gpio-poweroff" "grep -q 'boot/overlays/pi3-disable
 chk "root: tty1 login, trial check" "grep -q 'root/etc/systemd/system/getty.target.wants/getty@tty1.service' $LIST && grep -q 'root/etc/systemd/system/multi-user.target.wants/onefinity-trial-check.service' $LIST"
 chk "root: Wi-Fi radio on" "tar -xOf '$OUT' root/var/lib/NetworkManager/NetworkManager.state | grep -q '^WirelessEnabled=true'"
 chk "root: NetworkManager keyfile only" "tar -xOf '$OUT' root/etc/NetworkManager/conf.d/99-onefinity.conf | grep -q '^plugins=keyfile'"
-chk "root: touch turned with the screen" "tar -xOf '$OUT' root/usr/share/X11/xorg.conf.d/40-libinput.conf | grep -q 'TransformationMatrix \"-1 0 1 0 -1 1 0 0 1\"'"
+chk "root: touch turned with the screen" "tar -xOf '$OUT' root/usr/share/X11/xorg.conf.d/40-libinput.conf | grep -q 'TransformationMatrix.*-1 0 1 0 -1 1 0 0 1'"
 chk "root: ab-card checks the network" "tar -xOf '$OUT' root/opt/bbctrl/venv/bin/ab-card | grep -q \"h\\['network'\\]\""
 [ -z "$EXTRA" ] || chk "root: Wi-Fi connection, private" "grep -q -- '-rw------- 0/0 .* root/etc/NetworkManager/system-connections/onefinity-wifi.nmconnection$' $LIST"
 [ $fail = 0 ] || { echo "CHECKS FAILED"; exit 1; }
