@@ -81,17 +81,16 @@ echo "== Writing $OUT"
 rm -f "$OUT"
 tar -C $S -cf "$OUT" ab-bundle.json
 tar -C $S -rf "$OUT" --owner=0 --group=0 boot
-# The transform's S flag renames entries only, never symlink targets.  /dev
-# is made at boot (devtmpfs), and the 2017 system's tar can't recreate
-# /etc/mtab's absolute link (found rehearsing the write): it goes in as a
-# relative link instead
+# The transform's S flag renames entries only, never symlink targets.  Left
+# out: /dev (made at boot, devtmpfs) and /etc/mtab (made at boot by
+# systemd-tmpfiles, debian.conf "L+ /etc/mtab"); the 2017 system's tar can't
+# recreate either link (found rehearsing the write on a copy of the card)
 tar -C $W/r -rf "$OUT" --numeric-owner --xattrs --xattrs-include='*' \
     --exclude='./dev/*' --exclude=./etc/mtab --transform 's,^\.,root,S' .
-mkdir -p $S/extra/etc
-ln -sfn ../proc/self/mounts $S/extra/etc/mtab
-X=./etc/mtab
-[ -n "$EXTRA" ] && X="$X ./etc/NetworkManager/system-connections/onefinity-wifi.nmconnection"
-tar -C $S/extra -rf "$OUT" --numeric-owner --transform 's,^\.,root,S' $X
+if [ -n "$EXTRA" ]; then
+    tar -C $S/extra -rf "$OUT" --numeric-owner --transform 's,^\.,root,S' \
+        ./etc/NetworkManager/system-connections/onefinity-wifi.nmconnection
+fi
 rm -rf $S
 
 echo "== Checks"
@@ -107,7 +106,8 @@ chk "root: NetworkManager keyfile only" "tar -xOf '$OUT' root/etc/NetworkManager
 chk "root: touch turned with the screen" "tar -xOf '$OUT' root/usr/share/X11/xorg.conf.d/40-libinput.conf | grep -q 'TransformationMatrix.*-1 0 1 0 -1 1 0 0 1'"
 chk "symlink targets untouched (none start with root.)" "! grep -q -- '-> root\\.' $LIST"
 chk "relative links kept (var/log/README -> ../..)" "grep -q 'root/var/log/README -> \\.\\./' $LIST"
-chk "etc/mtab relative" "grep -q 'root/etc/mtab -> \\.\\./proc/self/mounts' $LIST"
+chk "no /etc/mtab or /dev entries (made at boot)" "! grep -q -E ' root/(etc/mtab|dev/.+)' $LIST"
+chk "systemd makes /etc/mtab at boot" "tar -xOf '$OUT' root/usr/lib/tmpfiles.d/debian.conf | grep -q '/etc/mtab'"
 chk "root: ab-card checks the network" "tar -xOf '$OUT' root/opt/bbctrl/venv/bin/ab-card | grep -q \"h\\['network'\\]\""
 [ -z "$EXTRA" ] || chk "root: Wi-Fi connection, private" "grep -q -- '-rw------- 0/0 .* root/etc/NetworkManager/system-connections/onefinity-wifi.nmconnection$' $LIST"
 [ $fail = 0 ] || { echo "CHECKS FAILED"; exit 1; }
