@@ -6,6 +6,12 @@ BOOT=/boot/firmware
 # Raspberry Pi OS keeps Wi-Fi blocked until a country is set (cmdline.txt
 # has cfg80211.ieee80211_regdom=US); make sure it isn't blocked
 rfkill unblock wifi 2>/dev/null || true
+# ... and NetworkManager's own Wi-Fi switch (it runs after this)
+S=/var/lib/NetworkManager/NetworkManager.state
+if [ -e $S ] && grep -q '^WirelessEnabled=false' $S; then
+    sed -i 's/^WirelessEnabled=false/WirelessEnabled=true/' $S
+    echo "onefinity-import: NetworkManager Wi-Fi switched on"
+fi
 
 # A login password for bbmc, if one was put on the boot partition (one line).
 # Used once, then the file is deleted.

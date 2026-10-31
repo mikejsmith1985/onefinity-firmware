@@ -55,3 +55,21 @@ browser not up within 7 minutes.  Keep makes B the normal slot.
   `src/py/tests/test_ab_card.py`: the A/B tool on loop devices.
 - build-ab.sh checks its own result (boot files per slot, root partitions,
   config.txt/tryboot.txt, slot A file for file).
+
+## OS file for the A/B card (1.51.1): a new slot B over the network
+
+    build-bundle.sh <onefinity-os-X.img> <out.tar> [old card .img]
+
+Makes the file `ab-card write` takes (plain tar: ab-bundle.json, boot/,
+root/), so the running slot writes a new system into the other slot without
+the card coming out (Admin > SD card, or `PUT /api/abcard/upload?sha256=...`
+with the file as the body).  With the old card's image it adds that card's
+Wi-Fi network, so the file holds the Wi-Fi key: keep it on the PC.
+
+Found on the machine Oct 31 (fixed in 1.51.1): Raspberry Pi OS also ships
+NetworkManager's Wi-Fi switched off (`WirelessEnabled=false`) until its wizard
+sets a country, and the touch must be turned with the screen
+(`TransformationMatrix "-1 0 1 0 -1 1 0 0 1"` in 40-libinput.conf, as the 2017
+card and the screen-rotation setting have it).  trial-check also needs a
+network address, and records diagnostics in ab-trial.json, which the normal
+slot shows (`trial_ended` in `/api/abcard`).

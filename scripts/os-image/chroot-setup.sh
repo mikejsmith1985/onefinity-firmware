@@ -197,6 +197,38 @@ systemctl enable getty@tty1.service
 printf 'allowed_users=console\nneeds_root_rights=yes\n' > /etc/X11/Xwrapper.config
 [ -e /etc/systemd/system/getty.target.wants/getty@tty1.service ] ||
     { echo "getty@tty1 not enabled"; exit 1; }
+step "Wi-Fi radio on; network settings only from NetworkManager's own files"
+# Raspberry Pi OS ships NetworkManager with Wi-Fi switched off
+# (WirelessEnabled=false) until its first-start wizard sets a country; that
+# wizard is masked here (found on the machine Oct 31 with the 1.51.0 image)
+mkdir -p /var/lib/NetworkManager
+printf '[main]\nNetworkingEnabled=true\nWirelessEnabled=true\nWWANEnabled=true\n' \
+    > /var/lib/NetworkManager/NetworkManager.state
+# The A/B tool carries the old system's /etc/network/interfaces.d into this
+# slot; with the ifupdown plugin NetworkManager would leave wlan0 alone
+mkdir -p /etc/NetworkManager/conf.d
+printf '[main]\nplugins=keyfile\n' > /etc/NetworkManager/conf.d/99-onefinity.conf
+step "Touch turned with the screen"
+# The screen is mounted upside down (display_rotate=2): the touch is turned
+# the same way, as the 2017 card does (and as Admin > screen rotation
+# writes it, Web.py ScreenRotationHandler)
+python3 - <<'PY'
+import re
+cfg = open('/boot/firmware/config.txt').read()
+rotated = re.search(r'^\s*display_rotate\s*=\s*2', cfg, re.M) is not None
+p = '/usr/share/X11/xorg.conf.d/40-libinput.conf'
+t = open(p).read()
+t = re.sub(r'(\n)(\s+)(MatchIsTouchscreen.*?\n)(\s+Option\s+"TransformationMatrix".*?\n)(.*?EndSection)',
+           r'\1\2\3\5', t, flags = re.S)
+if rotated:
+    t = re.sub(r'(\n)(\s+)(MatchIsTouchscreen.*?\n)(.*?EndSection)',
+               r'\1\2\3\2Option "TransformationMatrix" "-1 0 1 0 -1 1 0 0 1"\1\4',
+               t, flags = re.S)
+open(p, 'w').write(t)
+print('touch turned 180' if rotated else 'touch not turned')
+PY
+grep -q 'TransformationMatrix "-1 0 1 0 -1 1 0 0 1"' /usr/share/X11/xorg.conf.d/40-libinput.conf ||
+    { echo "touch transform missing"; exit 1; }
 step "Logs kept across restarts, hardware watchdog, A/B trial check"
 mkdir -p /etc/systemd/journald.conf.d /etc/systemd/system.conf.d /var/log/journal
 install -m 644 $F/journald-onefinity.conf /etc/systemd/journald.conf.d/99-onefinity.conf

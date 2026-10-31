@@ -49,7 +49,8 @@ DOWN = 'http://127.0.0.1:9/api/config/load'
 os.environ.update(AB_BOOT = boot, AB_ROOT_DEV = os.path.join(work, 'disk3'),
                   AB_NO_REMOUNT = '1', AB_NO_REBOOT = '1', AB_PROC = proc,
                   AB_TRIAL_WAIT = '3', AB_TRIAL_STEADY = '1',
-                  AB_TRIAL_POLL = '0.2', AB_RUN_DIR = os.path.join(work, 'run'))
+                  AB_TRIAL_POLL = '0.2', AB_RUN_DIR = os.path.join(work, 'run'),
+                  AB_FAKE_ADDR = '192.168.4.120', AB_NO_DIAG = '1')
 
 loader = importlib.machinery.SourceFileLoader('abcard', TOOL)
 ab = types.ModuleType(loader.name); loader.exec_module(ab)
@@ -68,8 +69,9 @@ set_procs('systemd', 'Xorg', 'chromium', 'python3')
 os.environ['AB_HEALTH_URL'] = UP
 check('working: stays', ab.cmd_trial_check() is True)
 t = trial()
-check('working: recorded', t and t['check']['result'] == 'working' and
-      t['slot'] == 'b', t)
+check('working: recorded with the address', t and
+      t['check']['result'] == 'working' and t['slot'] == 'b' and
+      t['check']['addresses'] == ['192.168.4.120'], t)
 
 # The browser never starts
 os.unlink(os.path.join(boot, 'ab-trial.json'))
@@ -86,6 +88,25 @@ check('no screen, no web: goes back', ab.cmd_trial_check() is False)
 t = trial()
 check('no screen, no web: recorded',
       t['check']['not_working'] == ['browser', 'screen', 'web'], t)
+
+# Everything up but no network address (1.51.1: the Oct 31 trial on the
+# machine had no Wi-Fi and stayed on trial)
+set_procs('Xorg', 'chromium')
+os.environ['AB_HEALTH_URL'] = UP
+os.environ['AB_FAKE_ADDR'] = ''
+check('no network: goes back', ab.cmd_trial_check() is False)
+t = trial()
+check('no network: recorded', t['check']['not_working'] == ['network'] and
+      t['check']['addresses'] == [], t)
+
+# The diagnostics are recorded for the normal slot to show
+del os.environ['AB_NO_DIAG']
+check('no network: diagnostics', ab.cmd_trial_check() is False and
+      set(trial()['check']['diag']) >= {'network', 'radio', 'addresses',
+                                         'NetworkManager', 'screen'},
+      sorted(trial()['check'].get('diag', {})))
+os.environ['AB_NO_DIAG'] = '1'
+os.environ['AB_FAKE_ADDR'] = '192.168.4.120'
 
 # The trial file made by "try" keeps its fields
 with open(os.path.join(boot, 'ab-trial.json'), 'w') as f:

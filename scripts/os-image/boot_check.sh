@@ -44,6 +44,8 @@ O=/root/bootcheck.txt
   echo "== tty1 login (must be enabled)"; systemctl is-enabled getty@tty1
   echo "== A/B trial check"; systemctl is-enabled onefinity-trial-check
   echo "== journal kept"; systemd-analyze cat-config systemd/journald.conf | grep -i '^Storage'
+  echo "== Wi-Fi radio (must be true)"; grep WirelessEnabled /var/lib/NetworkManager/NetworkManager.state
+  echo "== touch turned with the screen"; grep TransformationMatrix /usr/share/X11/xorg.conf.d/40-libinput.conf
   echo "== web"
   /opt/bbctrl/venv/bin/python - <<'PY'
 import urllib.request, json

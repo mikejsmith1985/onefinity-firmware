@@ -828,22 +828,63 @@ def web_up():
         return r.getcode() == 200
     except Exception: return False
 
+def addresses():
+    "This system's network addresses (IPv4, not loopback)"
+    if 'AB_FAKE_ADDR' in os.environ:
+        return os.environ['AB_FAKE_ADDR'].split()
+    try:
+        out = subprocess.check_output(['ip', '-4', '-o', 'addr', 'show',
+                                       'scope', 'global'],
+                                      stderr = subprocess.DEVNULL).decode()
+    except Exception: return []
+    return re.findall(r'\binet (\d+\.\d+\.\d+\.\d+)', out)
+
 def health():
     h = screen_and_browser()
     h['web'] = web_up()
+    # A slot that isn't on the network can only be fixed by taking the card
+    # out, so it doesn't count as working (1.51.1)
+    h['network'] = bool(addresses())
     return h
 
-def record_trial(boot, s, result, h):
+# What a slot that went back records for the normal slot to show (slot A's
+# Admin > SD card page and /api/abcard return ab-trial.json as trial_ended)
+DIAG = [
+    ('network', ['nmcli', '-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device']),
+    ('radio', ['nmcli', '-t', 'radio']),
+    ('rfkill', ['rfkill', '-n', '-o', 'TYPE,SOFT,HARD']),
+    ('addresses', ['ip', '-4', '-o', 'addr', 'show']),
+    ('NetworkManager', ['journalctl', '-b', '-u', 'NetworkManager', '-n', '20',
+                        '--no-pager', '-o', 'cat']),
+    ('screen', ['tail', '-n', '15', '/home/pi/xsession.log']),
+    ('failed', ['systemctl', '--failed', '--no-legend', '--plain']),
+]
+
+def diagnostics():
+    out = {}
+    for name, cmd in DIAG:
+        try:
+            r = subprocess.run(cmd, stdout = subprocess.PIPE,
+                               stderr = subprocess.STDOUT, timeout = 15)
+            text = r.stdout.decode(errors = 'replace')
+        except Exception as e: text = 'could not run: %s' % e
+        out[name] = text[-1500:]
+    return out
+
+def record_trial(boot, s, result, h, diag = None):
     path = os.path.join(boot, 'ab-trial.json')
     t = json.loads(read(path, '{}') or '{}')
     t.setdefault('slot', s['running'])
     t['check'] = {'result': result, 'time': now(),
-                  'not_working': sorted(k for k, v in h.items() if not v)}
+                  'not_working': sorted(k for k, v in h.items() if not v),
+                  'addresses': addresses()}
+    if diag is not None: t['check']['diag'] = diag
     with BootRW(boot): write(path, json.dumps(t))
 
 def cmd_trial_check(wait = None, steady = None):
     """Run at every start.  On a slot on trial (started once with "try"):
-    the controller's web server, X and the browser must all be up and stay
+    the controller's web server, X, the browser and a network address must
+    all be up and stay
     up for `steady` seconds within `wait` seconds of the check starting.  If
     they aren't, restart: the try flag is one-shot, so the normal slot starts
     and shows that the trial ended.  Nothing is done on a slot that isn't on
@@ -861,7 +902,7 @@ def cmd_trial_check(wait = None, steady = None):
         if all(h.values()):
             good_since = good_since or time.time()
             if time.time() - good_since >= steady:
-                print('trial-check: working (web server, screen, browser)')
+                print('trial-check: working (web server, screen, browser, network)')
                 record_trial(s['boot'], s, 'working', h)
                 return True
         else: good_since = None
@@ -869,7 +910,8 @@ def cmd_trial_check(wait = None, steady = None):
     bad = sorted(k for k, v in h.items() if not v)
     print('trial-check: not working after %d s (%s); going back to slot %s' %
           (wait, ', '.join(bad) or 'not steady', s['default'].upper()))
-    record_trial(s['boot'], s, 'not working', h)
+    record_trial(s['boot'], s, 'not working', h,
+                 {} if os.environ.get('AB_NO_DIAG') else diagnostics())
     os.sync()
     if not os.environ.get('AB_NO_REBOOT'):
         subprocess.call(['systemctl', 'reboot'])
