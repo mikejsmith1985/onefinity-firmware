@@ -4,7 +4,7 @@ import { api } from "./controller.js";
 import { getPrefs, setPrefs } from "./checkpoint.js";
 import { squareText } from "./square.js";
 import { StepRail, StepBody, Outcome } from "./steps.jsx";
-import { FEET, frameSkew, frameFix, verdict } from "./squaring.js";
+import { FEET, frameSkew, frameFix, verdict, probeNext, moveParts, MOVE_DIRS, CHECK_NOISE } from "./squaring.js";
 
 // Square the machine (1.53.0): a guided walk through squaring the frame and the gantry, ending
 // with the Squareness check. Nothing here homes or probes by itself except the Home button on the
@@ -19,13 +19,19 @@ import { FEET, frameSkew, frameFix, verdict } from "./squaring.js";
 //    the front feet, so the feet have to be a rectangle first.
 //  - How far to move the feet is worked out from the diagonals you type in (squaring.js).
 //
+// 1.54.0: after a check that isn't square, "Correct it with the feet" turns the reading into a
+// foot move and runs a round: move the feet, reseat the gantry, home, check. The first round moves
+// half the amount either way; each later round learns which way and how much from the one before
+// (squaring.js probeNext). Rounds are kept in prefs.squaring.rounds.
+//
 // Progress is kept in prefs.squaring, so the wizard picks up where it was after the controller has
 // been turned off (one of the steps asks for that).
 
 const ALL = ["start", "loosen", "spacing", "diag", "flat", "bolts", "seat", "tighten", "home", "check"];
 const GANTRY = ["start", "bolts", "seat", "tighten", "home", "check"];
+const ROUND = ["bolts", "fix", "seat", "tighten", "home", "check"];   // gantry loose before the feet move
 const LABELS = { start: "Start", loosen: "Loosen feet", spacing: "Rail spacing", diag: "Diagonals", flat: "Feet down",
-  bolts: "Gantry bolts", seat: "Seat gantry", tighten: "Tighten", home: "Home", check: "Check" };
+  fix: "Move the feet", bolts: "Gantry bolts", seat: "Seat gantry", tighten: "Tighten", home: "Home", check: "Check" };
 
 export async function squaringStatus() {
   const p = await getPrefs().catch(() => ({}));
@@ -47,8 +53,17 @@ export default function SquareMachine({ state, send, metric, onOpen, onClose }) 
     api.get("abcard").then(setAb).catch(() => setAb(null));
   }, []);
 
+  // 1.54.0: a round's check result goes into the round once it's there
+  useEffect(() => {
+    if (!d || !d.fixing || !square || !(d.rounds || []).length) return;
+    const rs = d.rounds, last = rs[rs.length - 1];
+    if (Number.isFinite(last.after) || !(square.time > last.time)) return;
+    const nd = { ...d, fixing: false, rounds: [...rs.slice(0, -1), { ...last, after: square.drift400, afterTime: square.time }] };
+    setD(nd); setPrefs({ squaring: nd }).catch(() => {});
+  }, [d, square]);
+
   if (!d) return null;
-  const steps = d.mode === "gantry" ? GANTRY : ALL;
+  const steps = d.fixing ? ROUND : d.mode === "gantry" ? GANTRY : ALL;
   const step = steps.includes(d.step) ? d.step : "start";
   const save = (patch) => { const nd = { ...d, ...patch, saved: Date.now() }; setD(nd); setPrefs({ squaring: nd }).catch(() => {}); };
   const go = (s) => save({ step: s });
@@ -68,7 +83,21 @@ export default function SquareMachine({ state, send, metric, onOpen, onClose }) 
   const setRead = (k, v) => save({ read: { ...r, [k]: v } });
   const lockedName = (FEET.find((f) => f[0] === d.locked) || FEET[0])[1].toLowerCase();
 
-  const after = square && d.started && square.time > d.started ? square : null;
+  const rounds = d.rounds || [];
+  // While a round waits for its check, the older result doesn't count
+  const waiting = d.fixing && rounds.length ? rounds[rounds.length - 1].time : 0;
+  const after = square && d.started && square.time > d.started && square.time > waiting ? square : null;
+  const parts = moveParts(d.locked);
+  const fp = d.fixPlan || { method: "rail", dim: { rail: r.w || "", pair: "" }, dir: null };
+  const dimTxt = (fp.dim || {})[fp.method] ?? "";
+  const dimMm = (() => { const v = parseFloat(String(dimTxt).replace(",", ".")); return Number.isFinite(v) ? v * u : NaN; })();
+  const plan = after ? probeNext(after.drift400, rounds, fp.method, dimMm) : null;
+  const planDir = plan ? (plan.learned ? plan.dir : fp.dir) : null;
+  const setPlan = (patch) => save({ fixPlan: { ...fp, ...patch } });
+  const moveWords = (rd) => `${rd.method === "rail" ? `the ${moveParts(d.locked).rail} rail` : `the ${moveParts(d.locked).pair} pair`} ${mm(rd.by)} ${MOVE_DIRS[rd.method][rd.dir]}`;
+  const startRound = () => save({ fixing: true, step: "bolts", seated: false, homedOk: false,
+    rounds: [...rounds, { method: fp.method, dim: dimMm, by: plan.by, dir: planDir, before: after.drift400, time: Date.now() }] });
+  const cur = d.fixing ? rounds[rounds.length - 1] : null;
   const finish = () => { setPrefs({ squaring: { ...d, finished: Date.now(), result: after ? after.drift400 : null } }).catch(() => {}); onClose && onClose(); };
 
   const jogPad = (yOnly, seat) => (
@@ -88,7 +117,9 @@ export default function SquareMachine({ state, send, metric, onOpen, onClose }) 
     <Modal title="Square the machine" wide onClose={onClose}
       actions={<>
         <button onClick={onClose}>{step === "check" && after ? "Close" : "Close (keeps your place)"}</button>
-        {step !== "start" && <button onClick={back}>Back</button>}
+        {step !== "start" && !(d.fixing && step === "bolts") && <button onClick={back}>Back</button>}
+        {d.fixing && (step === "bolts" || step === "fix") && <button onClick={() => save({ fixing: false, step: "check", rounds: rounds.slice(0, -1) })}>Cancel this round</button>}
+        {step === "fix" && <button className="primary" data-autofocus disabled={!d.movedOk} onClick={() => save({ step: "seat", movedOk: false })}>Next</button>}
         {step === "start" && <button className="primary" data-autofocus onClick={() => save({ step: steps[1], started: Date.now(), before: square ? { drift400: square.drift400, time: square.time } : null })}>Start</button>}
         {["loosen", "spacing", "flat", "bolts", "tighten"].includes(step) && <button className="primary" data-autofocus disabled={(step === "loosen" && !d.locked) || (step === "flat" && !d.flatOk)} onClick={next}>Next</button>}
         {step === "diag" && <button className="primary" disabled={!skew} onClick={() => { save({ history: [...(d.history || []), { ...r, per400: skew.per400, time: Date.now() }].slice(-10) }); }}>Save this reading</button>}
@@ -154,6 +185,19 @@ export default function SquareMachine({ state, send, metric, onOpen, onClose }) 
             <label className="check"><input type="checkbox" checked={!!d.flatOk} onChange={(e) => save({ flatOk: e.target.checked })} /> The feet are flat and tight, and the diagonals still match</label>
           </StepBody>}
 
+          {step === "fix" && cur && <StepBody title={`Round ${rounds.length}: move the feet`}>
+            <p className="big">Move {moveWords(cur)}.</p>
+            <ol>
+              {cur.method === "rail"
+                ? <li>Loosen both {parts.rail} feet. Slide the whole {parts.rail} rail along its length, both feet by the same amount, so its spacing from the other rail stays the same.</li>
+                : <li>Loosen both {parts.pair} feet. Move them sideways together, by the same amount, so the rail spacing stays the same.</li>}
+              <li>To move a foot a measured amount: clamp a scrap block against it on the side it's moving toward, with a feeler gauge (or the calipers' depth rod set to the amount) between them. Take the gauge out and tap the foot over until it touches the block. Moving away from the block: put the gauge in and push the foot back against it.</li>
+              <li>Feet flat, then tighten them a little at a time. Keep the blocks in place while tightening, so the feet can't creep.</li>
+            </ol>
+            <p className="dim">The gantry bolts are loose, so the gantry doesn't fight the move. It's seated against the front feet again next.</p>
+            <label className="check"><input type="checkbox" checked={!!d.movedOk} onChange={(e) => save({ movedOk: e.target.checked })} /> Moved and tightened</label>
+          </StepBody>}
+
           {step === "bolts" && <StepBody title="Loosen the gantry bolts">
             <ol>
               <li><b>Turn the controller off.</b></li>
@@ -192,12 +236,33 @@ export default function SquareMachine({ state, send, metric, onOpen, onClose }) 
             {after && <Outcome ok={verdict(after.drift400) !== "out"} title={`Now ${squareText(after, mm).head}`}>
               <p><b>{squareText(after, mm).verdict}</b></p>
               {d.before && <p>Before: {mm(Math.abs(d.before.drift400))} over 400 mm.</p>}
-              {verdict(after.drift400) === "out" && <p>Still out. If the frame was measured square, seat the gantry again; if not, go back over the frame.</p>}
+              {rounds.filter((x) => Number.isFinite(x.after)).length > 0 && <div className="dim">{rounds.filter((x) => Number.isFinite(x.after)).map((x, i) =>
+                <p key={i}>Round {i + 1}: moved {moveWords(x)}: {mm(Math.abs(x.before))} → {mm(Math.abs(x.after))} over 400 mm.</p>)}</div>}
               <div className="radios inline">
                 <button onClick={() => save({ step: "bolts", seated: false, homedOk: false })}>Seat the gantry again</button>
                 {d.mode !== "gantry" && <button onClick={() => save({ step: "spacing", flatOk: false, seated: false, homedOk: false })}>Go back over the frame</button>}
               </div>
             </Outcome>}
+            {after && verdict(after.drift400) !== "square" && <div className="why">
+              <b>Correct it with the feet</b>
+              <p>The probe reads far finer than a tape. Its result can be turned into a foot move: move the feet, reseat the gantry, home and check again. {d.locked ? `The ${(FEET.find((f) => f[0] === d.locked) || FEET[0])[1].toLowerCase()} foot stays where it is.` : ""}</p>
+              {!d.locked && <div className="radios inline">Which foot stays put? {FEET.map(([id, name]) => <label key={id}><input type="radio" name="smlock2" checked={d.locked === id} onChange={() => save({ locked: id })} /> {name}</label>)}</div>}
+              <div className="radios">
+                <label><input type="radio" name="smmeth" checked={fp.method === "rail"} onChange={() => setPlan({ method: "rail" })} /> Slide the {parts.rail} rail along its length (both {parts.rail} feet): the smaller move, and the machine stays lined up with the table</label>
+                <label><input type="radio" name="smmeth" checked={fp.method === "pair"} onChange={() => setPlan({ method: "pair" })} /> Move the {parts.pair} pair of feet sideways</label>
+              </div>
+              <div className="rform">
+                <label>{fp.method === "rail" ? "Rail spacing, centre to centre" : "Frame length, front feet to back feet"} ({unit}) <SharedText inputMode="decimal" value={dimTxt} onChange={(v) => setPlan({ dim: { ...(fp.dim || {}), [fp.method]: v } })} /></label>
+              </div>
+              {plan && (plan.learned
+                ? <p>Move <b>{fp.method === "rail" ? `the ${parts.rail} rail` : `the ${parts.pair} pair`} {mm(plan.by)} {MOVE_DIRS[fp.method][plan.dir]}</b>. Worked out from round {rounds.indexOf(plan.from) + 1}, where moving {mm(plan.from.by)} changed the reading by {mm(Math.abs(plan.from.after - plan.from.before))} over 400 mm.</p>
+                : <><p>Move <b>{mm(plan.by)}</b>: half of what the geometry gives ({mm(plan.geo)}), because which way is right isn't known yet. The next check shows it: if the error shrinks, that was the way; if it grows, the next round goes back the other way.</p>
+                  <div className="radios inline">Which way: {MOVE_DIRS[fp.method].map((w, i) => <label key={i}><input type="radio" name="smdir" checked={fp.dir === i} onChange={() => setPlan({ dir: i })} /> {w}</label>)}</div></>)}
+              {plan && plan.small && <p className="err">The last round changed the reading by less than the check repeats to ({mm(CHECK_NOISE)} over 400 mm), so it can't tell which way works. This round uses the geometry again; measure the move carefully.</p>}
+              {plan && plan.learned && plan.odd && <p className="err">This is far from what the geometry gives ({mm(plan.geo)}). A foot may have moved while tightening, or the check moved. Consider half of it.</p>}
+              {plan && plan.by < 0.02 && <p className="dim">The move is too small to make by hand.</p>}
+              <button className="primary" disabled={!plan || planDir === null || planDir === undefined || plan.by < 0.02} onClick={startRound}>Start round {rounds.length + 1}</button>
+            </div>}
           </StepBody>}
         </div>
       </div>

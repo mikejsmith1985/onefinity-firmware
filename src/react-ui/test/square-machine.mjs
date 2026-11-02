@@ -103,6 +103,54 @@ await p.getByRole("dialog", { name: "Check X/Y squareness" }).getByRole("button"
 check("back with the new result", await until(() => dlg().getByText("Now 0.06 mm over 400 mm").isVisible()) && await dlg().getByText("Before: 0.72 mm over 400 mm.").isVisible());
 check("verdict square", await dlg().getByText("Square: nothing to do.").isVisible());
 await shot("3-done");
+check("square: no correction offered", !(await dlg().getByText("Correct it with the feet").isVisible()));
+
+// 1.54.0: correct with the probe. A result that is out: the wizard turns it into a foot move.
+// As on the machine: Check squareness opens the check, a result is saved, the check closes
+const setSquare = async (drift400) => {
+  await dlg().getByRole("button", { name: "Check squareness" }).click();
+  const sq = p.getByRole("dialog", { name: "Check X/Y squareness" });
+  await until(() => sq.isVisible());
+  const q = await get("/api/next-store/prefs"); await put("/api/next-store/prefs", { ...q, square: { ...before, drift400, time: Date.now() } });
+  await sq.getByRole("button", { name: "Cancel" }).click();
+  await until(() => dlg().isVisible());
+};
+await setSquare(0.72);
+check("out: correction offered", await until(() => dlg().getByText("Correct it with the feet").isVisible()));
+check("rail slide named from the locked foot", await dlg().getByText(/Slide the left rail along its length/).isVisible());
+await fill("Rail spacing, centre to centre (mm)", 600);
+check("first round: half the geometric move, either way", await until(() => dlg().getByText(/Move 0\.54 mm: half of what the geometry gives \(1\.08 mm\)/).isVisible()));
+const startBtn = () => dlg().getByRole("button", { name: "Start round 1" });
+check("needs a direction first", await startBtn().isDisabled());
+await dlg().getByLabel("toward the back").check();
+await startBtn().click();
+check("a round starts with the gantry bolts loose", await until(() => dlg().getByText("Loosen the gantry bolts").isVisible()));
+await btn("Next").click();
+check("round step names the move", await until(() => dlg().getByText("Move the left rail 0.54 mm toward the back.").isVisible()));
+await shot("4-round");
+await dlg().getByLabel("Moved and tightened").check();
+await btn("Next").click();
+check("then the gantry is seated", await dlg().getByText("Seat both sides against the front feet").isVisible());
+await dlg().getByLabel("Both sides are against the front feet").check(); await btn("Next").click();
+await btn("Next").click();
+await dlg().getByLabel("Both Y sides stopped against their front feet").check(); await btn("Next").click();
+check("back at the check, old result not offered", await dlg().getByText("Check with the 1-2-3 block").isVisible() &&
+  !(await dlg().getByText("Correct it with the feet").isVisible()));
+// The machine: moving the left rail toward the front by 1 mm changes the reading by -0.66
+const k = -0.66, after1 = +(0.72 + k * -0.54).toFixed(4);
+await setSquare(after1);
+check("round recorded", await until(() => dlg().getByText(/Round 1: moved the left rail 0\.54 mm toward the back: 0\.72 mm → 1\.08 mm/).isVisible()));
+check("learned: the other way, the full amount", await until(() => dlg().getByText(/Move the left rail 1\.63 mm toward the front/).isVisible()), await dlg().locator(".why").last().innerText());
+await shot("5-learned");
+await dlg().getByRole("button", { name: "Start round 2" }).click();
+await btn("Next").click(); await dlg().getByLabel("Moved and tightened").check(); await btn("Next").click();
+await dlg().getByLabel("Both sides are against the front feet").check(); await btn("Next").click(); await btn("Next").click();
+await dlg().getByLabel("Both Y sides stopped against their front feet").check(); await btn("Next").click();
+await setSquare(+(after1 + k * 1.6309).toFixed(4));
+check("round 2 lands square", await until(() => dlg().getByText("Square: nothing to do.").isVisible()) &&
+  await dlg().getByText(/Round 2: moved the left rail 1\.63 mm toward the front/).isVisible());
+await setSquare(0.06);
+await until(() => dlg().getByText("Now 0.06 mm over 400 mm").isVisible());
 await btn("Finish").click();
 let fin = null; await until(async () => (fin = (await get("/api/next-store/prefs")).squaring) && fin.finished);
 check("finished recorded", fin && fin.finished && Math.abs(fin.result - 0.06) < 1e-9, JSON.stringify(fin && fin.result));

@@ -55,3 +55,43 @@ export function frameFix(skew, locked) {
   const move = front ? -skew.s : skew.s;      // + is to the right
   return { pair: front ? "back" : "front", dir: move >= 0 ? "right" : "left", by: Math.abs(move) };
 }
+
+// --- 1.54.0: correct with the probe -------------------------------------------------------------
+// After the gantry is seated and the Squareness check still reads an error e (mm over 400 mm,
+// signed as square.js reports it), the frame is out by the angle e/400. Two moves take it out:
+//   "rail": slide the rail on the side away from the locked foot along its length by e/400 * W
+//           (W: rail spacing). The rail's own spacing doesn't change.
+//   "pair": move the pair of feet at the far end from the locked foot sideways by e/400 * L
+//           (L: the frame length between the feet).
+// Which way is right depends on how the check's sign maps onto this frame, which isn't known, so
+// the first round moves half the amount either way, and every round after that learns the answer
+// from what the last one did: k = (after - before) / signed move, next move = -e / k.
+
+// The check repeats to about this (mm over 400 mm, the spread of 3 runs on the machine, Oct 30)
+export const CHECK_NOISE = 0.1;
+
+// Direction 0 / 1 for each kind of move, in words
+export const MOVE_DIRS = { rail: ["toward the front", "toward the back"], pair: ["to the right", "to the left"] };
+
+export function moveParts(locked) {
+  const l = locked || "fr";
+  return { rail: l[1] === "r" ? "left" : "right", pair: l[0] === "f" ? "back" : "front" };
+}
+
+// e: the error now (signed); rounds: [{method, by, dir, before, after}] (after set once checked);
+// dim: W or L in mm. Returns {by, dir (0/1, or null when either way), learned, k, from, small}.
+export function probeNext(e, rounds, method, dim) {
+  if (!Number.isFinite(e) || !(dim > 0)) return null;
+  const same = (rounds || []).filter((r) => r.method === method && r.by > 0 && Number.isFinite(r.after) && Number.isFinite(r.before));
+  const usable = same.filter((r) => Math.abs(r.after - r.before) >= CHECK_NOISE);
+  const last = usable[usable.length - 1];
+  const geo = (Math.abs(e) / 400) * dim;
+  const small = same.length > 0 && same[same.length - 1] !== last;
+  if (last) {
+    const k = (last.after - last.before) / (last.by * (last.dir === 1 ? -1 : 1));
+    const m = -e / k;
+    return { by: Math.abs(m), dir: m >= 0 ? 0 : 1, learned: true, k, from: last, small, geo,
+             odd: Math.abs(m) > 3 * geo || Math.abs(m) < geo / 3 };
+  }
+  return { by: geo / 2, dir: null, learned: false, small, geo };
+}
