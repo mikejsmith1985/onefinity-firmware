@@ -46,7 +46,7 @@ async def main():
     http('/api/next-store/prefs', prefs)
     async with async_playwright() as p:
         b = await p.chromium.launch(**({'executable_path': CHROME, 'args': ['--no-sandbox']} if CHROME else {}))
-        page = await b.new_page(viewport={'width': 1440, 'height': 1000})
+        page = await b.new_page(viewport={'width': 1278, 'height': 718})   # the controller's own screen (client log, Nov 2)
         errs = []; page.on('pageerror', lambda e: errs.append(str(e)))
         await page.goto(BASE + '/'); await page.wait_for_timeout(1500)
         for t in ('Cancel', 'Not now', 'Later'):
@@ -69,8 +69,16 @@ async def main():
         n0 = len(http('/api/mdis'))
         want = 400 * math.tan(math.radians(SKEW))
         for i in range(3):
-            await page.click('.modal button:has-text("Start measuring")')
-            t = await wait_text(page, '.modal', r'over 400 mm|Stopped', 20)
+            # 1.54.2: only the first run is positioned by hand; Measure again goes back over the block
+            if i == 0:
+                await page.click('.modal button:has-text("Start measuring")'); await page.wait_for_timeout(300)
+                await shot(page, 'sq-run.png')
+                bb = await page.locator('.modal button:has-text("Stop")').bounding_box()
+                check('while measuring, Stop is on the screen (1.54.2: the move list pushed it off)', bb is not None and bb['y'] + bb['height'] <= 718, bb)
+            t = await wait_text(page, '.modal', r'over 400 mm' + (r'.*average of %d' % (i + 1) if i else '') + r'|Stopped', 20)
+            if i == 1:
+                prog2 = http('/api/mdis')[-1]
+                check('Measure again: runs at once, starting back over the block the first run measured', 'Back over the block' in prog2 and 'G38.3 Z' in prog2 and 'X%s' % '' in prog2, prog2[:400])
             if i == 0:
                 prog = http('/api/mdis')[n0]
                 check('sends the squareness program: block size and ball in it, no else', 'block 76.2 x 50.8, ball 1.95' in prog and not re.search(r'^o\d+ else', prog, re.M), prog[:120])

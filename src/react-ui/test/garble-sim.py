@@ -42,6 +42,18 @@ for mode, what in (('quote', 'a quote lost before "xc" (as on the machine)'), ('
     warn = [m for l, n, m in h.logs.lines if l == 'warning' and 'data:' in m]
     check('  and says so in the log (%s)' % ('repaired' if mode == 'quote' else 'skipped'), warn and warn[-1].endswith('(repaired)' if mode == 'quote' else '(skipped)'), warn[-1:])
 
+# 1.54.2: the holding report arrives whole but without its state counter (and so without the
+# pause reason), as on the machine Nov 2: '{"v":0,"xx":"HOLDING"}'
+h, r, err = run('noxc')
+check('no counter: the report went out without "xc"', len(h.avr.garbled) == 1 and '"xc"' not in h.avr.garbled[0], h.avr.garbled)
+check('  the program still finishes (1.54.1 waited for ever)', err is None and r.get('ok') == 1, err)
+same = all(abs(r.get(k, 1e9) - v) < 1e-6 for k, v in r0.items() if isinstance(v, float))
+check('  with the same touches as a clean run', same)
+check('  it asked the board for everything again', h.avr.dumps >= 1, h.avr.dumps)
+warn = [m for l, n, m in h.logs.lines if l == 'warning' and 'without its counter' in m]
+check('  and says so in the log', len(warn) == 1, warn)
+check('clean run: no extra requests', h0.avr.dumps == 0 and not [m for l, n, m in h0.logs.lines if 'without its counter' in m], h0.avr.dumps)
+
 # The repair itself
 C = sys.modules['bbctrl.Comm']
 check('repair: the machine\'s line reads back right', C.repair_line('{"pw":0,"zp":-70.635,"v":0,"xx":"HOLDING",xc":455}') == {'pw': 0, 'zp': -70.635, 'v': 0, 'xx': 'HOLDING', 'xc': 455})

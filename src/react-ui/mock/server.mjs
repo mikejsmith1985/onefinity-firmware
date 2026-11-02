@@ -247,7 +247,7 @@ function bedcamMdi(text) {
   }
   if (text.includes("(Squareness check")) {
     const [, a, b, ball] = /block (-?[\d.]+) x (-?[\d.]+), ball (-?[\d.]+)/.exec(text).map(Number);
-    runFake(() => ({ ofq_ok: 1, ofq_fail: 0, ofq_zt: -60, ...mockSquare(a, b, ball, state.xp, state.yp) }), 1500);
+    runFake(() => ({ ofq_ok: 1, ofq_fail: 0, ofq_zt: -60, ofq_cx: state.xp, ofq_cy: state.yp, ...mockSquare(a, b, ball, state.xp, state.yp) }), 1500);
     return true;
   }
   // 1.42.0: the homing correction: G28.3 sets the machine reading (the homing's error changes),

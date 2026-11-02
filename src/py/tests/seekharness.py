@@ -250,7 +250,13 @@ class FakeAVR:
             # serial link did ('quote': a quote lost before a key) or worse
             # ('cut': half the line lost)
             if self.garble and msg.get('xx') == 'HOLDING':
-                if self.garble == 'quote': text = text.replace('"xc"', 'xc"')
+                if self.garble == 'noxc':
+                    # 1.54.2: as on the machine Nov 2, '{"v":0,"xx":"HOLDING"}':
+                    # the state without its counter or pause reason
+                    text = json.dumps({k: v for k, v in msg.items()
+                                       if k not in ('xc', 'pr')},
+                                      separators = (',', ':'))
+                elif self.garble == 'quote': text = text.replace('"xc"', 'xc"')
                 else: text = text[:len(text) // 2]
                 self.garbled.append(text)
                 self.garble = None

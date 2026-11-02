@@ -204,7 +204,20 @@ class Comm(object):
 
 
     def _update_state(self, update):
+        # 1.54.2: the board reports a new state ("xx") together with its state
+        # counter ("xc"), and the controller only acts on a state change when
+        # the counter is there (Mach._update).  On the machine (Nov 2) the
+        # "xx":"HOLDING" after a probe touch came without it, so the touch was
+        # never resumed and the program waited for ever.  When the state
+        # changes without its counter, ask the board for every variable again
+        # ('D', as for a garbled line, 1.43.1): its answer carries the counter
+        # and the pause reason, and things carry on as normal.
+        before = self.ctrl.state.get('xx', '')
         self.ctrl.state.update(update)
+        if 'xx' in update and 'xc' not in update and update['xx'] != before:
+            self.log.warning('State %s reported without its counter, '
+                             'asking for every variable again', update['xx'])
+            self.queue_command(Cmd.DUMP)
 
         if 'xx' in update:        # State change
             self.ctrl.ready()     # We've received data from AVR

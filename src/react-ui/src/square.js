@@ -27,6 +27,7 @@ export const BLOCKS = [
 export const SQUARE_FAILS = {
   1: "The stylus touched something while moving at the travel height. Look for a clamp or something tall near the block, or start lower over the block.",
   2: "The stylus touched something while going down beside the block. Keep about 15 mm clear around it, and check the block size you picked (the 3 in side along X or Y).",
+  3: "The stylus touched something on its way back down to the block, before reaching it. Was the block moved? Use Position again and put the stylus over it by hand.",
 };
 
 const n = (v) => {
@@ -46,7 +47,8 @@ export function squarePoints(o) {
   ];
 }
 
-// o: {a, b: block size along X, Y; ball; clear, depth, margin, travel, fast, slow, top: machine Z to end at}
+// o: {a, b: block size along X, Y; ball; clear, depth, margin, travel, fast, slow, top: machine Z to end at;
+//     start (1.54.2, optional): {x, y, z} the middle and top of the block from the last run, machine mm}
 export function squareProgram(o) {
   const clear = o.clear ?? SQUARE_DEFAULTS.clear, depth = o.depth ?? SQUARE_DEFAULTS.depth;
   const m = o.margin ?? SQUARE_DEFAULTS.margin, travel = o.travel ?? SQUARE_DEFAULTS.travel;
@@ -56,10 +58,6 @@ export function squareProgram(o) {
   const L = [
     `(Squareness check, block ${n(o.a)} x ${n(o.b)}, ball ${n(o.ball)})`, "G21", "M5",
     "#<_ofq_ok> = 0", "#<_ofq_fail> = 0", STEP_RESET,
-    mark("Touch the block top"),
-    `G91 G38.2 Z-25 F${o.fast}`, "G91 G1 Z1", `G91 G38.2 Z-2 F${o.slow}`,
-    "#<_ofq_zt> = #5063", "#<_ofq_cx> = #5061", "#<_ofq_cy> = #5062",
-    `G91 G0 Z${n(clear)}`,
   ];
   // A guarded move: on contact, set the failure and stop doing anything else
   // (it backs off 2 mm, so the stylus isn't dragged along whatever it touched on the way up)
@@ -68,6 +66,22 @@ export function squareProgram(o) {
     return [`G91 G38.3 ${axis}${n(d)} F${feed}`, `o${id} if [#5070 EQ 1]`, `#<_ofq_fail> = ${code}`, `G91 G1 ${axis}${d > 0 ? -2 : 2} F${o.fast}`, `o${id} endif`];
   };
   const block = (lines) => { const id = oid++; L.push(`o${id} if [#<_ofq_fail> EQ 0]`, ...lines, `o${id} endif`); };
+  const touchTop = [
+    mark("Touch the block top"),
+    `G91 G38.2 Z-25 F${o.fast}`, "G91 G1 Z1", `G91 G38.2 Z-2 F${o.slow}`,
+    "#<_ofq_zt> = #5063", "#<_ofq_cx> = #5061", "#<_ofq_cy> = #5062",
+    `G91 G0 Z${n(clear)}`,
+  ];
+  // 1.54.2: a repeat run starts from the block the last run measured (o.start: its middle and top,
+  // machine mm): up to the travel height, over the middle, then a guarded move down to 5 mm above
+  // the top. Before, each run searched only 25 mm down from wherever the stylus was, and every run
+  // ends at the travel height, so "Measure again" from there touched nothing and stopped.
+  if (o.start) {
+    const above = o.start.z + 5, down = o.top - above;
+    L.push(mark("Back over the block"), "G90", `G53 G0 Z${n(o.top)}`, `G53 G0 X${n(o.start.x)} Y${n(o.start.y)}`);
+    if (down > 0) L.push(mark("Down to 5 mm above the block, guarded"), ...guarded("Z", -down, travel, 3));
+    block(touchTop);
+  } else L.push(...touchTop);
   let at = { x: 0, y: 0 };
   squarePoints(o).forEach((p, i) => {
     const dx = p.x - at.x, dy = p.y - at.y;

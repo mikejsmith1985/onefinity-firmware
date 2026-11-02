@@ -87,4 +87,33 @@ pts = block(CX, CY, A, B, 0, 0).pts; pts[2] = (pts[2][0], pts[2][1] + 0.3)   # b
 sim, r, _ = run(A, B, [BED, Prism(pts, BED_Z, BED_Z + 25.4)], (CX, CY, BED_Z + 31.4))
 res = js('squareResult', r, dict(a=A, b=B, ball=2.0))
 check('opposite sides not parallel (the block moved, or dirt): refused', 'error' in res and 'parallel' in res['error'], res.get('error'))
+# 7. 1.54.2: Measure again. Every run ends at the top of Z, and from there the first run's 25 mm
+# search can't reach the block (Nov 2 on the machine: it went 25 mm down and E-stopped). A repeat
+# run goes back over the block the last run measured, down to 5 mm above its top, guarded.
+def run2(obs, start_pos, prev):
+    prog = gen(dict(a=A, b=B, ball=2.0, top=TOP, fast=200, slow=25, travel=1000,
+                    start=dict(x=prev['ofq_cx'], y=prev['ofq_cy'], z=prev['ofq_zt'])), 'square.js', 'squareProgram')
+    sim = Sim(start_pos, 1.0, obs); sim.probe_frame = 'machine'
+    sim.run(prog)
+    return sim, dict(('ofq_' + k[5:], v) for k, v in sim.vars.items() if k.startswith('_ofq_')), prog
+blk = block(CX, CY, A, B, 1.5, 0.05)
+sim1, r1, _ = run(A, B, [BED, blk], (CX + 2, CY - 1, BED_Z + 31.4))
+res1 = js('squareResult', r1, dict(a=A, b=B, ball=2.0))
+check('first run: fine', 'error' not in res1, res1.get('error'))
+try:
+    run(A, B, [BED, blk], tuple(sim1.P)); old = 'no stop'
+except Exception as e: old = type(e).__name__
+check('  1.54.1 behaviour reproduced: the same program again from where it ended touches nothing', old != 'no stop', old)
+sim2, r2, prog2 = run2([BED, blk], tuple(sim1.P), r1)
+res2 = js('squareResult', r2, dict(a=A, b=B, ball=2.0))
+check('Measure again (back over the block): finishes', 'error' not in res2, res2.get('error'))
+check('  same result as the first run (within 0.004 deg)', 'error' not in res2 and abs(res2['deg'] - res1['deg']) < 0.004, (res1.get('deg'), res2.get('deg')))
+check('  touched the same top, from 5 mm above it', 'error' not in res2 and abs(r2['ofq_zt'] - r1['ofq_zt']) < 0.01, (r1.get('ofq_zt'), r2.get('ofq_zt')))
+sim3, r3, _ = run2([BED, blk], (CX + 120, CY + 80, BED_Z + 20), r1)
+check('  from somewhere else lower down: goes up first, then over, and still works', r3.get('ofq_ok') == 1, r3.get('ofq_fail'))
+tall = (CX - 10, CX + 10, CY - 10, CY + 10, BED_Z, BED_Z + 40)   # something taller now where the block was
+sim4, r4, _ = run2([BED, tall], tuple(sim1.P), r1)
+check('  something else where the block was: stops on the way down (3), nothing unguarded', r4.get('ofq_ok') == 0 and r4.get('ofq_fail') == 3, r4.get('ofq_fail'))
+check('  and says why', 'moved' in js('squareResult', r4, dict(a=A, b=B, ball=2.0)).get('error', ''))
+check('  first-run program unchanged (no start given)', 'Back over the block' not in gen(dict(a=A, b=B, ball=2.0, top=TOP, fast=200, slow=25, travel=1000), 'square.js', 'squareProgram'))
 print('ALL PASS' if ok else 'SOME FAILED'); sys.exit(0 if ok else 1)

@@ -24,6 +24,8 @@ export default function Squareness({ config, state, send, subscribe, metric, onC
   const [err, setErr] = useState(null);
   const [runAt, setRunAt] = useState(null);
   const [jogStep, setJogStep] = useState(10);
+  const [lastPos, setLastPos] = useState(null);  // 1.54.2: the block's middle and top from the last good run
+  const [runStart, setRunStart] = useState(null);
   const run = useProgramRunner(state, subscribe, send);
   useEffect(() => { getPrefs().then((p) => { setBall(Number.isFinite(p.measure?.ball) ? p.measure.ball : 2); setSaved(p.square || null); if (p.square?.block) setBlockId(p.square.block); }).catch(() => setBall(2)); }, []);
 
@@ -37,7 +39,7 @@ export default function Squareness({ config, state, send, subscribe, metric, onC
     const z = computeAxis(state, config, "z", true);
     return { a: blk[2], b: blk[3], ball, top: z.max - 1, fast: config.probe["probe-fast-seek"], slow: config.probe["probe-slow-seek"] };
   }, [config, ball, blockId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const moves = useMemo(() => { try { return opts ? programMoves(squareProgram(opts)) : []; } catch { return []; } }, [opts]);
+  const moves = useMemo(() => { try { return opts ? programMoves(squareProgram({ ...opts, start: runStart })) : []; } catch { return []; } }, [opts, runStart]);
   const runStep = useRunStep(state.of_step, step === "run" && runAt ? `square:${runAt}` : null);
 
   // The probe check moves on when the stylus is pushed (seen open first)
@@ -46,12 +48,15 @@ export default function Squareness({ config, state, send, subscribe, metric, onC
     if (!touched) { if (!seenOpen) setSeenOpen(true); } else if (seenOpen) setStep("place");
   }, [step, touched, seenOpen]);
 
-  const start = async () => {
-    setErr(null); setStep("run"); setRunAt(Date.now());
-    const r = await run(squareProgram(opts));
+  // again: start from the block the last run measured (1.54.2), no positioning by hand
+  const start = async (again) => {
+    const from = again && lastPos ? lastPos : null;
+    setErr(null); setRunStart(from); setStep("run"); setRunAt(Date.now());
+    const r = await run(squareProgram({ ...opts, start: from }));
     if (r.estop || r.notFound) { setErr(r.notFound ? "A touch found nothing, so the controller stopped with an E-stop. Check the block size you picked and that the stylus started over the middle of the block. Clear the E-stop and try again." : "Stopped by the E-stop."); setStep("done"); return; }
     const res = squareResult(r, opts);
     if (res.error) { setErr(res.error); setStep("done"); return; }
+    if ([r.ofq_cx, r.ofq_cy, r.ofq_zt].every(Number.isFinite)) setLastPos({ x: r.ofq_cx, y: r.ofq_cy, z: r.ofq_zt });
     setRuns((x) => [...x, res]); setStep("done");
   };
   const avg = runs.length ? squareAverage(runs) : null;
@@ -69,8 +74,9 @@ export default function Squareness({ config, state, send, subscribe, metric, onC
       actions={<>
         <button className={step === "run" ? "danger" : ""} onClick={close}>{step === "run" ? "Stop" : step === "done" ? "Close" : "Cancel"}</button>
         {step === "setup" && <button className="primary" data-autofocus disabled={!opts} onClick={() => { setSeenOpen(false); setStep("check"); }}>Next</button>}
-        {step === "place" && <button className="primary" data-autofocus disabled={touched || !idle || !opts} onClick={start}>Start measuring</button>}
-        {step === "done" && <button onClick={() => { setErr(null); setStep("place"); }}>Measure again</button>}
+        {step === "place" && <button className="primary" data-autofocus disabled={touched || !idle || !opts} onClick={() => start(false)}>Start measuring</button>}
+        {step === "done" && lastPos && <button onClick={() => { setErr(null); setStep("place"); }}>Position again</button>}
+        {step === "done" && <button className={avg && runs.length < 3 ? "primary" : ""} disabled={!!lastPos && !idle} onClick={() => { setErr(null); if (lastPos) start(true); else setStep("place"); }}>Measure again</button>}
         {step === "done" && avg && runs.length >= 3 && <button className="primary" onClick={save} disabled={saved && saved.time && saved.runs === runs.length && Math.abs(saved.eps - avg.eps) < 1e-12}>Save the result</button>}
       </>}>
       <div className="probe">
@@ -98,7 +104,7 @@ export default function Squareness({ config, state, send, subscribe, metric, onC
                 <span /><button onClick={() => jog("Y", -1)}>Y− (front)</button><span /><button onClick={() => jog("Z", -1)}>Z− (down)</button>
               </div>
             </div>
-            <div className="why"><b>What happens next</b><p>The stylus touches the top, then drops beside each of the four sides and touches it at two points, 4 mm below the top. Any unexpected touch stops it. About a minute. Run it 3 times without moving the block; the average is what counts.</p></div>
+            <div className="why"><b>What happens next</b><p>The stylus touches the top, then drops beside each of the four sides and touches it at two points, 4 mm below the top. Any unexpected touch stops it. About a minute. Run it 3 times without moving the block; the average is what counts. After the first run, Measure again goes back over the block by itself.</p></div>
           </StepBody>}
           {step === "run" && <StepBody title="Measuring">
             <RunProgress title="Squareness" moves={moves} step={runStep} started={state.cycle !== "idle"} />
@@ -110,7 +116,7 @@ export default function Squareness({ config, state, send, subscribe, metric, onC
                 <p>{words.detail}</p>
                 {runs.length > 1 && <p>Runs: {runs.map((x) => (x.drift400 / u).toFixed(metric ? 2 : 4)).join(", ")} {unit} over 400 mm; spread {mm(avg.spread)}.</p>}
                 {avg.spread > 0.15 && <p className="err">The runs differ by more than {mm(0.15)}. Check the block hasn't moved and nothing is on it, then measure again.</p>}
-                {runs.length < 3 && <p>Measure again {3 - runs.length === 1 ? "once more" : "twice more"} without moving the block. One run can be off by up to about {mm(0.1)} over 400 mm; the average of 3 is the result to go by.</p>}
+                {runs.length < 3 && <p>Measure again {3 - runs.length === 1 ? "once more" : "twice more"} without moving the block{lastPos ? " (it goes back over the block by itself)" : ""}. One run can be off by up to about {mm(0.1)} over 400 mm; the average of 3 is the result to go by.</p>}
                 {last && <p className="dim">Block measured {mm(last.w)} × {mm(last.l)} (true {mm(blk[2])} × {mm(blk[3])}), turned {last.turn.toFixed(2)}° on the bed.</p>}
               </Outcome>}
           </StepBody>}
