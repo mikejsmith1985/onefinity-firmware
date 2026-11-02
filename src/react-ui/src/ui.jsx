@@ -180,3 +180,35 @@ export function Group({ title, children, note }) {
     </section>
   );
 }
+
+// 1.54.1: number entry with its own keypad. On the controller's touch screen the typing keyboard
+// is a Chrome extension (see vkbd.js), and a system without it has no way to type. The keypad
+// shows under the box while it has focus; its keys don't take the focus away, so a real keyboard
+// keeps working too. value/onChange are text, as typed.
+export function NumPad({ value, onChange, onDone }) {
+  const v = String(value ?? "");
+  const press = (k) => {
+    if (k === "⌫") onChange(v.slice(0, -1));
+    else if (k === "Clear") onChange("");
+    else if (k === ".") { if (!v.includes(".")) onChange((v === "" ? "0" : v) + "."); }
+    else onChange(v + k);
+  };
+  const key = (k, cls) => <button key={k} type="button" className={cls || ""} onMouseDown={(e) => e.preventDefault()} onClick={() => press(k)} aria-label={k === "⌫" ? "Delete" : k}>{k}</button>;
+  return (
+    <div className="numpad" role="group" aria-label="Keypad" onMouseDown={(e) => e.preventDefault()}>
+      {["7", "8", "9"].map((k) => key(k))}{key("⌫", "act")}
+      {["4", "5", "6"].map((k) => key(k))}{key("Clear", "act")}
+      {["1", "2", "3"].map((k) => key(k))}
+      <button type="button" className="primary done" onMouseDown={(e) => e.preventDefault()} onClick={onDone}>Done</button>
+      {key("0", "zero")}{key(".")}
+    </div>
+  );
+}
+
+export function PadInput({ value, onChange, open, onOpen, onClose, ...rest }) {
+  const ref = useRef(null);
+  return <input ref={ref} type="text" inputMode="decimal" autoComplete="off" spellCheck="false" {...rest}
+    className={`${rest.className || ""}${open ? " padding" : ""}`} value={value ?? ""}
+    onFocus={() => onOpen && onOpen()} onChange={(e) => onChange(e.target.value)}
+    onKeyUp={(e) => { if (isEnter(e)) { ref.current && ref.current.blur(); onClose && onClose(); } }} />;
+}

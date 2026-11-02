@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { Modal, SharedText } from "./ui.jsx";
+import React, { useEffect, useRef, useState } from "react";
+import { Modal, PadInput, NumPad } from "./ui.jsx";
 import { api } from "./controller.js";
 import { getPrefs, setPrefs } from "./checkpoint.js";
 import { squareText } from "./square.js";
@@ -44,6 +44,8 @@ export default function SquareMachine({ state, send, metric, onOpen, onClose }) 
   const [ab, setAb] = useState(null);         // /api/abcard, for the restart warning
   const [jogStep, setJogStep] = useState(10);
   const [homeErr, setHomeErr] = useState("");
+  const [pad, setPad] = useState(null);        // 1.54.1: which number box shows its keypad
+  const saveTimer = useRef(null);
   const u = metric ? 1 : 25.4, unit = metric ? "mm" : "in";
   const mm = (v) => `${(v / u).toFixed(metric ? 2 : 3)} ${unit}`;
 
@@ -65,7 +67,12 @@ export default function SquareMachine({ state, send, metric, onOpen, onClose }) 
   if (!d) return null;
   const steps = d.fixing ? ROUND : d.mode === "gantry" ? GANTRY : ALL;
   const step = steps.includes(d.step) ? d.step : "start";
-  const save = (patch) => { const nd = { ...d, ...patch, saved: Date.now() }; setD(nd); setPrefs({ squaring: nd }).catch(() => {}); };
+  // Typing saves on every key; the controller copy is written once the keys stop (1.54.1)
+  const save = (patch) => {
+    const nd = { ...d, ...patch, saved: Date.now() }; setD(nd);
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => setPrefs({ squaring: nd }).catch(() => {}), "read" in patch || "fixPlan" in patch ? 400 : 0);
+  };
   const go = (s) => save({ step: s });
   const next = () => go(steps[Math.min(steps.indexOf(step) + 1, steps.length - 1)]);
   const back = () => go(steps[Math.max(steps.indexOf(step) - 1, 0)]);
@@ -160,11 +167,16 @@ export default function SquareMachine({ state, send, metric, onOpen, onClose }) 
           {step === "diag" && <StepBody title="Measure the diagonals">
             <p>Measure where the rail shafts go into the feet, the same point on every foot. A bar gauge (or two clamped rulers) repeats better than a tape. All in {unit}.</p>
             <div className="rform">
-              <label>Rail spacing, centre to centre <SharedText inputMode="decimal" value={r.w || ""} onChange={(v) => setRead("w", v)} /></label>
-              <label>Diagonal front-left → back-right <SharedText inputMode="decimal" value={r.da || ""} onChange={(v) => setRead("da", v)} /></label>
-              <label>Diagonal front-right → back-left <SharedText inputMode="decimal" value={r.db || ""} onChange={(v) => setRead("db", v)} /></label>
-              <label>Spacing at the front (optional) <SharedText inputMode="decimal" value={r.front || ""} onChange={(v) => setRead("front", v)} /></label>
-              <label>Spacing at the back (optional) <SharedText inputMode="decimal" value={r.back || ""} onChange={(v) => setRead("back", v)} /></label>
+              <label>Rail spacing, centre to centre <PadInput aria-label="Rail spacing, centre to centre" value={r.w || ""} onChange={(v) => setRead("w", v)} open={pad === "w"} onOpen={() => setPad("w")} onClose={() => setPad(null)} /></label>
+              {pad === "w" && <NumPad value={r.w || ""} onChange={(v) => setRead("w", v)} onDone={() => { setPad(null); document.activeElement && document.activeElement.blur && document.activeElement.blur(); }} />}
+              <label>Diagonal front-left → back-right <PadInput aria-label="Diagonal front-left → back-right" value={r.da || ""} onChange={(v) => setRead("da", v)} open={pad === "da"} onOpen={() => setPad("da")} onClose={() => setPad(null)} /></label>
+              {pad === "da" && <NumPad value={r.da || ""} onChange={(v) => setRead("da", v)} onDone={() => { setPad(null); document.activeElement && document.activeElement.blur && document.activeElement.blur(); }} />}
+              <label>Diagonal front-right → back-left <PadInput aria-label="Diagonal front-right → back-left" value={r.db || ""} onChange={(v) => setRead("db", v)} open={pad === "db"} onOpen={() => setPad("db")} onClose={() => setPad(null)} /></label>
+              {pad === "db" && <NumPad value={r.db || ""} onChange={(v) => setRead("db", v)} onDone={() => { setPad(null); document.activeElement && document.activeElement.blur && document.activeElement.blur(); }} />}
+              <label>Spacing at the front (optional) <PadInput aria-label="Spacing at the front (optional)" value={r.front || ""} onChange={(v) => setRead("front", v)} open={pad === "front"} onOpen={() => setPad("front")} onClose={() => setPad(null)} /></label>
+              {pad === "front" && <NumPad value={r.front || ""} onChange={(v) => setRead("front", v)} onDone={() => { setPad(null); document.activeElement && document.activeElement.blur && document.activeElement.blur(); }} />}
+              <label>Spacing at the back (optional) <PadInput aria-label="Spacing at the back (optional)" value={r.back || ""} onChange={(v) => setRead("back", v)} open={pad === "back"} onOpen={() => setPad("back")} onClose={() => setPad(null)} /></label>
+              {pad === "back" && <NumPad value={r.back || ""} onChange={(v) => setRead("back", v)} onDone={() => { setPad(null); document.activeElement && document.activeElement.blur && document.activeElement.blur(); }} />}
             </div>
             {skew && <Outcome ok={verdict(skew.per400) === "square"} title={`${mm(Math.abs(skew.per400))} over 400 mm from the frame`}>
               {verdict(skew.per400) === "square" ? <p><b>The diagonals match closely enough.</b> Go on to putting the feet down.</p>
@@ -252,7 +264,8 @@ export default function SquareMachine({ state, send, metric, onOpen, onClose }) 
                 <label><input type="radio" name="smmeth" checked={fp.method === "pair"} onChange={() => setPlan({ method: "pair" })} /> Move the {parts.pair} pair of feet sideways</label>
               </div>
               <div className="rform">
-                <label>{fp.method === "rail" ? "Rail spacing, centre to centre" : "Frame length, front feet to back feet"} ({unit}) <SharedText inputMode="decimal" value={dimTxt} onChange={(v) => setPlan({ dim: { ...(fp.dim || {}), [fp.method]: v } })} /></label>
+                <label>{fp.method === "rail" ? "Rail spacing, centre to centre" : "Frame length, front feet to back feet"} ({unit}) <PadInput value={dimTxt} onChange={(v) => setPlan({ dim: { ...(fp.dim || {}), [fp.method]: v } })} open={pad === "dim"} onOpen={() => setPad("dim")} onClose={() => setPad(null)} /></label>
+                {pad === "dim" && <NumPad value={dimTxt} onChange={(v) => setPlan({ dim: { ...(fp.dim || {}), [fp.method]: v } })} onDone={() => { setPad(null); document.activeElement && document.activeElement.blur && document.activeElement.blur(); }} />}
               </div>
               {plan && (plan.learned
                 ? <p>Move <b>{fp.method === "rail" ? `the ${parts.rail} rail` : `the ${parts.pair} pair`} {mm(plan.by)} {MOVE_DIRS[fp.method][plan.dir]}</b>. Worked out from round {rounds.indexOf(plan.from) + 1}, where moving {mm(plan.from.by)} changed the reading by {mm(Math.abs(plan.from.after - plan.from.before))} over 400 mm.</p>

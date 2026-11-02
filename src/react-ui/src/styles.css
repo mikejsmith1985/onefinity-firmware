@@ -532,3 +532,10 @@ ol.abwhat { margin: 6px 0; padding-left: 22px; } ol.abwhat li { margin: 3px 0; }
 .tune-runs span { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line, #444); opacity: 0.55; font-variant-numeric: tabular-nums; }
 .tune-runs span.done { opacity: 1; background: rgba(60, 170, 100, 0.25); }
 .tune-runs span.on { opacity: 1; border-color: var(--accent, #4a8dff); background: rgba(74, 141, 255, 0.2); }
+/* 1.54.1: keypad under a number box (PadInput / NumPad in ui.jsx) */
+.numpad { display: grid; grid-template-columns: repeat(4, 64px); grid-auto-rows: 52px; gap: 6px; justify-content: end; margin: 2px 0 6px; }
+.numpad button { min-height: 0; padding: 0; font-size: 22px; }
+.numpad button.act { font-size: 15px; }
+.numpad .done { grid-column: 4; grid-row: 3 / span 2; font-size: 16px; }
+.numpad .zero { grid-column: 1 / span 2; }
+input.padding { outline: 2px solid var(--blue); }

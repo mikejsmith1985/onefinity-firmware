@@ -55,6 +55,13 @@ await btn("Next").click();
 // Diagonals for a frame 700 wide, 1100 long, back pair 1.3 mm to the right
 const W = 700, L = 1100, s = 1.3;
 const fill = async (label, v) => { const f = dlg().getByLabel(label); await f.fill(String(v)); await f.blur(); };
+// 1.54.1: the touch screen may have no typing keyboard: the box brings up its own keypad
+await dlg().getByLabel("Rail spacing, centre to centre").click();
+check("keypad shows under the box", await until(() => dlg().getByRole("group", { name: "Keypad" }).isVisible())); await shot("2a-pad");
+for (const k of ["7", "0", "1", "Delete", "0"]) await dlg().getByRole("group", { name: "Keypad" }).getByRole("button", { name: k, exact: true }).click();
+check("keypad typed 700", await dlg().getByLabel("Rail spacing, centre to centre").inputValue() === "700");
+await dlg().getByRole("group", { name: "Keypad" }).getByRole("button", { name: "Done" }).click();
+check("Done closes it", await until(async () => !(await dlg().getByRole("group", { name: "Keypad" }).isVisible())));
 await fill("Rail spacing, centre to centre", W);
 await fill("Diagonal front-left → back-right", Math.hypot(W + s, L).toFixed(3));
 await fill("Diagonal front-right → back-left", Math.hypot(W - s, L).toFixed(3));
