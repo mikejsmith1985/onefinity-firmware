@@ -133,5 +133,7 @@ export function homeCheckText(r, fmt) {
   if (r.adopted) return "Homing check: the tool setter's centre was found and saved as the reference. From now on each homing is checked against this one and corrected to match.";
   if (!r.fixed) return `Homing check: spot on (${fmt(r.dist)} from the reference homing).`;
   const t = `Homing check: homing was ${fmt(r.dist)} off (X ${fmt(r.d.x)}, Y ${fmt(r.d.y)}). Corrected: machine positions now match the reference homing, and the work zero didn't move.`;
-  return r.big ? `${t} That's more than homing should vary: something is dragging (a dust or mister hose) or slipping.` : t;
+  // 1.55.1: after the frame was squared (Nov 3: 8.6 mm), a big offset is the machine having moved
+  // on the bed, which the correction is right to take out; say that first
+  return r.big ? `${t} That's more than homing should vary. If the feet or the gantry were moved since the reference was taken (squaring the machine), that's expected: the machine moved on the bed and this correction lines it up with the bed again. If not, something is dragging (a dust or mister hose) or slipping.` : t;
 }

@@ -248,7 +248,12 @@ class Mach(Comm):
                 self.mlog.error(motor_fault_error % motor)
 
         # Get state
-        state_changed = 'xc' in update
+        # 1.55.1: a new state also counts when the board reports it without
+        # its state counter.  On the machine (Nov 2 and 3) the HOLDING after a
+        # probe touch came alone ('{"v":0,"xx":"HOLDING"}') and the counter
+        # didn't change at all, so the touch was never resumed.  The listener
+        # only gets values that changed, so 'xx' here is a real change.
+        state_changed = 'xc' in update or 'xx' in update
         state = self._get_state()
 
         # Handle EStop

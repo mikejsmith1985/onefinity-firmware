@@ -184,6 +184,9 @@ for name, upd in (('an earlier id', dict(id = 9, xp = CX + 205)),
     st.vars.update(xx = 'READY'); st.update(upd)
     check('no restart with ' + name, g.syncing is not None and h.planner.seek_line is not None)
 h.planner.seek_line['error'] = False
+# (1.55.1: the harness passes on only changed values, as the controller's State does; the loop
+# above already left these values in place, so start from before the move ended)
+st.vars.update(id = 9, xp = CX + 200, xx = 'RUNNING')
 st.update(dict(id = 10, xp = CX + 205, xx = 'READY'))
 check('restart once READY at the id and target', g.syncing is None and h.planner.seek_line is None)
 h.planner.seek_line = {'id': 3, 'error': False, 'target': {'x': CX + 205}}

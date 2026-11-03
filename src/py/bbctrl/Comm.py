@@ -204,14 +204,13 @@ class Comm(object):
 
 
     def _update_state(self, update):
-        # 1.54.2: the board reports a new state ("xx") together with its state
-        # counter ("xc"), and the controller only acts on a state change when
-        # the counter is there (Mach._update).  On the machine (Nov 2) the
-        # "xx":"HOLDING" after a probe touch came without it, so the touch was
-        # never resumed and the program waited for ever.  When the state
-        # changes without its counter, ask the board for every variable again
-        # ('D', as for a garbled line, 1.43.1): its answer carries the counter
-        # and the pause reason, and things carry on as normal.
+        # A new state ("xx") reported without its state counter ("xc") or its
+        # pause reason: seen on the machine after probe touches (Nov 2 and 3).
+        # Mach._update acts on the state itself changing (1.55.1).  The board
+        # is also asked for every variable again ('D', 1.54.2), so a pause
+        # reason the controller hasn't heard yet arrives too.  (On the machine
+        # the counter in that answer hadn't changed, so the answer alone, as
+        # in 1.54.2 and 1.55.0, didn't resume the touch.)
         before = self.ctrl.state.get('xx', '')
         self.ctrl.state.update(update)
         if 'xx' in update and 'xc' not in update and update['xx'] != before:

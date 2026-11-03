@@ -49,10 +49,31 @@ check('no counter: the report went out without "xc"', len(h.avr.garbled) == 1 an
 check('  the program still finishes (1.54.1 waited for ever)', err is None and r.get('ok') == 1, err)
 same = all(abs(r.get(k, 1e9) - v) < 1e-6 for k, v in r0.items() if isinstance(v, float))
 check('  with the same touches as a clean run', same)
-check('  it asked the board for everything again', h.avr.dumps >= 1, h.avr.dumps)
 warn = [m for l, n, m in h.logs.lines if l == 'warning' and 'without its counter' in m]
 check('  and says so in the log', len(warn) == 1, warn)
 check('clean run: no extra requests', h0.avr.dumps == 0 and not [m for l, n, m in h0.logs.lines if 'without its counter' in m], h0.avr.dumps)
+
+# 1.55.1: the board as it really is (seen Nov 2 and 3): its pause reason stays "Switch found"
+# between touches, and after the 5th touch it reports HOLDING alone, with no new counter; a full
+# report then has the same counter as before, so asking again (1.54.2) changed nothing and the
+# check hung on the machine. The controller now acts on the state itself changing.
+def run_board(at):
+    sim = Sim((CX, CY, BED_Z + 31.4), 1.0, OBS); sim.probe_frame = 'machine'
+    h = H.Harness(sim); h.avr.board_hold_at = at
+    try:
+        h.run_program(PROG); err = None
+    except H.Hang as e: err = 'hang: ' + str(e)[:200]
+    except Exception as e: err = '%s: %s' % (type(e).__name__, str(e)[:200])
+    return h, {k[5:]: v for k, v in sim.vars.items() if k.startswith('_ofq_')}, err
+for at in (1, 5, 9):
+    h, r, err = run_board(at)
+    check('board: a bare HOLDING after touch %d went out' % at, h.avr.garbled == ['{"v":0,"xx":"HOLDING"}'], h.avr.garbled)
+    check('  the program still finishes (1.54.2 and 1.55.0 waited for ever)', err is None and r.get('ok') == 1, err)
+    check('  and notes it in the log', any('without its counter' in m for l, n, m in h.logs.lines))
+    same = all(abs(r.get(k, 1e9) - v) < 1e-6 for k, v in r0.items() if isinstance(v, float))
+    check('  with the same touches as a clean run', same)
+h, r, err = run_board(None)
+check('board, nothing bare: finishes, nothing extra in the log', err is None and r.get('ok') == 1 and not [m for l, n, m in h.logs.lines if 'without its counter' in m], err)
 
 # The repair itself
 C = sys.modules['bbctrl.Comm']

@@ -72,9 +72,15 @@ class State:
         self.vars[name] = value
         self.history.append((name, value))
     def update(self, update):
+        # 1.55.1: as bbctrl.State does, listeners only get the values that changed (before, they
+        # got everything reported, so a repeat of an unchanged counter looked like a new state,
+        # which the real controller never sees: that hid the Nov 3 hang from the test)
         self.history.append(('update', dict(update)))
-        for k, v in update.items(): self.vars[k] = v
-        for cb in list(self.listeners): cb(update)
+        changes = dict((k, v) for k, v in update.items()
+                       if k not in self.vars or self.vars[k] != v)
+        for k, v in changes.items(): self.vars[k] = v
+        if changes:
+            for cb in list(self.listeners): cb(changes)
     def get_position(self):
         return dict((a, self.vars[a + 'p']) for a in 'xyz')
     def get_axis_vector(self, name, scale = 1):
@@ -215,6 +221,12 @@ class FakeAVR:
         self.read_cb = self.write_cb = None
         self.garble = None
         self.garbled = []
+        # 1.55.1 ('board' mode): the machine's board as seen Nov 2 and 3. Its pause reason stays
+        # as it was ("Switch found") when it goes on again, and now and then, after a touch, it
+        # reports HOLDING alone: no new state counter and no pause reason, '{"v":0,"xx":"HOLDING"}'.
+        # A full report ('D') then has the same counter as before.
+        self.board_hold_at = None   # which touch (1, 2, ...) gets the bare HOLDING
+        self.holds = 0
         self.dumps = 0
 
     def set_handlers(self, read_cb, write_cb):
@@ -227,6 +239,16 @@ class FakeAVR:
 
     def set_state(self, state, **kw):
         self.state = state
+        if self.board_hold_at is not None:
+            if state == 'READY' and kw.get('pr') == '': kw.pop('pr')   # the reason stays
+            if state == 'HOLDING':
+                self.holds += 1
+                if self.holds == self.board_hold_at:
+                    self.reason = kw.get('pr', getattr(self, 'reason', ''))
+                    self.garbled.append('{"v":0,"xx":"HOLDING"}')
+                    self.report(v = 0, xx = state)          # no counter, no reason
+                    return
+            if 'pr' in kw: self.reason = kw['pr']
         self.count += 1
         kw.update(xx = state, xc = self.count)
         self.report(**kw)
@@ -274,8 +296,9 @@ class FakeAVR:
         # (command.def: not synchronous)
         if line == Cmd.DUMP:
             self.dumps += 1
-            self.report(xx = self.state, xc = self.count,
-                        pr = 'Switch found' if self.state == 'HOLDING' else '',
+            pr = 'Switch found' if self.state == 'HOLDING' else ''
+            if self.board_hold_at is not None: pr = getattr(self, 'reason', '')
+            self.report(xx = self.state, xc = self.count, pr = pr,
                         **self.position())
             return
         if not line or self.state in ('ESTOPPED', 'HOLDING'): return
