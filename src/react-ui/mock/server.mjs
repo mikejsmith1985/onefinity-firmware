@@ -220,21 +220,23 @@ function bedcamMdi(text) {
   // 1.43.0: the squareness check, on a 1-2-3 block under the start position, turned 1 degree, on a
   // machine whose X/Y are MOCK_SKEW degrees out of square (default 0.03)
   // 1.48.0: hands-off tuning, all 6 runs as one program (MOCK_TUNE_FAIL=N: run N stops)
-  if (text.includes("(Probe tuning:")) {
+  // 1.55.0: "(Squareness x3": the same without the stylus runs
+  if (text.includes("(Probe tuning:") || text.includes("(Squareness x3")) {
+    const cal = text.includes("(Squareness x3") ? 0 : 3, nr = cal + 3;
     const [, a, b] = /block (-?[\d.]+) x (-?[\d.]+)/.exec(text).map(Number);
     const token = +[...text.matchAll(/#<_oft_done> = (\d+)/g)].pop()[1], ball = MOCK_BALL, cx = state.xp, cy = state.yp;
     const failAt = +(process.env.MOCK_TUNE_FAIL || 0);
     const t = Math.PI / 180, alpha = (1 + +(process.env.MOCK_SKEW ?? 0.03)) * t;
     const out = { oft_abort: 0, oft_done: 0 };
     const q = mockSquare(a, b, ball, cx, cy);
-    for (let k = 1; k <= 6; k++) {
+    for (let k = 1; k <= nr; k++) {
       if (failAt === k) { out.oft_abort = 1; out.oft_run = k; break; }
       out.oft_run = k;
-      if (k <= 3) {   // the ends, touched along X through the start: (block + ball) / cos(turn) apart
+      if (k <= cal) {   // the ends, touched along X through the start: (block + ball) / cos(turn) apart
         const d = (a + ball) / Math.cos(alpha);
         Object.assign(out, { [`oft_c${k}a`]: +(cx - d / 2).toFixed(4), [`oft_c${k}b`]: +(cx + d / 2).toFixed(4), [`oft_c${k}ok`]: 1 });
       } else {
-        const i = k - 3;
+        const i = k - cal;
         out[`oft_s${i}ok`] = 1; out[`oft_s${i}fail`] = 0;
         for (let j = 0; j < 8; j++) { out[`oft_s${i}x${j}`] = q[`ofq_x${j}`]; out[`oft_s${i}y${j}`] = q[`ofq_y${j}`]; }
       }
@@ -242,7 +244,7 @@ function bedcamMdi(text) {
     if (!out.oft_abort) out.oft_done = token;
     broadcast({ xx: "RUNNING", cycle: "mdi", oft_run: 1 });
     let k = 1;
-    const tick = setInterval(() => { k++; if (k <= 6 && !(failAt && k > failAt)) broadcast({ oft_run: k }); else { clearInterval(tick); broadcast({ ...out, xx: "READY", cycle: "idle" }); } }, +(process.env.MOCK_TUNE_MS || 700));
+    const tick = setInterval(() => { k++; if (k <= nr && !(failAt && k > failAt)) broadcast({ oft_run: k }); else { clearInterval(tick); broadcast({ ...out, xx: "READY", cycle: "idle" }); } }, +(process.env.MOCK_TUNE_MS || 700));
     return true;
   }
   if (text.includes("(Squareness check")) {

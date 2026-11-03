@@ -17,6 +17,9 @@ import { CheckArt } from "./art.jsx";
 // results are saved. They're saved by whichever screen is open when it finishes, or the next time
 // this or Probe setup is opened, so a phone going to sleep doesn't lose anything.
 const STEPS = { setup: "Block", check: "Check probe", place: "Position", run: "Running", done: "Results" };
+// 1.55.0: sqOnly runs the squareness check 3 times and nothing else (Squareness: Run 3 times, and the
+// Square the machine wizard), with the stylus size already saved. Same one-program run, so the same
+// hands-off behaviour: any screen shows it and saves it, and a phone can sleep.
 
 // Save the results of a finished run that hasn't been saved yet. Returns the record (or null).
 export async function savePendingTune(state) {
@@ -26,15 +29,15 @@ export async function savePendingTune(state) {
   const r = tuneResults(state, t);
   const patch = {};
   const now = Date.now();
-  if (r.calOk) patch.measure = { ...(prefs.measure || {}), ball: Math.round(r.ball * 1000) / 1000, ballTime: now, ballRuns: TUNE.calRuns, ballBy: "tune" };
+  if (r.calOk && r.calRuns > 0) patch.measure = { ...(prefs.measure || {}), ball: Math.round(r.ball * 1000) / 1000, ballTime: now, ballRuns: r.calRuns, ballBy: "tune" };
   if (r.sqOk) patch.square = { eps: r.avg.eps, deg: r.avg.deg, drift400: r.avg.drift400, spread: r.avg.spread, runs: TUNE.sqRuns, block: t.block, time: now, by: "tune" };
-  const rec = { ...t, saved: true, savedAt: now, result: { balls: r.balls, ball: r.ball, calSpread: r.calSpread, calOk: r.calOk, sqOk: r.sqOk, avg: r.avg || null,
+  const rec = { ...t, saved: true, savedAt: now, result: { calRuns: r.calRuns, balls: r.balls, ball: r.ball, calSpread: r.calSpread, calOk: r.calOk, sqOk: r.sqOk, avg: r.avg || null,
     runs: r.square.map((x) => x.drift400), size: r.square[0] ? [r.square[0].w, r.square[0].l] : null, turn: r.square[0]?.turn ?? null, endTurn: r.endTurn, problems: r.problems, ball0: t.ball } };
   await setPrefs({ ...patch, tune: rec });
   return rec;
 }
 
-export default function ProbeTuning({ config, state, send, subscribe, metric, onClose }) {
+export default function ProbeTuning({ config, state, send, subscribe, metric, onClose, sqOnly: sqOnlyProp }) {
   const [step, setStep] = useState("setup");
   const [blockId, setBlockId] = useState(BLOCKS[0][0]);
   const [prefs, setPrefsState] = useState(null);
@@ -72,6 +75,11 @@ export default function ProbeTuning({ config, state, send, subscribe, metric, on
   const touched = probeActive(state);
   const idle = state.cycle === "idle" && state.xx !== "ESTOPPED";
   const ball0 = Number.isFinite(prefs?.measure?.ball) ? prefs.measure.ball : 2;
+  // A run started on another screen decides the kind: opened from Probe setup while a
+  // squareness-only run is going (or waiting to be saved), this screen shows that run.
+  const pend = prefs?.tune && (!prefs.tune.saved || step === "done") ? prefs.tune : null;
+  const sqOnly = pend && Number.isInteger(pend.calRuns) ? pend.calRuns === 0 : !!sqOnlyProp;
+  const nRuns = (sqOnly ? 0 : TUNE.calRuns) + TUNE.sqRuns;
 
   useEffect(() => {
     if (step !== "check") return;
@@ -92,34 +100,37 @@ export default function ProbeTuning({ config, state, send, subscribe, metric, on
     // 2. All 6 runs as one program, from here
     const st = R.current.state, z = computeAxis(st, config, "z", true);
     const token = (Date.now() % 900000000) + 1000;
-    const t = { token, a: blk[2], b: blk[3], block: blockId, ball: ball0, time: Date.now(), saved: false };
+    const t = { token, a: blk[2], b: blk[3], block: blockId, ball: ball0, time: Date.now(), saved: false, calRuns: sqOnly ? 0 : TUNE.calRuns };
     await setPrefs({ tune: t }); setPrefsState((p) => ({ ...(p || {}), tune: t }));
     R.current.sent = true; R.current.started = false;
     send(tuneProgram({ a: blk[2], b: blk[3], ball: ball0, start: { x: st.xp, y: st.yp, z: st.zp }, top: z.max - 1,
-      fast: config.probe["probe-fast-seek"], slow: config.probe["probe-slow-seek"], token, measure: prefs?.measure }));
+      fast: config.probe["probe-fast-seek"], slow: config.probe["probe-slow-seek"], token, measure: prefs?.measure, calRuns: t.calRuns }));
   };
   const stop = () => api.put("stop").catch(() => {});
   const jog = (axis, dir) => send(`G21\nG91 G0 ${axis}${dir * jogStep * u}\nG90\n`);
-  const runLabel = (k) => (k >= 1 && k <= 3 ? `Stylus calibration, run ${k} of 3` : k >= 4 && k <= 6 ? `Squareness, run ${k - 3} of 3` : "Starting");
+  const cal = sqOnly ? 0 : TUNE.calRuns;
+  const runLabel = (k) => (k >= 1 && k <= cal ? `Stylus calibration, run ${k} of ${cal}` : k > cal && k <= nRuns ? `Squareness, run ${k - cal} of ${TUNE.sqRuns}` : "Starting");
 
   const r = rec?.result;
   const sq = r?.avg ? squareText(r.avg, (v) => mm(v, 2)) : null;
   return (
-    <Modal title="Tune the probe automatically" wide dismissable={step !== "run"} onClose={onClose}
+    <Modal title={sqOnly ? "Check squareness 3 times" : "Tune the probe automatically"} wide dismissable={step !== "run"} onClose={onClose}
       actions={<>
         {step === "run" ? <button className="danger" onClick={stop}>Stop</button> : <button onClick={onClose}>{step === "done" ? "Close" : "Cancel"}</button>}
         {step === "setup" && <button className="primary" data-autofocus disabled={!prefs} onClick={() => { setSeenOpen(false); setStep("check"); }}>Next</button>}
-        {step === "place" && <button className="primary" data-autofocus disabled={touched || !idle} onClick={start}>Start: run all 6</button>}
+        {step === "place" && <button className="primary" data-autofocus disabled={touched || !idle} onClick={start}>{sqOnly ? "Start: run all 3" : "Start: run all 6"}</button>}
         {step === "done" && <button onClick={() => { setRec(null); setMsg(null); setStep("place"); }}>Run it again</button>}
       </>}>
       <div className="probe">
         <StepRail steps={Object.keys(STEPS)} labels={STEPS} current={step} />
         <div>
           {step === "setup" && <StepBody title="Put the 1-2-3 block on the bed">
-            <p>One start, then hands off: the stylus is calibrated on the block 3 times and the average is saved, then X/Y squareness is measured 3 times and the average is saved. About 6 minutes. If the homing hasn't been checked since the machine was homed, that's done first (about 30 s).</p>
+            {sqOnly
+              ? <p>One start, then hands off: X/Y squareness is measured 3 times and the average is saved, with the stylus size already saved ({mm(ball0)}). About 3 minutes. If the homing hasn't been checked since the machine was homed, that's done first (about 30 s).</p>
+              : <p>One start, then hands off: the stylus is calibrated on the block 3 times and the average is saved, then X/Y squareness is measured 3 times and the average is saved. About 6 minutes. If the homing hasn't been checked since the machine was homed, that's done first (about 30 s).</p>}
             <p>Lay the block flat, 1 in side up, roughly lined up with X and Y, with about 15 mm clear all round. Wipe it and the bed. It doesn't need clamping.</p>
             <div className="radios">{BLOCKS.map(([id, label]) => <label key={id}><input type="radio" name="tub" checked={blockId === id} onChange={() => setBlockId(id)} /> {label}</label>)}</div>
-            <p className="dim">The stylus is calibrated on the block's ends along X ({mm(blk[2], 1)}). The block's turn on the bed is measured by the squareness runs and taken out of the stylus size.</p>
+            {!sqOnly && <p className="dim">The stylus is calibrated on the block's ends along X ({mm(blk[2], 1)}). The block's turn on the bed is measured by the squareness runs and taken out of the stylus size.</p>}
           </StepBody>}
           {step === "check" && <StepBody title="Check the probe" art={<CheckArt probe />}>
             <p>Put the 3D probe in and plug it in. <b>Push the stylus sideways with your finger.</b> This step moves on by itself.</p>
@@ -140,16 +151,16 @@ export default function ProbeTuning({ config, state, send, subscribe, metric, on
           {step === "run" && <StepBody title="Running">
             {msg && <p className={msg.ok ? "dim" : "err"}>{msg.text}</p>}
             <p className="big">{state.cycle !== "idle" && state.oft_run > 0 ? runLabel(state.oft_run) : msg ? "" : "Starting…"}</p>
-            {state.oft_run > 0 && <div className="tune-runs">{[1, 2, 3, 4, 5, 6].map((k) => <span key={k} className={k < state.oft_run ? "done" : k === state.oft_run ? "on" : ""}>{k <= 3 ? `S${k}` : `Q${k - 3}`}</span>)}</div>}
+            {state.oft_run > 0 && <div className="tune-runs">{[...Array(nRuns)].map((_, i) => i + 1).map((k) => <span key={k} className={k < state.oft_run ? "done" : k === state.oft_run ? "on" : ""}>{k <= cal ? `S${k}` : `Q${k - cal}`}</span>)}</div>}
             <p className="dim">You can leave. Stop here or E-stop ends it.</p>
           </StepBody>}
           {step === "done" && <StepBody>
             {msg && !msg.ok && <Outcome ok={false} title="Stopped before the runs"><p>{msg.text}</p></Outcome>}
             {r && <>
-              <Outcome ok={r.calOk && rec.saved} title={r.calOk && rec.saved ? `Stylus ball ${mm(r.ball)} (saved)` : "Stylus calibration not saved"}>
+              {r.calRuns !== 0 && <Outcome ok={r.calOk && rec.saved} title={r.calOk && rec.saved ? `Stylus ball ${mm(r.ball)} (saved)` : "Stylus calibration not saved"}>
                 {r.balls?.length > 0 && <p>Runs: {r.balls.map((b) => mm(b)).join(", ")}; spread {mm(r.calSpread || 0)}. Before: {mm(r.ball0 ?? ball0)}.</p>}
                 {r.endTurn !== null && r.endTurn !== undefined && <p className="dim">Corrected for the block's ends being turned {((r.endTurn * 180) / Math.PI).toFixed(2)}° on the bed.</p>}
-              </Outcome>
+              </Outcome>}
               <Outcome ok={r.sqOk && rec.saved} title={r.sqOk && rec.saved && sq ? `Squareness ${sq.head} (saved)` : "Squareness not saved"}>
                 {sq && <><p><b>{sq.verdict}</b></p><p>{sq.detail}</p></>}
                 {r.runs?.length > 0 && <p>Runs: {r.runs.map((x) => (x / u).toFixed(metric ? 2 : 4)).join(", ")} {unit} over 400 mm.</p>}

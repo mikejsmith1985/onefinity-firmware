@@ -14,7 +14,7 @@ import { CheckArt } from "./art.jsx";
 // points each, and the angle between them says how square X is to Y. See square.js.
 const STEPS = { setup: "Block", check: "Check probe", place: "Position", run: "Measure", done: "Result" };
 
-export default function Squareness({ config, state, send, subscribe, metric, onClose }) {
+export default function Squareness({ config, state, send, subscribe, metric, onClose, onRun3 }) {
   const [step, setStep] = useState("setup");
   const [blockId, setBlockId] = useState(BLOCKS[0][0]);
   const [ball, setBall] = useState(null);       // calibrated stylus ball, from Measure stock
@@ -73,6 +73,7 @@ export default function Squareness({ config, state, send, subscribe, metric, onC
     <Modal title="Check X/Y squareness" wide dismissable={step !== "run"} onClose={close}
       actions={<>
         <button className={step === "run" ? "danger" : ""} onClick={close}>{step === "run" ? "Stop" : step === "done" ? "Close" : "Cancel"}</button>
+        {step === "setup" && onRun3 && <button onClick={onRun3}>Run 3 times, hands-off</button>}
         {step === "setup" && <button className="primary" data-autofocus disabled={!opts} onClick={() => { setSeenOpen(false); setStep("check"); }}>Next</button>}
         {step === "place" && <button className="primary" data-autofocus disabled={touched || !idle || !opts} onClick={() => start(false)}>Start measuring</button>}
         {step === "done" && lastPos && <button onClick={() => { setErr(null); setStep("place"); }}>Position again</button>}
@@ -86,6 +87,7 @@ export default function Squareness({ config, state, send, subscribe, metric, onC
             <p>Lay a 1-2-3 block flat on a clean part of the bed, its sides roughly lined up with X and Y (a few degrees off is fine). Leave about 15 mm clear all round it. It doesn't need clamping: the touches are light. Wipe the block and the bed first, since a chip under a touch shows up as an error.</p>
             <div className="radios">{BLOCKS.map(([id, label]) => <label key={id}><input type="radio" name="sqb" checked={blockId === id} onChange={() => setBlockId(id)} /> {label}</label>)}</div>
             <p className="dim">The block's own corners are square to a few ten-thousandths of an inch, far closer than the machine. Turning it on the bed doesn't change the result: only the angle between its sides counts.</p>
+            {onRun3 && <div className="why"><b>Run 3 times, hands-off</b><p>One start runs all 3 checks as one program on the controller and saves the average by itself. No pressing between runs, and the results show on every screen. This screen, with Next, runs one check at a time.</p></div>}
             {ball === 2 && <p className="err">The stylus hasn't been calibrated (Probe setup → Calibrate the stylus). The squareness is still right; only the block size it reports is off.</p>}
             {saved && <p className="dim">Last saved {new Date(saved.time).toLocaleDateString()}: {squareText(saved, mm).head}. {squareText(saved, mm).verdict}</p>}
           </StepBody>}

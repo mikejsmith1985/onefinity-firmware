@@ -102,7 +102,7 @@ await dlg().getByLabel("Both Y sides stopped against their front feet").check();
 await btn("Next").click();
 
 // The check: Squareness opens, a new result is saved, the wizard comes back with it
-await dlg().getByRole("button", { name: "Check squareness" }).click();
+await dlg().getByRole("button", { name: "One at a time" }).click();
 check("Squareness check opens", await until(() => p.getByRole("dialog", { name: "Check X/Y squareness" }).isVisible()));
 const pr = await get("/api/next-store/prefs");
 await put("/api/next-store/prefs", { ...pr, square: { ...before, drift400: 0.06, deg: 0.0086, eps: 0.00015, time: Date.now() } });
@@ -115,7 +115,7 @@ check("square: no correction offered", !(await dlg().getByText("Correct it with 
 // 1.54.0: correct with the probe. A result that is out: the wizard turns it into a foot move.
 // As on the machine: Check squareness opens the check, a result is saved, the check closes
 const setSquare = async (drift400) => {
-  await dlg().getByRole("button", { name: "Check squareness" }).click();
+  await dlg().getByRole("button", { name: "One at a time" }).click();
   const sq = p.getByRole("dialog", { name: "Check X/Y squareness" });
   await until(() => sq.isVisible());
   const q = await get("/api/next-store/prefs"); await put("/api/next-store/prefs", { ...q, square: { ...before, drift400, time: Date.now() } });

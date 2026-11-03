@@ -118,16 +118,17 @@ export default function ControlPage({ ctl, cfg, mach, metric }) {
       )}
       {squaringOn && !probe && !homeFirst && !setupOn && (
         <SquareMachine state={state} send={send} metric={metric} onClose={() => setSquaring(false)}
-          onOpen={(o) => { if (homed) setProbe(o.kind); else { setHomeErr(""); setHomeFirst(o.kind); } }} />
+          onOpen={(o) => { const { kind, ...extra } = o; if (homed) setProbe(kind, extra); else { setHomeErr(""); setHomeFirst(kind); } }} />
       )}
       {probe === "setter" && cfg.config && (
         <ToolSetter openId={openId} config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
       )}
       {probe === "square" && cfg.config && (
-        <Squareness config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
+        <Squareness config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)}
+          onRun3={() => uiSet("tool", { kind: "tune", sqOnly: true, id: `${Date.now()}-${ME}` }).catch(() => {})} />
       )}
       {probe === "tune" && cfg.config && (
-        <ProbeTuning config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} onClose={() => setProbe(null)} />
+        <ProbeTuning config={cfg.config} state={state} send={send} subscribe={subscribe} metric={metric} sqOnly={!!toolUi?.sqOnly} onClose={() => setProbe(null)} />
       )}
       {probe && probe !== "measure" && probe !== "setter" && probe !== "square" && probe !== "tune" && cfg.config && (
         <ProbeDialog openId={openId} type={probe} config={cfg.config} state={state} send={send} subscribe={subscribe} rotary={rotary} metric={metric} onClose={() => setProbe(null)} />

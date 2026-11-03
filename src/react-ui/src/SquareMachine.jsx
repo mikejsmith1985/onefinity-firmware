@@ -243,8 +243,11 @@ export default function SquareMachine({ state, send, metric, onOpen, onClose }) 
           </StepBody>}
 
           {step === "check" && <StepBody title="Check with the 1-2-3 block">
-            <p>Run the Squareness check 3 times and save the average. This screen comes back with the result.</p>
-            <button className={after ? "" : "primary"} onClick={() => onOpen({ kind: "square" })}>Check squareness</button>
+            <p>Measure squareness 3 times and save the average. <b>Run 3 times</b> does it all from one start, hands-off, and saves by itself. This screen comes back with the result.</p>
+            <div className="radios inline">
+              <button className={after ? "" : "primary"} onClick={() => onOpen({ kind: "tune", sqOnly: true })}>Run 3 times, hands-off</button>
+              <button onClick={() => onOpen({ kind: "square" })}>One at a time</button>
+            </div>
             {after && <Outcome ok={verdict(after.drift400) !== "out"} title={`Now ${squareText(after, mm).head}`}>
               <p><b>{squareText(after, mm).verdict}</b></p>
               {d.before && <p>Before: {mm(Math.abs(d.before.drift400))} over 400 mm.</p>}

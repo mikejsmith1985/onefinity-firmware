@@ -32,8 +32,8 @@ def block(cx, cy, a, b, turn, eps, h=25.4):
     return Prism([P(-1, -1), P(1, -1), P(1, 1), P(-1, 1)], BED_Z, BED_Z + h)
 
 A, B, CX, CY, TOP, TOKEN = 76.2, 50.8, 200, 150, -1, 4242
-def run(obs, start, ball_true=1.95, ball_saved=2.0):
-    o = dict(a=A, b=B, ball=ball_saved, start=dict(x=start[0], y=start[1], z=start[2]), top=TOP, fast=200, slow=25, token=TOKEN)
+def run(obs, start, ball_true=1.95, ball_saved=2.0, **extra):
+    o = dict(a=A, b=B, ball=ball_saved, start=dict(x=start[0], y=start[1], z=start[2]), top=TOP, fast=200, slow=25, token=TOKEN, **extra)
     prog = js('tuneProgram', o)
     sim = Sim(start, ball_true / 2, obs); sim.probe_frame = 'machine'
     err = None
@@ -69,4 +69,14 @@ check('  the 3 stylus runs are there, but not saved: without squareness the bloc
 # 3. The block isn't under the start: the first touch finds nothing (the controller E-stops)
 sim, st, prog, err = run([BED, block(CX + 100, CY, A, B, 0, 0)], (CX, CY, BED_Z + 31.4))
 check('no block under the stylus: stops on the first touch (Switch not found)', err == 'NotFound' and st.get('oft_run') == 1, (err, st.get('oft_run')))
+# 4. 1.55.0: squareness only (Squareness: Run 3 times), with the stylus size already saved (1.95)
+sim, st, prog, err = run([BED, block(CX, CY, A, B, 1.5, 0.03)], (CX + 3, CY - 2, BED_Z + 25.4 + 6), ball_saved=1.95, calRuns=0)
+check('squareness only: runs to the end, 3 runs', err is None and st.get('oft_done') == TOKEN and st.get('oft_run') == 3, (err, st.get('oft_done'), st.get('oft_run')))
+check('  no stylus runs in the program', 'Squareness x3' in prog and '_oft_c1' not in prog, prog[:80])
+r = js('tuneResults', st, dict(a=A, b=B, ball=1.95, token=TOKEN, calRuns=0))
+check('  squareness: 3 runs, 0.03 deg found within 0.004', r['sqOk'] and abs(r['avg']['deg'] - 0.03) < 0.004, '%.4f deg' % r['avg']['deg'] if r.get('avg') else r)
+check('  nothing about the stylus: not "ok", nothing to save, no problems', not r['calOk'] and not r['balls'] and not r['problems'], (r['calOk'], r['problems']))
+check('  block size from the saved ball within 0.02 mm', all(abs(x['w'] - A) < 0.02 and abs(x['l'] - B) < 0.02 for x in r['square']))
+o6 = dict(a=A, b=B, ball=2.0, start=dict(x=CX, y=CY, z=-30), top=TOP, fast=200, slow=25, token=TOKEN)
+check('the 6-run program is unchanged when calRuns is left out', js('tuneProgram', o6) == js('tuneProgram', dict(o6, calRuns=3)))
 print('ALL PASS' if ok else 'SOME FAILED'); sys.exit(0 if ok else 1)

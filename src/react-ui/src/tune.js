@@ -14,6 +14,9 @@ import { measureProgram, MEASURE_DEFAULTS } from "./measure.js";
 import { squareProgram, squareResult, squareAverage } from "./square.js";
 
 export const TUNE = { calRuns: 3, sqRuns: 3, calSpread: 0.05, sqSpread: 0.15 };
+// 1.55.0: o.calRuns = 0 runs the squareness check 3 times only (Squareness: Run 3 times), with the
+// stylus size already saved. Leaving it out keeps the 1.48.0 program exactly as it was.
+const calRunsOf = (o) => (Number.isInteger(o && o.calRuns) ? o.calRuns : TUNE.calRuns);
 
 const n = (v) => {
   const s = (Math.round(v * 10000) / 10000).toFixed(4).replace(/\.?0+$/, "");
@@ -33,7 +36,8 @@ function body(prog, by) {
 export function tuneProgram(o) {
   const m = { ...MEASURE_DEFAULTS, ...(o.measure || {}) };
   const back = ["G90", `G53 G0 Z${n(o.top)}`, `G53 G0 X${n(o.start.x)} Y${n(o.start.y)}`, `G53 G0 Z${n(o.start.z)}`];
-  const L = [`(Probe tuning: stylus x${TUNE.calRuns}, squareness x${TUNE.sqRuns}, block ${n(o.a)} x ${n(o.b)})`, "G21", "M5",
+  const cal = calRunsOf(o);
+  const L = [cal ? `(Probe tuning: stylus x${cal}, squareness x${TUNE.sqRuns}, block ${n(o.a)} x ${n(o.b)})` : `(Squareness x${TUNE.sqRuns}, block ${n(o.a)} x ${n(o.b)})`, "G21", "M5",
     "#<_oft_abort> = 0", "#<_oft_run> = 0", "#<_oft_done> = 0",
     // everything copied below is set first, so a run that stops early copies 0s, never an unset name
     "#<_ofm_rxa> = 0", "#<_ofm_rxb> = 0", "#<_ofm_ok> = 0", "#<_ofq_ok> = 0", "#<_ofq_fail> = 0",
@@ -44,7 +48,7 @@ export function tuneProgram(o) {
     L.push(`o${9000 + k} if [#<_oft_abort> EQ 0]`, `#<_oft_run> = ${k}`, ...back, body(prog, 1000 * k),
       ...copy, `o${9100 + k} if [${okVar} NE 1]`, "#<_oft_abort> = 1", `o${9100 + k} endif`, `o${9000 + k} endif`);
   };
-  for (let i = 1; i <= TUNE.calRuns; i++) {
+  for (let i = 1; i <= cal; i++) {
     const prog = measureProgram({ ...m, w: o.a, l: o.b, probeY: false, origin: "center-x", calibrate: true, ball: o.ball, fast: o.fast, slow: o.slow });
     run("cal", i, prog, [`#<_oft_c${i}a> = #<_ofm_rxa>`, `#<_oft_c${i}b> = #<_ofm_rxb>`, `#<_oft_c${i}ok> = #<_ofm_ok>`], "#<_ofm_ok>");
   }
@@ -62,7 +66,8 @@ export function tuneProgram(o) {
 // The results from the controller's state (oft_*). o: {a, b, token}
 // -> {done, balls, ball, calSpread, calOk, square: [{...squareResult}], avg, sqOk, problems: []}
 export function tuneResults(st, o) {
-  const out = { done: st.oft_done === o.token, balls: [], square: [], problems: [] };
+  const cal = calRunsOf(o);
+  const out = { done: st.oft_done === o.token, balls: [], square: [], problems: [], calRuns: cal };
   // The squareness runs first: they say how the block's ends are turned. The stylus runs touch the
   // ends along X, so on a block turned by a the ends are (block + ball) / cos a apart along X: on
   // the machine's own block turned 1.5 degrees that's 0.026 mm, all of it wrongly put on the ball.
@@ -78,7 +83,7 @@ export function tuneResults(st, o) {
   // the ends' normal: the X-direction sides' turn plus the skew (the ends are the Y-direction sides)
   out.endTurn = good.length ? good.reduce((s, x) => s + (x.first.turn * Math.PI) / 180 + x.first.eps, 0) / good.length : null;
   const cosA = out.endTurn === null ? 1 : Math.cos(out.endTurn);
-  for (let i = 1; i <= TUNE.calRuns; i++) {
+  for (let i = 1; i <= cal; i++) {
     if (st[`oft_c${i}ok`] !== 1) continue;
     const b = Math.abs(st[`oft_c${i}b`] - st[`oft_c${i}a`]) * cosA - o.a;
     if (b > 0.3 && b < 10) out.balls.push(b);
@@ -88,8 +93,8 @@ export function tuneResults(st, o) {
     out.ball = out.balls.reduce((s, x) => s + x, 0) / out.balls.length;
     out.calSpread = Math.max(...out.balls) - Math.min(...out.balls);
   }
-  out.calOk = out.balls.length === TUNE.calRuns && out.calSpread <= TUNE.calSpread && out.endTurn !== null;
-  if (out.balls.length === TUNE.calRuns && out.calSpread > TUNE.calSpread) out.problems.push(`The stylus runs differ by ${out.calSpread.toFixed(3)} mm, more than ${TUNE.calSpread}. Check the probe is tight in the collet and the block didn't move.`);
+  out.calOk = cal > 0 && out.balls.length === cal && out.calSpread <= TUNE.calSpread && out.endTurn !== null;
+  if (cal > 0 && out.balls.length === cal && out.calSpread > TUNE.calSpread) out.problems.push(`The stylus runs differ by ${out.calSpread.toFixed(3)} mm, more than ${TUNE.calSpread}. Check the probe is tight in the collet and the block didn't move.`);
   if (out.balls.length && out.endTurn === null) out.problems.push("The squareness runs didn't finish, so the stylus size couldn't be corrected for how the block is turned. It wasn't saved.");
   const ball = out.ball ?? o.ball ?? 2;
   for (const { i, r } of sq) {
