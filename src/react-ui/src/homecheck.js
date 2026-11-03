@@ -29,7 +29,26 @@ export const HOMECHK = {
   warn: 1,     // mm: more than this is reported as a homing problem (a dragging hose, a slipping coupler)
   max: 12,     // mm: more than this isn't corrected (the setter was moved, or this isn't the setter)
   keep: 10,    // checks kept in the log
+  // 1.56.0: when this many checks in a row (this one included) are off by more than `warn` and by
+  // the same amount (within `same` mm of each other), homing is repeatable and it's the reference
+  // homing that was the odd one (Nov 3 on the machine: 4 homings over 5 days all read about
+  // +6, +6 mm from the reference). Retaking the reference is the fix, not looking for a hose.
+  same: 1,
+  sameN: 3,
 };
+
+// 1.56.0: how many checks in a row, ending with d, were off by about the same amount (only checks
+// against the current reference count). log: setter.hlog, newest first; ref: setter.href.
+export function sameOffsetRun(d, log, ref) {
+  let n = 1;
+  for (const h of log || []) {
+    if (h.adopted || !num(h.dx) || !num(h.dy)) break;
+    if (ref && num(ref.time) && num(h.time) && h.time < ref.time) break;
+    if (Math.hypot(h.dx - d.x, h.dy - d.y) > HOMECHK.same || Math.hypot(h.dx, h.dy) <= HOMECHK.warn) break;
+    n++;
+  }
+  return n;
+}
 
 const n = (v) => {
   const s = (Math.round(v * 10000) / 10000).toFixed(4).replace(/\.?0+$/, "");
@@ -107,14 +126,17 @@ export async function runHomeCheck(deps) {
     await goBack(null).catch(() => {});
     return { error: c.error };
   }
-  const ref = setter.href && num(setter.href.x) ? setter.href : null;
+  // 1.56.0: "Retake the reference at the next homing": this homing becomes the reference, as on the
+  // first check, before anything shifts the positions
+  const ref = setter.href && num(setter.href.x) && !setter.retake ? setter.href : null;
   const now = Date.now(), at = st.home_at;
   const keep = (rec, extra) => ({ ...setter, ...extra, hchk: { at, time: now, ...rec }, hlog: [{ time: now, ...rec }, ...(setter.hlog || [])].slice(0, HOMECHK.keep) });
   if (!ref) {
     // First check: this homing is the reference from now on
     await goBack(null);
-    await deps.saveSetter(keep({ dx: 0, dy: 0, adopted: true }, { x: c.x, y: c.y, href: { x: c.x, y: c.y, time: now } }));
-    return { ok: true, adopted: true, d: { x: 0, y: 0 }, dist: 0, skipped: c.skipped, centre: c };
+    const retaken = !!setter.retake;
+    await deps.saveSetter(keep({ dx: 0, dy: 0, adopted: true, retaken }, { x: c.x, y: c.y, href: { x: c.x, y: c.y, time: now }, retake: false }));
+    return { ok: true, adopted: true, retaken, d: { x: 0, y: 0 }, dist: 0, skipped: c.skipped, centre: c };
   }
   const d = { x: ref.x - c.x, y: ref.y - c.y }, dist = Math.hypot(d.x, d.y);
   if (dist > HOMECHK.max) {
@@ -124,16 +146,19 @@ export async function runHomeCheck(deps) {
   const fix = dist >= HOMECHK.quiet ? d : null;
   await goBack(fix);
   await deps.saveSetter(keep({ dx: d.x, dy: d.y, fixed: !!fix }, { x: ref.x, y: ref.y }));
-  return { ok: true, d, dist, fixed: !!fix, big: dist > HOMECHK.warn, skipped: c.skipped, centre: c };
+  const same = dist > HOMECHK.warn ? sameOffsetRun(d, setter.hlog, ref) : 0;
+  return { ok: true, d, dist, fixed: !!fix, big: dist > HOMECHK.warn, same, skipped: c.skipped, centre: c };
 }
 
 // One line for the screens. fmt(mm) -> text with units.
 export function homeCheckText(r, fmt) {
   if (r.error) return `Homing check: ${r.error}`;
+  if (r.adopted && r.retaken) return "Homing check: the reference was retaken on this homing, as asked: the tool setter's centre was found and saved, and nothing was shifted. From now on each homing is checked against this one.";
   if (r.adopted) return "Homing check: the tool setter's centre was found and saved as the reference. From now on each homing is checked against this one and corrected to match.";
   if (!r.fixed) return `Homing check: spot on (${fmt(r.dist)} from the reference homing).`;
   const t = `Homing check: homing was ${fmt(r.dist)} off (X ${fmt(r.d.x)}, Y ${fmt(r.d.y)}). Corrected: machine positions now match the reference homing, and the work zero didn't move.`;
   // 1.55.1: after the frame was squared (Nov 3: 8.6 mm), a big offset is the machine having moved
   // on the bed, which the correction is right to take out; say that first
+  if (r.big && r.same >= HOMECHK.sameN) return `${t} That's ${r.same} homings in a row off by about the same amount, so homing itself is repeatable: it's the reference homing that was the odd one. On the Tool setter screen, choose "Retake the reference at the next homing".`;
   return r.big ? `${t} That's more than homing should vary. If the feet or the gantry were moved since the reference was taken (squaring the machine), that's expected: the machine moved on the bed and this correction lines it up with the bed again. If not, something is dragging (a dust or mister hose) or slipping.` : t;
 }

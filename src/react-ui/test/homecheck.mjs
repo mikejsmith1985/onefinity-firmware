@@ -5,7 +5,7 @@
 // run by what they say: the centre-finding program reports touches around where the setter reads,
 // G28.3 sets the machine reading (so changes the shift), G92 sets the work reading (so changes
 // the offset), G53 G0 moves go to machine positions.
-import { runHomeCheck, homeFixProgram, homeCheckDue, homeCheckText, HOMECHK } from "../src/homecheck.js";
+import { runHomeCheck, homeFixProgram, homeCheckDue, homeCheckText, HOMECHK, sameOffsetRun } from "../src/homecheck.js";
 
 let ok = true;
 const check = (name, cond, msg = "") => { console.log(`${cond ? "PASS" : "FAIL"} ${name} ${msg}`); ok = ok && !!cond; };
@@ -111,5 +111,28 @@ check("the way back stays inside the travel", /G53 G0 X0 Y409\n/.test(p8), p8);
 check("no homing id (older controller or not homed): not due", !homeCheckDue({}, store.s));
 check("setter lifted out: not due", !homeCheckDue({ home_at: 99 }, { ...store.s, installed: false }));
 check("quiet threshold is 0.05 mm, refuse above 12 mm", HOMECHK.quiet === 0.05 && HOMECHK.max === 12);
+
+// 10. 1.56.0: the reference homing was the odd one (Nov 3 on the machine: every homing since read
+// about +6, +6 mm). The reference was taken on a homing 6 mm off; every homing after is normal.
+const store4 = { s: { x: 378, y: 383, z: -62, installed: true } };
+m = machine({ x: 6.0, y: 6.2 }); m.home_at = 20;                   // the odd homing, taken as the reference
+await runHomeCheck(deps(m, store4));
+const texts = [];
+for (const [k, j] of [[21, 0.1], [22, -0.2], [23, 0.15]]) {        // normal homings, a little scatter
+  m = machine({ x: j, y: -j }); m.home_at = k;
+  r = await runHomeCheck(deps(m, store4)); texts.push(homeCheckText(r, fmt));
+}
+check("same large offset twice: still the hose/frame message", !/homings in a row/.test(texts[1]) && /dragging/.test(texts[1]), texts[1]);
+check("third in a row: says the reference homing was the odd one, and how to retake it", r.same === 3 && /3 homings in a row/.test(texts[2]) && /Retake the reference at the next homing/.test(texts[2]), texts[2]);
+// Retake: the next homing becomes the reference, nothing shifted
+store4.s = { ...store4.s, retake: true };
+m = machine({ x: 0.05, y: -0.05 }); m.home_at = 24;
+r = await runHomeCheck(deps(m, store4));
+check("retake: this homing's centre saved as the reference, no G28.3", r.ok && r.adopted && r.retaken && !m.progs.some((p) => p.includes("G28.3")) && near(store4.s.href.x, SETTER.x - 0.05) && store4.s.retake === false, JSON.stringify(store4.s.href));
+check("  says so", /retaken on this homing/.test(homeCheckText(r, fmt)));
+m = machine({ x: -0.1, y: 0.12 }); m.home_at = 25;
+r = await runHomeCheck(deps(m, store4));
+check("  the next homing reads close to it (a normal homing's scatter)", r.ok && r.dist < 0.3 && !r.big, r.dist);
+check("  a different offset (a dragging hose) doesn't count as the same", sameOffsetRun({ x: 6, y: 6 }, [{ dx: 2, dy: 2, time: 5 }, { dx: 6, dy: 6, time: 4 }], { time: 1 }) === 1);
 
 console.log(ok ? "ALL PASS" : "SOME FAILED"); process.exit(ok ? 0 : 1);

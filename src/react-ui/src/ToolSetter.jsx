@@ -215,6 +215,9 @@ export default function ToolSetter({ config, state, send, subscribe, metric, onC
               : <>
                 <button disabled={!canMove || !!cen} onClick={() => setCen({ phase: "check", seenOpen: false, what: "home" })}>{cen?.phase === "run" && cen.what === "home" ? "Checking…" : "Check homing with the probe"}</button>
                 <small>{homeLine}</small>
+                <button disabled={!s?.href} onClick={() => update((x) => ({ ...x, retake: !x.retake }))}>{s?.retake ? "Cancel: keep the reference" : "Retake the reference at the next homing"}</button>
+                <small>{s?.retake ? "Set: the next homing check saves the setter's centre as the new reference, instead of shifting positions to match the old one."
+                  : `When every homing comes out the same distance from the reference (the check says so), the reference homing was the odd one. This makes the next homing the reference, before anything shifts the positions.${s?.href?.time ? ` The reference now is from ${ago(s.href.time)}.` : ""}`}</small>
                 <button className="quiet" disabled={!canMove || !!cen} onClick={() => setCen({ phase: "check", seenOpen: false, what: "centre" })}>{cen?.phase === "run" && cen.what !== "home" ? "Finding the centre…" : "The setter was moved: find and save its centre"}</button>
                 <small>With the 3D probe in: it touches the top, then the sides from eight directions (skipping any where something is in the way), and saves the exact centre. The saved position only needs to be roughly right. Later homings are then checked against this one.</small>
               </>}
